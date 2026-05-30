@@ -296,6 +296,7 @@
           <option value="no">NO — weekdays only</option>
         </select>
       </div>
+      <div class="form-group"><label>dailyDepartureTime</label><input type="time" id="cfg-departure" value="11:30"/><div class="form-hint">Computer tasks are deprioritized when departure is within 60 minutes</div></div>
       <div style="margin-top:1rem;padding:10px;background:var(--color-surface-2);border-radius:var(--radius-sm);font-size:12px;font-family:var(--font-mono);color:var(--color-text-2)"><div id="cfg-preview"></div></div>
       <div class="modal-actions">
         <button class="btn-cancel" onclick="closeConfig()">Cancel</button>
@@ -357,7 +358,7 @@ const EXEC_TOOLTIPS={phone:'Anywhere with signal.',computer:'Needs computer + un
 const BUSINESS_CATS=new Set(['legal','financial','va-vre','jobs']);
 
 // ── state ────────────────────────────────────────────────────────────────────
-let config={rescheduleDays:5,businessWeekends:false,personalWeekends:true};
+let config={rescheduleDays:5,businessWeekends:false,personalWeekends:true,departureTime:'11:30'};
 let tasks=[],filter='all',editId=null,coachSuggestion=null;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -390,15 +391,45 @@ function deferBadgeHtml(count){
   return`<span class="defer-badge ${cls}" title="Deferred ${count} times — ${count>=3?'something may be making this hard to do':'consider pushing through this one'}">${icon} ×${count}</span>`;
 }
 
+// ── time awareness ────────────────────────────────────────────────────────────
+function minsUntilDeparture(){
+  if(!config.departureTime)return null;
+  const now=new Date(),cur=now.getHours()*60+now.getMinutes();
+  const[h,m]=config.departureTime.split(':').map(Number);
+  return h*60+m-cur;
+}
+function timeContextHtml(){
+  const mins=minsUntilDeparture();
+  if(mins===null||mins>90||mins<-120)return'';
+  if(mins<=0)return`<div style="font-size:12px;font-weight:500;color:var(--color-text-2);margin-bottom:0.75rem">🚗 Departed at ${config.departureTime} — good time for errands &amp; calls</div>`;
+  const h=Math.floor(mins/60),m=mins%60;
+  const label=h>0?`${h}h ${m}m left`:`${m}m left`;
+  const advice=mins<=30?' · Quick tasks &amp; calls only':mins<=60?' · Wrap up computer work':'';
+  const urgency=mins<=30?'color:#A32D2D':mins<=60?'color:#854F0B':'color:var(--color-text-2)';
+  return`<div style="font-size:12px;font-weight:500;${urgency};margin-bottom:0.75rem">🕐 Leaving at ${config.departureTime} — ${label}${advice}</div>`;
+}
+
 // ── config ui ─────────────────────────────────────────────────────────────────
-function openConfig(){document.getElementById('cfg-days').value=config.rescheduleDays;document.getElementById('cfg-biz-weekends').value=config.businessWeekends?'yes':'no';document.getElementById('cfg-per-weekends').value=config.personalWeekends?'yes':'no';updateConfigPreview();document.getElementById('config-modal').style.display='flex';}
+function openConfig(){document.getElementById('cfg-days').value=config.rescheduleDays;document.getElementById('cfg-biz-weekends').value=config.businessWeekends?'yes':'no';document.getElementById('cfg-per-weekends').value=config.personalWeekends?'yes':'no';document.getElementById('cfg-departure').value=config.departureTime||'11:30';updateConfigPreview();document.getElementById('config-modal').style.display='flex';}
 function closeConfig(){document.getElementById('config-modal').style.display='none';}
-function saveConfig(){config.rescheduleDays=parseInt(document.getElementById('cfg-days').value)||5;config.businessWeekends=document.getElementById('cfg-biz-weekends').value==='yes';config.personalWeekends=document.getElementById('cfg-per-weekends').value==='yes';closeConfig();}
-function updateConfigPreview(){const d=document.getElementById('cfg-days').value,b=document.getElementById('cfg-biz-weekends').value==='yes'?'YES':'NO',p=document.getElementById('cfg-per-weekends').value==='yes'?'YES':'NO';document.getElementById('cfg-preview').innerHTML=`rescheduleDaysForWaitingOnResponse=${d}<br>includeWeekendsForBusinessTasks=${b}<br>includeWeekendsForPersonalTasks=${p}`;}
-['cfg-days','cfg-biz-weekends','cfg-per-weekends'].forEach(id=>document.addEventListener('DOMContentLoaded',()=>{const el=document.getElementById(id);if(el)el.addEventListener('change',updateConfigPreview);}));
+function saveConfig(){config.rescheduleDays=parseInt(document.getElementById('cfg-days').value)||5;config.businessWeekends=document.getElementById('cfg-biz-weekends').value==='yes';config.personalWeekends=document.getElementById('cfg-per-weekends').value==='yes';config.departureTime=document.getElementById('cfg-departure').value||'';closeConfig();render();}
+function updateConfigPreview(){const d=document.getElementById('cfg-days').value,b=document.getElementById('cfg-biz-weekends').value==='yes'?'YES':'NO',p=document.getElementById('cfg-per-weekends').value==='yes'?'YES':'NO',dep=document.getElementById('cfg-departure')?.value||'';document.getElementById('cfg-preview').innerHTML=`rescheduleDaysForWaitingOnResponse=${d}<br>includeWeekendsForBusinessTasks=${b}<br>includeWeekendsForPersonalTasks=${p}<br>dailyDepartureTime=${dep||'(none)'}`;}
+
+['cfg-days','cfg-biz-weekends','cfg-per-weekends','cfg-departure'].forEach(id=>document.addEventListener('DOMContentLoaded',()=>{const el=document.getElementById(id);if(el)el.addEventListener('change',updateConfigPreview);}));
 
 // ── core logic ────────────────────────────────────────────────────────────────
-function getTodayTask(){const today=todayStr(),pending=tasks.filter(t=>t.status==='pending');const ov=pending.filter(t=>t.dueDate&&t.dueDate<today).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));if(ov.length)return ov[0];const dt=pending.filter(t=>t.dueDate===today);if(dt.length)return dt[0];return pending.sort((a,b)=>PRI_ORDER[a.priority]-PRI_ORDER[b.priority])[0]||null;}
+function getTodayTask(){
+  const today=todayStr(),pending=tasks.filter(t=>t.status==='pending');
+  const mins=minsUntilDeparture();
+  // when ≤60 min to departure, prefer tasks that don't need focused desk time
+  const timeFilter=mins!==null&&mins<=60&&mins>-120?t=>t.execType!=='computer':null;
+  const pick=pool=>{if(timeFilter){const fit=pool.filter(timeFilter);if(fit.length)return fit[0];}return pool[0]||null;};
+  const ov=pending.filter(t=>t.dueDate&&t.dueDate<today).sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+  if(ov.length)return pick(ov);
+  const dt=pending.filter(t=>t.dueDate===today);
+  if(dt.length)return pick(dt);
+  return pick(pending.sort((a,b)=>PRI_ORDER[a.priority]-PRI_ORDER[b.priority]));
+}
 function getStreak(){const dates=[...new Set(tasks.filter(t=>t.doneDate).map(t=>t.doneDate))].sort().reverse();if(!dates.length)return 0;let s=0,d=new Date();for(let i=0;i<365;i++){const ds=d.toDateString();if(dates.includes(ds)){s++;d.setDate(d.getDate()-1);}else if(i===0){d.setDate(d.getDate()-1);}else break;}return s;}
 
 // ── render ────────────────────────────────────────────────────────────────────
@@ -426,7 +457,7 @@ function render(){
     else if(ds==='upcoming')dh=`<div class="today-due" style="color:#555">📅 Due ${formatDue(tt.dueDate)}</div>`;
     const deferNote=tt.deferCount>=2?`<div class="defer-notice" style="background:${tt.deferCount>=3?'#FCEBEB':'#FAEEDA'};color:${tt.deferCount>=3?'#A32D2D':'#854F0B'}">${tt.deferCount>=3?'🔴':'🟡'} You've deferred this ${tt.deferCount} times${tt.deferCount>=3?' — is something making this hard to do?':' — consider pushing through today'}</div>`:'';
     const ctx=EXEC_CTX[tt.execType]||'';
-    tc.innerHTML=`<div class="today-task">${PRI_ICONS[tt.priority]||''} ${tt.name}</div>${dh}${deferNote}${ctx?`<div class="today-context">💡 ${ctx}</div>`:''}${tt.notes?`<div class="today-notes">${tt.notes}</div>`:''}<div class="today-actions"><button class="btn-done" onclick="completeTask('${tt.id}')" title="Mark complete — get next-step coaching">✅ Mark done</button><button class="btn-waiting" onclick="markWaiting('${tt.id}')" title="You've acted, now waiting — auto-schedules follow-up">⏳ Waiting on response</button><button class="btn-skip" onclick="skipTask('${tt.id}')" title="Skip for now — moves to back of queue, increments defer count">→ Skip for now</button></div>`;
+    tc.innerHTML=`<div class="today-task">${PRI_ICONS[tt.priority]||''} ${tt.name}</div>${timeContextHtml()}${dh}${deferNote}${ctx?`<div class="today-context">💡 ${ctx}</div>`:''}${tt.notes?`<div class="today-notes">${tt.notes}</div>`:''}<div class="today-actions"><button class="btn-done" onclick="completeTask('${tt.id}')" title="Mark complete — get next-step coaching">✅ Mark done</button><button class="btn-waiting" onclick="markWaiting('${tt.id}')" title="You've acted, now waiting — auto-schedules follow-up">⏳ Waiting on response</button><button class="btn-skip" onclick="skipTask('${tt.id}')" title="Skip for now — moves to back of queue, increments defer count">→ Skip for now</button></div>`;
   }else{
     tb.style.display='none';te.style.display='none';
     tc.innerHTML=`<div class="empty-today">${tasks.filter(t=>t.status==='pending').length===0&&tasks.length>0?'🎉 All tasks complete — great work today!':'No tasks yet — load your tasks or add one below'}</div>`;
@@ -492,7 +523,13 @@ function resetTask(id){const t=tasks.find(x=>x.id===id);t.status='pending';t.don
 
 // ── coaching ──────────────────────────────────────────────────────────────────
 const SYS=`You are TJ Randall's personal chief of staff. TJ is a 55-year-old disabled Navy veteran (70% SC, TDIU, 100% P&T) in Plymouth MA. Navigating: federal job applications (Newport RI, Groton CT, USGS Woods Hole), VA claims (Crohn's, knee, back), VR&E enrollment, separation agreement with Harvard Legal Clinic (deadline May 13), SAM.gov/SDVOSB for Randall Advisory Group LLC, maritime science career pivot. Wife Andrea just started a job. Disabled daughter Abby in Norwood group home. Coast Guard Auxiliary volunteer. Respond ONLY with valid JSON, no markdown. Today is `;
-async function callCoach(msg,instr){const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:600,system:SYS+todayStr()+'. '+instr,messages:[{role:'user',content:msg}]})});const d=await r.json();return JSON.parse((d.content?.[0]?.text||'{}').replace(/```json|```/g,'').trim());}
+async function callCoach(msg,instr){
+  const mins=minsUntilDeparture();
+  const now=new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  const timeCtx=config.departureTime?` Current time: ${now}. Leaving at ${config.departureTime} (${mins===null?'':mins>0?mins+' min remaining':'already departed'}).`:'';
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:600,system:SYS+todayStr()+'.'+timeCtx+' '+instr,messages:[{role:'user',content:msg}]})});
+  const d=await r.json();return JSON.parse((d.content?.[0]?.text||'{}').replace(/```json|```/g,'').trim());
+}
 
 async function completeTask(id){
   const t=tasks.find(x=>x.id===id);t.status='done';t.doneDate=todayDisplay();render();
