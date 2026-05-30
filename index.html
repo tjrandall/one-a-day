@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>One-A-Day</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <h1>One-A-Day</h1>
+    <div class="header-actions">
+      <button class="ghost" onclick="OAD.openSettingsModal()">Settings</button>
+    </div>
+  </header>
+
+  <div id="main">
+    <div id="list-panel">
+      <div id="persona-bar"></div>
+      <div id="list-toolbar">
+        <input id="search-input" type="text" placeholder="Search threads…" oninput="OAD.renderList()">
+        <button onclick="OAD.openNewThreadModal()">+ New</button>
+      </div>
+      <div id="thread-list"></div>
+    </div>
+
+    <div id="detail-panel">
+      <div id="detail-content">
+        <div class="detail-empty">Select a thread to view details</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Layer order: data → engine → api → render → modals → seed → tests → boot -->
+<script src="js/data.js"></script>
+<script src="js/engine.js"></script>
+<script src="js/api.js"></script>
+<script src="js/render.js"></script>
+<script src="js/modals.js"></script>
+<script src="tests/tests.data.js"></script>
+<script src="tests/tests.js"></script>
+<script>OAD.boot();</script>
+
+</body>
+</html>

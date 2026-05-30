@@ -1,0 +1,360 @@
+window.OAD = window.OAD || {};
+
+OAD.openModal = function (html) {
+  let overlay = document.getElementById('modal-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'modal-overlay';
+    overlay.className = 'modal-overlay';
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) OAD.closeModal();
+    });
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `<div class="modal modal-lg">${html}</div>`;
+  overlay.classList.remove('hidden');
+};
+
+OAD.closeModal = function () {
+  const overlay = document.getElementById('modal-overlay');
+  if (overlay) overlay.classList.add('hidden');
+};
+
+OAD._areaOptions = function (selected) {
+  return OAD.LIFE_AREAS.map(a =>
+    `<option value="${OAD.esc(a)}" ${a === selected ? 'selected' : ''}>${OAD.esc(a)}</option>`
+  ).join('');
+};
+
+OAD._statusOptions = function (selected) {
+  return OAD.STATUSES.map(s =>
+    `<option value="${s}" ${s === selected ? 'selected' : ''}>${s}</option>`
+  ).join('');
+};
+
+OAD._priorityOptions = function (selected) {
+  return OAD.PRIORITIES.map(p =>
+    `<option value="${p}" ${p === selected ? 'selected' : ''}>${p}</option>`
+  ).join('');
+};
+
+OAD._closingTypeOptions = function (selected) {
+  return OAD.CLOSING_TYPES.map(c =>
+    `<option value="${c}" ${c === selected ? 'selected' : ''}>${c}</option>`
+  ).join('');
+};
+
+OAD._threadForm = function (t) {
+  return `
+    <div class="field">
+      <label>Title</label>
+      <input id="f-title" type="text" value="${OAD.esc(t.title)}" placeholder="What is this thread about?">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Life Area</label>
+        <select id="f-area">${OAD._areaOptions(t.life_area)}</select>
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="f-status">${OAD._statusOptions(t.status)}</select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Priority</label>
+      <select id="f-priority">${OAD._priorityOptions(t.priority)}</select>
+    </div>
+
+    <div class="field">
+      <label>Closing Condition — what OUTCOME closes this?</label>
+      <textarea id="f-closing">${OAD.esc(t.closing_condition)}</textarea>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Closing Type</label>
+        <select id="f-closing-type">${OAD._closingTypeOptions(t.closing_condition_type)}</select>
+      </div>
+      <div class="field" style="align-self:end">
+        <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;margin:0">
+          <input type="checkbox" id="f-closing-met" ${t.closing_condition_met ? 'checked' : ''} style="width:auto">
+          Closing condition met
+        </label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Current Assumption</label>
+      <textarea id="f-assumption">${OAD.esc(t.current_assumption)}</textarea>
+    </div>
+    <div class="field" style="align-self:end">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;margin:0">
+        <input type="checkbox" id="f-assumption-verified" ${t.assumption_verified ? 'checked' : ''} style="width:auto">
+        Assumption verified
+      </label>
+    </div>
+
+    <div class="field">
+      <label>Next Action</label>
+      <input id="f-next-action" type="text" value="${OAD.esc(t.next_action)}" placeholder="What is the specific next step?">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>By Date</label>
+        <input id="f-next-date" type="date" value="${OAD.esc(t.next_action_date)}">
+      </div>
+      <div class="field">
+        <label>Channel</label>
+        <input id="f-next-channel" type="text" value="${OAD.esc(t.next_action_channel)}" placeholder="email, phone, in-person…">
+      </div>
+    </div>
+    <div class="field">
+      <label>Contact</label>
+      <input id="f-next-contact" type="text" value="${OAD.esc(t.next_action_contact)}" placeholder="Who are you acting with?">
+    </div>
+
+    <div class="field">
+      <label>Contingency Trigger Date</label>
+      <input id="f-ctg-date" type="date" value="${OAD.esc(t.contingency_trigger_date)}">
+    </div>
+    <div class="field">
+      <label>Contingency Action</label>
+      <input id="f-ctg-action" type="text" value="${OAD.esc(t.contingency_action)}" placeholder="What do you do if no response by trigger date?">
+    </div>
+    <div class="field">
+      <label>Escalation</label>
+      <input id="f-ctg-escalation" type="text" value="${OAD.esc(t.contingency_escalation)}" placeholder="Who or what is the escalation path?">
+    </div>`;
+};
+
+OAD._readThreadForm = function (base) {
+  const title = document.getElementById('f-title')?.value.trim() || '';
+  if (!title) { alert('Title is required.'); return null; }
+  return Object.assign({}, base, {
+    title,
+    life_area:               document.getElementById('f-area')?.value || base.life_area,
+    status:                  document.getElementById('f-status')?.value || base.status,
+    priority:                document.getElementById('f-priority')?.value || base.priority,
+    closing_condition:       document.getElementById('f-closing')?.value.trim() || '',
+    closing_condition_type:  document.getElementById('f-closing-type')?.value || 'outcome',
+    closing_condition_met:   document.getElementById('f-closing-met')?.checked || false,
+    current_assumption:      document.getElementById('f-assumption')?.value.trim() || '',
+    assumption_verified:     document.getElementById('f-assumption-verified')?.checked || false,
+    next_action:             document.getElementById('f-next-action')?.value.trim() || '',
+    next_action_date:        document.getElementById('f-next-date')?.value || '',
+    next_action_channel:     document.getElementById('f-next-channel')?.value.trim() || '',
+    next_action_contact:     document.getElementById('f-next-contact')?.value.trim() || '',
+    contingency_trigger_date: document.getElementById('f-ctg-date')?.value || '',
+    contingency_action:      document.getElementById('f-ctg-action')?.value.trim() || '',
+    contingency_escalation:  document.getElementById('f-ctg-escalation')?.value.trim() || ''
+  });
+};
+
+OAD.openNewThreadModal = function () {
+  const blank = OAD.makeThread();
+  OAD.openModal(`
+    <h2>New Thread</h2>
+    ${OAD._threadForm(blank)}
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveNewThread()">Create Thread</button>
+    </div>`);
+};
+
+OAD._saveNewThread = function () {
+  const data = OAD._readThreadForm(OAD.makeThread());
+  if (!data) return;
+  const thread = OAD.addThread(data);
+  OAD.addEvolution(thread.id, 'Thread created.');
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.selectThread(thread.id);
+};
+
+OAD.openEditModal = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  OAD.openModal(`
+    <h2>Edit Thread</h2>
+    ${OAD._threadForm(t)}
+    <div class="modal-footer">
+      <button class="danger" onclick="OAD._deleteThread(${id})">Delete</button>
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveEditThread(${id})">Save</button>
+    </div>`);
+};
+
+OAD._saveEditThread = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  const data = OAD._readThreadForm(t);
+  if (!data) return;
+  const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified };
+  OAD.updateThread(id, data);
+  const notes = [];
+  if (prev.status !== data.status) notes.push(`Status → ${data.status}`);
+  if (prev.priority !== data.priority) notes.push(`Priority → ${data.priority}`);
+  if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
+  if (notes.length) OAD.addEvolution(id, notes.join('; '));
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.renderDetail(id);
+};
+
+OAD._deleteThread = function (id) {
+  if (!confirm('Delete this thread? This cannot be undone.')) return;
+  OAD.deleteThread(id);
+  OAD._activeId = null;
+  OAD.closeModal();
+  OAD.renderList();
+  const panel = document.getElementById('detail-content');
+  if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+};
+
+OAD.openLogModal = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  OAD.openModal(`
+    <h2>Log Update — ${OAD.esc(t.title)}</h2>
+    <div class="field">
+      <label>What happened or changed?</label>
+      <textarea id="f-log-note" placeholder="Add a note to the evolution log…"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveLog(${id})">Save Log</button>
+    </div>`);
+  setTimeout(() => document.getElementById('f-log-note')?.focus(), 50);
+};
+
+OAD._saveLog = function (id) {
+  const note = document.getElementById('f-log-note')?.value.trim();
+  if (!note) { alert('Enter a note.'); return; }
+  OAD.addEvolution(id, note);
+  OAD.closeModal();
+  OAD.renderDetail(id);
+};
+
+OAD.openConnectionModal = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  const edgeOpts = OAD.EDGE_TYPES.map(e =>
+    `<option value="${e}">${e}</option>`).join('');
+  OAD.openModal(`
+    <h2>Add Connection — ${OAD.esc(t.title)}</h2>
+    <div class="field">
+      <label>Edge Type</label>
+      <select id="f-edge-type">${edgeOpts}</select>
+    </div>
+    <div class="field">
+      <label>Connected Thread / Label</label>
+      <input id="f-edge-label" type="text" placeholder="Name of the related thread or item">
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveConnection(${id})">Add</button>
+    </div>`);
+};
+
+OAD._saveConnection = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  const edge_type = document.getElementById('f-edge-type')?.value;
+  const to_label  = document.getElementById('f-edge-label')?.value.trim();
+  if (!to_label) { alert('Enter a label.'); return; }
+  t.connections.push({ to_label, edge_type });
+  OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}`);
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.renderDetail(id);
+};
+
+OAD.openPersonaModal = function () {
+  const p  = OAD.DB.persona;
+  const lc = p.life_context;
+  const tc = p.tone_calibration;
+  OAD.openModal(`
+    <h2>Persona Settings</h2>
+    <div class="field">
+      <label>Pressure Level</label>
+      <select id="f-pressure-level">
+        ${['low','moderate','high','critical'].map(v =>
+          `<option value="${v}" ${lc.pressure_level === v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Hard Deadline</label>
+        <input id="f-hard-deadline" type="date" value="${OAD.esc(lc.hard_deadline || '')}">
+      </div>
+      <div class="field">
+        <label>Deadline Context</label>
+        <input id="f-deadline-ctx" type="text" value="${OAD.esc(lc.hard_deadline_context)}" placeholder="Why is this date critical?">
+      </div>
+    </div>
+    <div class="field">
+      <label>Challenge Tolerance</label>
+      <select id="f-challenge-tol">
+        ${['low','medium','high'].map(v =>
+          `<option value="${v}" ${tc.challenge_tolerance === v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>Current Mode</label>
+      <select id="f-current-mode">
+        ${['problem-solving','crisis','maintenance','growth'].map(v =>
+          `<option value="${v}" ${tc.current_mode === v ? 'selected' : ''}>${v}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field">
+      <label>What Is Working (one per line)</label>
+      <textarea id="f-working">${(p.what_is_working || []).join('\n')}</textarea>
+    </div>
+    <div class="field">
+      <label>What Is Not Working (one per line)</label>
+      <textarea id="f-not-working">${(p.what_is_not_working || []).join('\n')}</textarea>
+    </div>
+    <div class="field">
+      <label>Assumption Tendencies (one per line)</label>
+      <textarea id="f-tendencies">${(p.assumption_tendencies || []).join('\n')}</textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._savePersona()">Save Persona</button>
+    </div>`);
+};
+
+OAD._savePersona = function () {
+  const p = OAD.DB.persona;
+  p.life_context.pressure_level      = document.getElementById('f-pressure-level')?.value || 'moderate';
+  p.life_context.hard_deadline       = document.getElementById('f-hard-deadline')?.value || null;
+  p.life_context.hard_deadline_context = document.getElementById('f-deadline-ctx')?.value.trim() || '';
+  p.tone_calibration.challenge_tolerance = document.getElementById('f-challenge-tol')?.value || 'medium';
+  p.tone_calibration.current_mode    = document.getElementById('f-current-mode')?.value || 'problem-solving';
+  const toArr = id => (document.getElementById(id)?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  p.what_is_working    = toArr('f-working');
+  p.what_is_not_working = toArr('f-not-working');
+  p.assumption_tendencies = toArr('f-tendencies');
+  OAD.closeModal();
+  OAD.renderPersonaBar();
+};
+
+OAD.openSettingsModal = function () {
+  OAD.loadApiKey();
+  OAD.openModal(`
+    <h2>Settings</h2>
+    <div class="field">
+      <label>Anthropic API Key</label>
+      <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
+    </div>
+    <p class="text-muted text-sm">Key is stored in localStorage — never sent anywhere except Anthropic's API.</p>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveSettings()">Save</button>
+    </div>`);
+};
+
+OAD._saveSettings = function () {
+  const key = document.getElementById('f-api-key')?.value.trim() || '';
+  OAD.setApiKey(key);
+  OAD.closeModal();
+};
