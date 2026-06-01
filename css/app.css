@@ -373,6 +373,38 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 .test-summary.has-fail { color: var(--critical); }
 #test-continue-btn { margin-top: 24px; align-self: flex-start; }
 
+/* ── Deadline Tracking ── */
+.deadline-card { border-color: var(--accent-dim); }
+.deadline-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.deadline-countdown { font-size: 15px; font-weight: 600; }
+.deadline-due { font-size: 12px; color: var(--text-muted); }
+.at-risk-badge { font-size: 11px; font-weight: 700; color: var(--critical); background: #ff4d6d18; padding: 2px 8px; border-radius: 20px; letter-spacing: .03em; }
+.on-track-badge { font-size: 11px; font-weight: 600; color: var(--open); background: #06d6a018; padding: 2px 8px; border-radius: 20px; }
+.at-risk-flag { font-size: 10px; font-weight: 700; color: var(--critical); background: #ff4d6d18; padding: 1px 6px; border-radius: 10px; letter-spacing: .03em; flex-shrink: 0; }
+
+/* ── Overdue Banner ── */
+#overdue-banner { background: #ff4d6d14; border-bottom: 2px solid var(--critical); flex-shrink: 0; }
+.overdue-item { display: flex; align-items: center; gap: 10px; padding: 11px 20px; border-bottom: 1px solid #ff4d6d28; font-size: 14px; }
+.overdue-item:last-child { border-bottom: none; }
+.overdue-label { font-size: 10px; font-weight: 800; letter-spacing: .1em; color: var(--critical); background: #ff4d6d28; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }
+.overdue-consequence { color: var(--text-muted); font-size: 13px; }
+
+/* ── Cadence Panel ── */
+.cadence-panel { display: flex; flex-direction: column; gap: 14px; }
+.cadence-panel h2 { font-size: 20px; font-weight: 700; }
+.cadence-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px 18px; display: flex; align-items: center; gap: 16px; }
+.cadence-item.is-overdue  { border-color: var(--critical); background: #ff4d6d06; }
+.cadence-item.is-due-today { border-color: var(--medium); background: #ffd16606; }
+.cadence-item.is-done { border-color: var(--open); background: #06d6a006; }
+.cadence-info { flex: 1; min-width: 0; }
+.cadence-title { font-weight: 600; font-size: 15px; margin-bottom: 3px; }
+.cadence-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+.cadence-notes { font-size: 13px; color: var(--text); }
+.cadence-consequences { font-size: 12px; color: var(--text-muted); font-style: italic; margin-top: 4px; }
+.cadence-actions { flex-shrink: 0; text-align: right; }
+.cadence-done-badge { color: var(--open); font-weight: 700; font-size: 14px; }
+.cadence-overdue-badge { color: var(--critical); font-weight: 700; font-size: 12px; letter-spacing: .04em; margin-bottom: 8px; }
+
 /* ── Complete Action Wizard ── */
 button.success { background: var(--open); color: #0f0f13; font-weight: 600; }
 button.success:hover { opacity: .88; }

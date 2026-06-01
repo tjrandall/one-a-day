@@ -553,6 +553,8 @@ OAD._cawSave = function () {
     contingency_action:       caw.step2.ctg_action
   };
 
+  if (t.deadline) patch.effortLogged = (t.effortLogged || 0) + 1;
+
   if (t.status === 'stalled') patch.status = 'open';
 
   if (closed) {

@@ -1,4 +1,3 @@
-cat > ~/code/one-a-day/CLAUDE.md << 'SPEC'
 # One-A-Day — Build Spec for Claude Code
 
 ## File Structure
@@ -40,6 +39,49 @@ Every thread has:
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
 
+## Data Model — Deadline-Driven Prioritization
+
+### The Problem
+The dependency graph models *what depends on what* but has no concept of *when something must be done* or *how much work it takes to get there*. A thread with a hard deadline and weekly effort requirements looks identical to an open-ended thread. This is a silent failure mode — the graph won't warn you that you're falling behind, and "I'll get to it" becomes a lie the math doesn't support.
+
+### The Design Principle
+Work backwards from the deadline, not forward from today. If something is due 6/26 and requires 6 sessions of work, the app must surface that *this week's session is not optional* — before it feels urgent, not after.
+
+### Thread Attributes to Add
+- `deadline` — ISO date string, optional
+- `effortEstimate` — total estimated sessions needed
+- `weeklyCommitment` — minimum sessions per week required to hit deadline (derived or user-set)
+- `effortLogged` — sessions completed to date (increments on Complete Action)
+
+### Derived State (computed, not stored)
+- `weeksRemaining` — from today to deadline
+- `sessionsRemaining` — effortEstimate minus effortLogged
+- `onTrack` — boolean: sessionsRemaining <= weeksRemaining * weeklyCommitment
+- `behindBy` — if not on track, how many sessions in deficit
+
+### UI Behavior
+- Threads with deadlines surface a countdown: "3 weeks, 4 sessions remaining"
+- `onTrack: false` triggers a visible warning — not a subtle badge, an actual flag
+- The main thread list sorts or visually elevates deadline-driven threads that are at risk
+- Weekly review mode (future): show all deadline threads and their current trajectory
+
+### Pressure Score Integration
+Deadline-driven threads feed into the existing pressure() function:
+- deadline within 7 days and not on track: +30
+- deadline within 14 days and not on track: +20
+- deadline within 30 days and not on track: +10
+- behind by 2+ sessions: additional +15
+
+### First Real-World Case
+- Thread: eCornell Python Final Presentation
+- Deadline: June 26, 2026
+- Effort: TBD once syllabus reviewed (check 9am June 1)
+- Weekly commitment: minimum 1 dedicated session/week
+- Status: load as t11 with deadline attributes once effort is known
+
+### Why This Is a Game Changer
+The graph is the moat — but a graph without time is just topology. Adding deadline-driven prioritization makes the graph *alive*. It tells you not just what's blocked, but what's *burning*. This is the difference between a task manager and an executive assistant.
+
 ## Data Model — Persona (the moat)
 OAD.DB.persona contains:
 - assumption_tendencies[] — observed patterns of unverified assumptions
@@ -55,6 +97,10 @@ OAD.pressure(thread) returns 0-100:
 - critical: +30, high: +20, medium: +10
 - each blocking connection: +10
 - contingency < 3 days: +25, < 7 days: +15, < 14 days: +5
+- deadline within 7 days and not on track: +30
+- deadline within 14 days and not on track: +20
+- deadline within 30 days and not on track: +10
+- behind by 2+ sessions: additional +15
 - capped at 100
 
 ## API Layer (api.js)
@@ -149,3 +195,28 @@ UI behavior:
 - System randomly surfaces one idea per week in the main view as idea of the week
 - No due dates, no pressure scores, no overdue states
 - An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
+
+## Data Model — Cadence
+Cadences are date-anchored mandatory obligations that recur on a known schedule. Not Threads (no closing condition). Not Habits (not a practice — a hard obligation with real consequences if missed). Not Ideas. The date IS the work. Missing a Cadence is not a pressure score event — it's a failure state.
+
+Every cadence has:
+- id, title, life_area
+- recurrence — monthly-1st | monthly-15th | monthly-last | weekly | custom
+- trigger_dates[] — computed list of upcoming due dates
+- last_completed (date)
+- next_due (date) — derived from recurrence + last_completed
+- overdue (boolean) — derived: next_due < today and not completed
+- notes — what specifically needs to happen on this date
+- consequences — what breaks if this is missed (plain language)
+
+Seed cadences:
+- Pay the Bills (1st) — recurrence: monthly-1st | consequences: late fees, service disruption
+- Pay the Bills (15th) — recurrence: monthly-15th | consequences: late fees, service disruption
+
+UI behavior:
+- Cadences do NOT appear in the thread list
+- Cadences surface in a dedicated panel — a simple calendar-style view of upcoming trigger dates
+- Overdue cadences surface as a hard banner — not subtle, not a badge
+- Completed cadences for the current period show a checkmark; they reset automatically on next trigger date
+- No pressure score — Cadences are binary: done or not done
+- Counsel engine awareness: if a Cadence is overdue and the user is interacting with low-priority threads, surface an interruption: "Pay the Bills (1st) is overdue. Everything else can wait."

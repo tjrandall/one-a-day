@@ -2,6 +2,7 @@ window.OAD = window.OAD || {};
 
 OAD._seedData = function () {
   OAD.DB.threads = [];
+  OAD.DB.cadences = [];
 
   // t1 — VR&E Equipment (Amanda)
   OAD.addThread(OAD.makeThread({
@@ -296,6 +297,26 @@ OAD._seedData = function () {
       { date: '2026-06-01', note: 'Voicemail planned if no response.' }
     ],
     ai_insights: []
+  }));
+
+  OAD.addCadence(OAD.makeCadence({
+    title: 'Pay the Bills (1st)',
+    life_area: 'finances',
+    recurrence: 'monthly-1st',
+    last_completed: '2026-05-01',
+    next_due: '2026-06-01',
+    notes: 'Review all bills: credit cards, utilities, subscriptions',
+    consequences: 'Late fees, service disruption'
+  }));
+
+  OAD.addCadence(OAD.makeCadence({
+    title: 'Pay the Bills (15th)',
+    life_area: 'finances',
+    recurrence: 'monthly-15th',
+    last_completed: '2026-05-15',
+    next_due: '2026-06-15',
+    notes: 'Mid-month bill review and payments',
+    consequences: 'Late fees, service disruption'
   }));
 
   OAD.DB.persona.life_context.pressure_level = 'high';

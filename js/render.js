@@ -20,6 +20,8 @@ OAD.renderList = function () {
   container.innerHTML = threads.map(t => {
     const pc = OAD.pressureClass(t._score);
     const active = t.id === OAD._activeId ? ' active' : '';
+    const ds = t.deadline ? OAD.deadlineState(t) : null;
+    const atRiskHtml = ds && !ds.onTrack ? '<span class="at-risk-flag">⚑ At Risk</span>' : '';
     return `
       <div class="thread-item${active}" data-id="${t.id}" onclick="OAD.selectThread(${t.id})">
         <div class="thread-item-top">
@@ -30,6 +32,7 @@ OAD.renderList = function () {
           <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
           <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
           <span>${OAD.esc(t.life_area)}</span>
+          ${atRiskHtml}
         </div>
       </div>`;
   }).join('');
@@ -93,6 +96,38 @@ OAD.renderDetail = function (id) {
         </div>`).join('')}</div>`
     : '<span class="text-muted text-sm">No connections</span>';
 
+  const deadlineHtml = (function () {
+    if (!t.deadline) return '';
+    const ds = OAD.deadlineState(t);
+    const days = ds.daysRemaining;
+    const countdownText = days > 0
+      ? (ds.weeksRemaining > 0
+          ? ds.weeksRemaining + ' week' + (ds.weeksRemaining !== 1 ? 's' : '')
+          : days + ' day' + (days !== 1 ? 's' : '')) + ' remaining'
+      : 'Past deadline';
+    const sessText = ds.sessionsRemaining != null
+      ? ', ' + ds.sessionsRemaining + ' session' + (ds.sessionsRemaining !== 1 ? 's' : '') + ' remaining'
+      : '';
+    const statusBadge = ds.onTrack
+      ? '<span class="on-track-badge">On Track</span>'
+      : '<span class="at-risk-badge">⚑ ' + ds.behindBy + ' session' + (ds.behindBy !== 1 ? 's' : '') + ' behind</span>';
+    const effortLine = t.effortEstimate != null
+      ? '<div class="text-sm text-muted mt-8">' + (t.effortLogged || 0) + ' of ' + t.effortEstimate + ' sessions complete</div>'
+      : '';
+    const commitLine = t.weeklyCommitment
+      ? ' · ' + t.weeklyCommitment + ' session' + (t.weeklyCommitment !== 1 ? 's' : '') + '/week'
+      : '';
+    return '<div class="card deadline-card">' +
+      '<div class="card-title">Deadline Tracking</div>' +
+      '<div class="deadline-row">' +
+        '<div class="deadline-countdown">' + OAD.esc(countdownText + sessText) + '</div>' +
+        statusBadge +
+      '</div>' +
+      '<div class="deadline-due">Due ' + OAD.esc(OAD.formatDate(t.deadline)) + OAD.esc(commitLine) + '</div>' +
+      effortLine +
+      '</div>';
+  }());
+
   const evoHtml = (t.evolution_log || []).length
     ? `<div class="evo-log">${[...(t.evolution_log)].reverse().map(e => `
         <div class="evo-entry">
@@ -140,6 +175,8 @@ OAD.renderDetail = function (id) {
         ? `<button class="ghost mt-8" style="font-size:12px;padding:5px 10px" onclick="OAD.draftEmailModal(${t.id})">Draft Email</button>`
         : ''}
     </div>
+
+    ${deadlineHtml}
 
     <div class="card insight-card">
       <div class="insight-header">
@@ -206,6 +243,96 @@ OAD.generateInsight = async function (id) {
     if (body) body.innerHTML = `<div class="insight-loading" style="color:var(--critical)">${OAD.esc(err.message)}</div>`;
     if (btn)  { btn.disabled = false; btn.textContent = 'Insight'; }
   }
+};
+
+OAD.renderOverdueBanner = function () {
+  const overdue = OAD.DB.cadences.filter(function (c) { return OAD.cadenceOverdue(c); });
+  let banner = document.getElementById('overdue-banner');
+
+  if (!overdue.length) {
+    if (banner) banner.remove();
+    return;
+  }
+
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'overdue-banner';
+    const detailPanel = document.getElementById('detail-panel');
+    if (!detailPanel) return;
+    detailPanel.insertBefore(banner, detailPanel.firstChild);
+  }
+
+  banner.innerHTML = overdue.map(function (c) {
+    return '<div class="overdue-item">' +
+      '<span class="overdue-label">OVERDUE</span>' +
+      '<strong>' + OAD.esc(c.title) + '</strong>' +
+      (c.consequences ? '<span class="overdue-consequence"> — ' + OAD.esc(c.consequences) + '</span>' : '') +
+      '<button class="danger" style="margin-left:auto;font-size:12px;padding:5px 12px" onclick="OAD.markCadenceDone(' + c.id + ')">Mark Done</button>' +
+      '</div>';
+  }).join('');
+};
+
+OAD.markCadenceDone = function (id) {
+  const c = OAD.getCadence(id);
+  if (!c) return;
+  c.last_completed = new Date().toISOString().slice(0, 10);
+  c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed);
+  OAD.renderOverdueBanner();
+  if (!OAD._activeId) OAD.renderCadencePanel();
+};
+
+OAD.renderCadencePanel = function () {
+  OAD._activeId = null;
+  OAD.renderList();
+  OAD.renderOverdueBanner();
+
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  const cadences = OAD.DB.cadences;
+
+  if (!cadences.length) {
+    panel.innerHTML = '<div class="detail-empty">No cadences configured.</div>';
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const items = cadences.map(function (c) {
+    const overdue      = OAD.cadenceOverdue(c);
+    const dueToday     = !overdue && c.next_due === today;
+    const prevDue      = OAD.prevCadenceDue(c.recurrence);
+    const doneThisPeriod = !overdue && !dueToday && c.last_completed && prevDue && c.last_completed >= prevDue;
+    const itemClass    = overdue ? 'is-overdue' : dueToday ? 'is-due-today' : doneThisPeriod ? 'is-done' : '';
+
+    let statusHtml;
+    if (overdue) {
+      statusHtml = '<div class="cadence-overdue-badge">OVERDUE</div>' +
+        '<button class="success" style="font-size:13px;padding:8px 14px" onclick="OAD.markCadenceDone(' + c.id + ')">Mark Done</button>';
+    } else if (doneThisPeriod) {
+      statusHtml = '<span class="cadence-done-badge">✓ Done</span>';
+    } else {
+      const label = dueToday ? 'Due today' : 'Due ' + OAD.esc(OAD.formatDate(c.next_due));
+      statusHtml = '<div class="text-sm text-muted" style="margin-bottom:8px">' + label + '</div>' +
+        '<button class="secondary" style="font-size:13px" onclick="OAD.markCadenceDone(' + c.id + ')">Mark Done</button>';
+    }
+
+    return '<div class="cadence-item ' + itemClass + '">' +
+      '<div class="cadence-info">' +
+        '<div class="cadence-title">' + OAD.esc(c.title) + '</div>' +
+        '<div class="cadence-meta">' + OAD.esc(c.recurrence) + ' · ' + OAD.esc(c.life_area) + '</div>' +
+        (c.notes ? '<div class="cadence-notes">' + OAD.esc(c.notes) + '</div>' : '') +
+        (c.consequences ? '<div class="cadence-consequences">If missed: ' + OAD.esc(c.consequences) + '</div>' : '') +
+      '</div>' +
+      '<div class="cadence-actions">' + statusHtml + '</div>' +
+      '</div>';
+  }).join('');
+
+  panel.innerHTML = '<div class="cadence-panel">' +
+    '<h2>Cadences</h2>' +
+    '<p class="text-muted text-sm" style="margin-bottom:4px">Date-anchored obligations that recur on a fixed schedule.</p>' +
+    items +
+    '</div>';
 };
 
 OAD.draftEmailModal = async function (id) {

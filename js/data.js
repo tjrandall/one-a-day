@@ -2,6 +2,7 @@ window.OAD = window.OAD || {};
 
 OAD.DB = {
   threads: [],
+  cadences: [],
 
   persona: {
     assumption_tendencies: [],
@@ -101,8 +102,40 @@ OAD.makeThread = function (overrides) {
     contingency_trigger_date: '',
     contingency_action: '',
     contingency_escalation: '',
+    deadline: null,
+    effortEstimate: null,
+    weeklyCommitment: null,
+    effortLogged: 0,
     connections: [],
     evolution_log: [],
     ai_insights: []
   }, overrides);
+};
+
+OAD.nextCadenceId = function () {
+  const ids = OAD.DB.cadences.map(function (c) { return c.id; });
+  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+};
+
+OAD.makeCadence = function (overrides) {
+  return Object.assign({
+    id: null,
+    title: '',
+    life_area: 'finances',
+    recurrence: 'monthly-1st',
+    last_completed: null,
+    next_due: null,
+    notes: '',
+    consequences: ''
+  }, overrides);
+};
+
+OAD.addCadence = function (cadence) {
+  cadence.id = OAD.nextCadenceId();
+  OAD.DB.cadences.push(cadence);
+  return cadence;
+};
+
+OAD.getCadence = function (id) {
+  return OAD.DB.cadences.find(function (c) { return c.id === id; }) || null;
 };
