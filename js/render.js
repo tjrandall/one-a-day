@@ -121,6 +121,7 @@ OAD.renderDetail = function (id) {
         </div>
       </div>
       <div class="detail-actions">
+        <button class="success" onclick="OAD.openCompleteActionModal(${t.id})">Complete Action</button>
         <button class="secondary" onclick="OAD.openEditModal(${t.id})">Edit</button>
         <button class="ghost" onclick="OAD.openLogModal(${t.id})">+ Log</button>
         <button onclick="OAD.generateInsight(${t.id})" id="insight-btn-${t.id}">Insight</button>
@@ -180,7 +181,12 @@ OAD.renderDetail = function (id) {
     <div class="card">
       <div class="card-title">Evolution Log</div>
       ${evoHtml}
-    </div>`;
+    </div>
+
+    ${t.status !== 'closed' ? `
+    <button class="complete-cta" onclick="OAD.openCompleteActionModal(${t.id})">
+      ✓ Complete Action
+    </button>` : ''}`;
 };
 
 OAD.generateInsight = async function (id) {

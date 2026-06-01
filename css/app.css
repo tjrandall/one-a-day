@@ -373,6 +373,44 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 .test-summary.has-fail { color: var(--critical); }
 #test-continue-btn { margin-top: 24px; align-self: flex-start; }
 
+/* ── Complete Action Wizard ── */
+button.success { background: var(--open); color: #0f0f13; font-weight: 600; }
+button.success:hover { opacity: .88; }
+.wizard-steps { display: flex; align-items: center; gap: 6px; }
+.ws { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 20px; background: var(--surface2); color: var(--text-muted); letter-spacing: .02em; white-space: nowrap; }
+.ws.active { background: var(--accent); color: #fff; }
+.ws.done { background: var(--open); color: #0f0f13; }
+.ws-sep { color: var(--border); font-size: 13px; }
+.yn-group { display: flex; gap: 12px; flex-wrap: wrap; }
+.yn-opt { display: flex; align-items: flex-start; gap: 8px; font-size: 14px; cursor: pointer; }
+.yn-opt input[type=radio] { width: auto; margin-top: 3px; accent-color: var(--accent); flex-shrink: 0; }
+.yn-card { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; transition: border-color .15s; }
+.yn-card:hover { border-color: var(--accent-dim); }
+.caw-closing-box { background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.caw-closing-box .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); margin-bottom: 8px; }
+
+/* ── Complete Action CTA ── */
+.complete-cta {
+  display: block;
+  width: 100%;
+  padding: 18px;
+  margin-top: 8px;
+  background: var(--open);
+  color: #0f0f13;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  border-radius: var(--radius-lg);
+  border: none;
+  cursor: pointer;
+  transition: opacity .15s, box-shadow .15s;
+  box-shadow: 0 0 0 0 #06d6a040;
+}
+.complete-cta:hover {
+  opacity: .9;
+  box-shadow: 0 0 24px 4px #06d6a030;
+}
+
 /* ── Scrollbars ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

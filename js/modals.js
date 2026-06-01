@@ -358,3 +358,221 @@ OAD._saveSettings = function () {
   OAD.setApiKey(key);
   OAD.closeModal();
 };
+
+// ── Complete Action Wizard ──────────────────────────────────────
+
+OAD._caw = null;
+
+OAD._wizardSteps = function (active) {
+  const labels = ['What happened', "What's next", 'Close?'];
+  return '<div class="wizard-steps">' + labels.map(function (label, i) {
+    const n = i + 1;
+    const cls = n < active ? 'ws done' : n === active ? 'ws active' : 'ws';
+    return (i > 0 ? '<span class="ws-sep">›</span>' : '') +
+      '<span class="' + cls + '">' + n + ' ' + label + '</span>';
+  }).join('') + '</div>';
+};
+
+OAD.openCompleteActionModal = function (id) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+  OAD._caw = { id: id, step1: null, step2: null };
+  OAD._cawStep1();
+};
+
+OAD._cawStep1 = function () {
+  const caw = OAD._caw;
+  const t   = OAD.getThread(caw.id);
+  const prev = caw.step1 || {};
+  const hasAssumption = !!(t.current_assumption && t.current_assumption.trim());
+
+  const assumptionHtml = hasAssumption ? `
+    <div class="field">
+      <label>Did this verify the current assumption?</label>
+      <div class="text-sm text-muted" style="font-style:italic;margin:0 0 8px">"${OAD.esc(t.current_assumption)}"</div>
+      <div class="yn-group">
+        <label class="yn-opt">
+          <input type="radio" name="ca-av" value="yes" ${prev.assumption_verified === true ? 'checked' : ''}>
+          Yes — assumption verified
+        </label>
+        <label class="yn-opt">
+          <input type="radio" name="ca-av" value="no" ${prev.assumption_verified !== true ? 'checked' : ''}>
+          No — still unverified
+        </label>
+      </div>
+    </div>` : '';
+
+  OAD.openModal(`
+    ${OAD._wizardSteps(1)}
+    <h2>Complete Action — <span style="color:var(--text-muted);font-weight:400;font-size:15px">${OAD.esc(t.title)}</span></h2>
+    <div class="field">
+      <label>What did you do? <span style="color:var(--critical)">*</span></label>
+      <textarea id="ca-what-done" placeholder="Describe exactly what you did — this becomes the evolution log entry." style="min-height:90px">${OAD.esc(prev.what_done || '')}</textarea>
+    </div>
+    ${assumptionHtml}
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._cawStep1Next()">Next →</button>
+    </div>`);
+  setTimeout(function () { document.getElementById('ca-what-done')?.focus(); }, 50);
+};
+
+OAD._cawStep1Next = function () {
+  const what_done = document.getElementById('ca-what-done')?.value.trim();
+  if (!what_done) { alert('Describe what you did — this cannot be empty.'); return; }
+
+  const t = OAD.getThread(OAD._caw.id);
+  const hasAssumption = !!(t.current_assumption && t.current_assumption.trim());
+  let assumption_verified = t.assumption_verified;
+
+  if (hasAssumption) {
+    const av = document.querySelector('input[name="ca-av"]:checked')?.value;
+    if (!av) { alert('Select whether the assumption was verified.'); return; }
+    assumption_verified = (av === 'yes');
+  }
+
+  OAD._caw.step1 = { what_done: what_done, assumption_verified: assumption_verified };
+  OAD._cawStep2();
+};
+
+OAD._cawStep2 = function () {
+  const caw  = OAD._caw;
+  const t    = OAD.getThread(caw.id);
+  const prev = caw.step2 || {};
+  const channels = ['email', 'phone', 'portal', 'in-person', 'text', 'other'];
+  const curChannel = prev.channel || t.next_action_channel || 'email';
+  const channelOpts = channels.map(function (c) {
+    return '<option value="' + c + '" ' + (c === curChannel ? 'selected' : '') + '>' + c + '</option>';
+  }).join('');
+
+  OAD.openModal(`
+    ${OAD._wizardSteps(2)}
+    <h2>What's Next?</h2>
+    <div class="field">
+      <label>New next action <span style="color:var(--critical)">*</span></label>
+      <input id="ca-action" type="text" value="${OAD.esc(prev.action || '')}" placeholder="Specific next step you will take">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>By when <span style="color:var(--critical)">*</span></label>
+        <input id="ca-date" type="date" value="${OAD.esc(prev.date || '')}">
+      </div>
+      <div class="field">
+        <label>Channel</label>
+        <select id="ca-channel">${channelOpts}</select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Contact</label>
+      <input id="ca-contact" type="text" value="${OAD.esc(prev.contact !== undefined ? prev.contact : t.next_action_contact || '')}" placeholder="Who are you acting with?">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Contingency date</label>
+        <input id="ca-ctg-date" type="date" value="${OAD.esc(prev.ctg_date || '')}">
+      </div>
+      <div class="field">
+        <label>Contingency action</label>
+        <input id="ca-ctg-action" type="text" value="${OAD.esc(prev.ctg_action || '')}" placeholder="If no response by that date…">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD._cawStep1()">← Back</button>
+      <button onclick="OAD._cawStep2Next()">Next →</button>
+    </div>`);
+  setTimeout(function () { document.getElementById('ca-action')?.focus(); }, 50);
+};
+
+OAD._cawStep2Next = function () {
+  const action = document.getElementById('ca-action')?.value.trim();
+  if (!action) { alert('Next action is required — a thread without a next action is dead.'); return; }
+  const date = document.getElementById('ca-date')?.value;
+  if (!date) { alert('"By when?" is required.'); return; }
+
+  OAD._caw.step2 = {
+    action:     action,
+    date:       date,
+    channel:    document.getElementById('ca-channel')?.value    || '',
+    contact:    document.getElementById('ca-contact')?.value.trim()    || '',
+    ctg_date:   document.getElementById('ca-ctg-date')?.value   || '',
+    ctg_action: document.getElementById('ca-ctg-action')?.value.trim() || ''
+  };
+  OAD._cawStep3();
+};
+
+OAD._cawStep3 = function () {
+  const t = OAD.getThread(OAD._caw.id);
+  const closingText = t.closing_condition
+    ? OAD.esc(t.closing_condition)
+    : '<span class="text-muted">No closing condition defined</span>';
+
+  OAD.openModal(`
+    ${OAD._wizardSteps(3)}
+    <h2>Did this close the thread?</h2>
+    <div class="caw-closing-box">
+      <div class="card-title">Closing Condition</div>
+      <div class="text-sm">${closingText}</div>
+    </div>
+    <div class="field">
+      <div class="yn-group">
+        <label class="yn-opt yn-card">
+          <input type="radio" name="ca-closed" value="yes">
+          <div>
+            <div style="font-weight:600;font-size:14px">Yes — closing condition met</div>
+            <div class="text-sm text-muted" style="margin-top:2px">Thread will be marked closed</div>
+          </div>
+        </label>
+        <label class="yn-opt yn-card">
+          <input type="radio" name="ca-closed" value="no" checked>
+          <div>
+            <div style="font-weight:600;font-size:14px">No — still in progress</div>
+            <div class="text-sm text-muted" style="margin-top:2px">New next action will be saved</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD._cawStep2()">← Back</button>
+      <button class="success" onclick="OAD._cawSave()">Save</button>
+    </div>`);
+};
+
+OAD._cawSave = function () {
+  const closed = document.querySelector('input[name="ca-closed"]:checked')?.value === 'yes';
+  const caw = OAD._caw;
+  const t   = OAD.getThread(caw.id);
+  if (!t) return;
+
+  const patch = {
+    assumption_verified:      caw.step1.assumption_verified,
+    next_action:              caw.step2.action,
+    next_action_date:         caw.step2.date,
+    next_action_channel:      caw.step2.channel,
+    next_action_contact:      caw.step2.contact,
+    contingency_trigger_date: caw.step2.ctg_date,
+    contingency_action:       caw.step2.ctg_action
+  };
+
+  if (t.status === 'stalled') patch.status = 'open';
+
+  if (closed) {
+    patch.status = 'closed';
+    patch.closing_condition_met = true;
+  }
+
+  OAD.updateThread(caw.id, patch);
+
+  const logParts = ['Completed: ' + caw.step1.what_done];
+  if (caw.step1.assumption_verified && !t.assumption_verified) logParts.push('Assumption verified.');
+  if (closed) {
+    logParts.push('Closing condition met — thread closed.');
+  } else {
+    logParts.push('Next: ' + caw.step2.action + ' by ' + caw.step2.date + '.');
+  }
+  OAD.addEvolution(caw.id, logParts.join(' '));
+
+  OAD._caw = null;
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.renderDetail(caw.id);
+};
