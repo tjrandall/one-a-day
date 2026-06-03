@@ -249,7 +249,7 @@ OAD.test('loadDB: returns false when storage is empty', function () {
   }
 });
 
-OAD.test('loadDB: returns false on corrupt JSON without throwing', function () {
+OAD.test('loadDB: returns null on corrupt JSON without throwing', function () {
   const prevKey     = OAD._DB_KEY;
   const prevPersist = OAD._DB_PERSIST;
   OAD._DB_KEY     = '_oad_test_corrupt_' + Date.now();
@@ -257,7 +257,7 @@ OAD.test('loadDB: returns false on corrupt JSON without throwing', function () {
   try {
     localStorage.setItem(OAD._DB_KEY, 'not valid json {{{');
     const result = OAD.loadDB();
-    OAD._assertEqual(result, false, 'loadDB should return false on corrupt JSON, not throw');
+    OAD._assertEqual(result, null, 'loadDB should return null on corrupt JSON (not false, not throw)');
   } finally {
     localStorage.removeItem(OAD._DB_KEY);
     OAD._DB_KEY     = prevKey;
@@ -525,8 +525,18 @@ OAD._dismissTests = function () {
 OAD._initApp = function () {
   OAD._DB_PERSIST = true;
   OAD.loadApiKey();
-  const hasData = OAD.loadDB();
-  if (!hasData) {
+  const loadResult = OAD.loadDB();
+  if (loadResult === null) {
+    // Corrupt data in storage — do NOT overwrite, halt and surface the problem.
+    alert(
+      'One-A-Day could not load your saved data — it appears to be corrupt.\n\n' +
+      'Your data has NOT been overwritten. To recover, open the browser console and ' +
+      'run: localStorage.removeItem("oad_db")\n\n' +
+      'Then reload the page to start fresh.'
+    );
+    return;
+  }
+  if (!loadResult) {
     OAD._seedData();
     OAD.importCourseData(); // async — fetches 58 threads, calls renderList() on completion
   }

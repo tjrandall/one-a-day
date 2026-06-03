@@ -197,7 +197,7 @@ OAD.loadDB = function () {
     return true;
   } catch (e) {
     console.warn('[OAD] loadDB failed:', e);
-    return false;
+    return null; // null = corrupt data present (distinct from false = no data)
   }
 };
 
