@@ -365,7 +365,7 @@ OAD._saveSettings = function () {
 OAD._caw = null;
 
 OAD._wizardSteps = function (active) {
-  const labels = ['What happened', "What's next", 'Close?'];
+  const labels = ['What happened', 'Close?', "What's next"];
   return '<div class="wizard-steps">' + labels.map(function (label, i) {
     const n = i + 1;
     const cls = n < active ? 'ws done' : n === active ? 'ws active' : 'ws';
@@ -436,7 +436,52 @@ OAD._cawStep1Next = function () {
   OAD._cawStep2();
 };
 
+// Step 2: Did this close the thread? YES → _cawSaveClose(); NO → _cawStep3()
 OAD._cawStep2 = function () {
+  const t = OAD.getThread(OAD._caw.id);
+  const closingText = t.closing_condition
+    ? OAD.esc(t.closing_condition)
+    : '<span class="text-muted">No closing condition defined</span>';
+
+  OAD.openModal(`
+    ${OAD._wizardSteps(2)}
+    <h2>Did this close the thread?</h2>
+    <div class="caw-closing-box">
+      <div class="card-title">Closing Condition</div>
+      <div class="text-sm">${closingText}</div>
+    </div>
+    <div class="field">
+      <div class="yn-group">
+        <label class="yn-opt yn-card">
+          <input type="radio" name="ca-closed" value="yes">
+          <div>
+            <div style="font-weight:600;font-size:14px">Yes — closing condition met</div>
+            <div class="text-sm text-muted" style="margin-top:2px">Thread will be marked closed</div>
+          </div>
+        </label>
+        <label class="yn-opt yn-card">
+          <input type="radio" name="ca-closed" value="no" checked>
+          <div>
+            <div style="font-weight:600;font-size:14px">No — still in progress</div>
+            <div class="text-sm text-muted" style="margin-top:2px">Set next action</div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD._cawStep1()">← Back</button>
+      <button class="success" onclick="OAD._cawStep2Next()">Next →</button>
+    </div>`);
+};
+
+OAD._cawStep2Next = function () {
+  const val = document.querySelector('input[name="ca-closed"]:checked')?.value;
+  if (!val) { alert('Please select yes or no.'); return; }
+  if (val === 'yes') { OAD._cawSaveClose(); } else { OAD._cawStep3(); }
+};
+
+// Step 3: What's next? (only reached on NO path)
+OAD._cawStep3 = function () {
   const caw  = OAD._caw;
   const t    = OAD.getThread(caw.id);
   const prev = caw.step2 || {};
@@ -447,7 +492,7 @@ OAD._cawStep2 = function () {
   }).join('');
 
   OAD.openModal(`
-    ${OAD._wizardSteps(2)}
+    ${OAD._wizardSteps(3)}
     <h2>What's Next?</h2>
     <div class="field">
       <label>New next action <span style="color:var(--critical)">*</span></label>
@@ -478,17 +523,23 @@ OAD._cawStep2 = function () {
       </div>
     </div>
     <div class="modal-footer">
-      <button class="secondary" onclick="OAD._cawStep1()">← Back</button>
-      <button onclick="OAD._cawStep2Next()">Next →</button>
+      <button class="secondary" onclick="OAD._cawStep2()">← Back</button>
+      <button onclick="OAD._cawStep3Next()">Save →</button>
     </div>`);
   setTimeout(function () { document.getElementById('ca-action')?.focus(); }, 50);
 };
 
-OAD._cawStep2Next = function () {
+OAD._isClosingAction = function (action) {
+  if (!action) return true;
+  const lower = action.toLowerCase();
+  return lower.includes('nothing') || lower.includes('closed');
+};
+
+OAD._cawStep3Next = function () {
   const action = document.getElementById('ca-action')?.value.trim();
   if (!action) { alert('Next action is required — a thread without a next action is dead.'); return; }
   const date = document.getElementById('ca-date')?.value;
-  if (!date) { alert('"By when?" is required.'); return; }
+  if (!date && !OAD._isClosingAction(action)) { alert('"By when?" is required.'); return; }
 
   OAD._caw.step2 = {
     action:     action,
@@ -498,48 +549,11 @@ OAD._cawStep2Next = function () {
     ctg_date:   document.getElementById('ca-ctg-date')?.value   || '',
     ctg_action: document.getElementById('ca-ctg-action')?.value.trim() || ''
   };
-  OAD._cawStep3();
+  OAD._cawSave();
 };
 
-OAD._cawStep3 = function () {
-  const t = OAD.getThread(OAD._caw.id);
-  const closingText = t.closing_condition
-    ? OAD.esc(t.closing_condition)
-    : '<span class="text-muted">No closing condition defined</span>';
-
-  OAD.openModal(`
-    ${OAD._wizardSteps(3)}
-    <h2>Did this close the thread?</h2>
-    <div class="caw-closing-box">
-      <div class="card-title">Closing Condition</div>
-      <div class="text-sm">${closingText}</div>
-    </div>
-    <div class="field">
-      <div class="yn-group">
-        <label class="yn-opt yn-card">
-          <input type="radio" name="ca-closed" value="yes">
-          <div>
-            <div style="font-weight:600;font-size:14px">Yes — closing condition met</div>
-            <div class="text-sm text-muted" style="margin-top:2px">Thread will be marked closed</div>
-          </div>
-        </label>
-        <label class="yn-opt yn-card">
-          <input type="radio" name="ca-closed" value="no" checked>
-          <div>
-            <div style="font-weight:600;font-size:14px">No — still in progress</div>
-            <div class="text-sm text-muted" style="margin-top:2px">New next action will be saved</div>
-          </div>
-        </label>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button class="secondary" onclick="OAD._cawStep2()">← Back</button>
-      <button class="success" onclick="OAD._cawSave()">Save</button>
-    </div>`);
-};
-
+// Save: NO path — thread stays open, next action recorded
 OAD._cawSave = function () {
-  const closed = document.querySelector('input[name="ca-closed"]:checked')?.value === 'yes';
   const caw = OAD._caw;
   const t   = OAD.getThread(caw.id);
   if (!t) return;
@@ -555,23 +569,40 @@ OAD._cawSave = function () {
   };
 
   if (t.deadline) patch.effortLogged = (t.effortLogged || 0) + 1;
-
   if (t.status === 'stalled') patch.status = 'open';
-
-  if (closed) {
-    patch.status = 'closed';
-    patch.closing_condition_met = true;
-  }
 
   OAD.updateThread(caw.id, patch);
 
   const logParts = ['Completed: ' + caw.step1.what_done];
   if (caw.step1.assumption_verified && !t.assumption_verified) logParts.push('Assumption verified.');
-  if (closed) {
-    logParts.push('Closing condition met — thread closed.');
-  } else {
-    logParts.push('Next: ' + caw.step2.action + ' by ' + caw.step2.date + '.');
-  }
+  logParts.push('Next: ' + caw.step2.action + ' by ' + caw.step2.date + '.');
+  OAD.addEvolution(caw.id, logParts.join(' '));
+
+  OAD._caw = null;
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.renderDetail(caw.id);
+};
+
+// Save: YES path — thread closes immediately, no next action required
+OAD._cawSaveClose = function () {
+  const caw = OAD._caw;
+  const t   = OAD.getThread(caw.id);
+  if (!t) return;
+
+  const patch = {
+    assumption_verified:   caw.step1.assumption_verified,
+    status:                'closed',
+    closing_condition_met: true
+  };
+
+  if (t.deadline) patch.effortLogged = (t.effortLogged || 0) + 1;
+
+  OAD.updateThread(caw.id, patch);
+
+  const logParts = ['Completed: ' + caw.step1.what_done];
+  if (caw.step1.assumption_verified && !t.assumption_verified) logParts.push('Assumption verified.');
+  logParts.push('Closing condition met — thread closed.');
   OAD.addEvolution(caw.id, logParts.join(' '));
 
   OAD._caw = null;

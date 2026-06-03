@@ -286,19 +286,8 @@ OAD.test('suggestArea: VR&E → Legal', function () {
 // ── Tests: Complete Action Wizard ────────────────────────────────────
 
 (function () {
-  // Temporarily override document.querySelector so _cawSave reads the
-  // desired "closed?" radio value without a real DOM.
-  function withClosedRadio(val, fn) {
-    const orig = document.querySelector.bind(document);
-    document.querySelector = function (sel) {
-      if (sel === 'input[name="ca-closed"]:checked') return { value: val };
-      return orig(sel);
-    };
-    try { fn(); } finally { document.querySelector = orig; }
-  }
-
   // Build a complete wizard state for a given thread id.
-  // Caller can override step1 or step2 wholesale.
+  // step2 holds "what's next" data (only present on the NO/not-closed path).
   function wizardState(id, overrides) {
     return Object.assign({
       id: id,
@@ -314,10 +303,12 @@ OAD.test('suggestArea: VR&E → Legal', function () {
     }, overrides);
   }
 
+  // ── _cawSave (NO path — thread stays open) ──────────────────────────
+
   OAD.test('cawSave: updates all next-action fields on thread', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW fields', status: 'open' }));
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     const u = OAD.getThread(t.id);
     OAD._assertEqual(u.next_action,              'Next step',                'next_action');
     OAD._assertEqual(u.next_action_date,         '2026-12-01',               'next_action_date');
@@ -331,18 +322,18 @@ OAD.test('suggestArea: VR&E → Legal', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW log', status: 'open' }));
     const before = t.evolution_log.length;
     OAD._caw = wizardState(t.id, { step1: { what_done: 'Sent the critical email', assumption_verified: false } });
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     const u = OAD.getThread(t.id);
     OAD._assert(u.evolution_log.length > before, 'evolution log should grow');
     OAD._assert(u.evolution_log.slice(-1)[0].note.includes('Sent the critical email'), 'log entry should contain what_done');
   });
 
-  OAD.test('cawSave: log entry includes new next action and date when not closed', function () {
+  OAD.test('cawSave: log entry includes new next action and date', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW log detail', status: 'open' }));
     OAD._caw = wizardState(t.id, {
       step2: { action: 'Call Robin', date: '2026-06-02', channel: 'phone', contact: '', ctg_date: '', ctg_action: '' }
     });
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     const note = OAD.getThread(t.id).evolution_log.slice(-1)[0].note;
     OAD._assert(note.includes('Call Robin'), 'log entry should include next action');
     OAD._assert(note.includes('2026-06-02'), 'log entry should include next date');
@@ -351,63 +342,42 @@ OAD.test('suggestArea: VR&E → Legal', function () {
   OAD.test('cawSave: assumption_verified set true when step1 confirms', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW assumption yes', assumption_verified: false }));
     OAD._caw = wizardState(t.id, { step1: { what_done: 'Confirmed it', assumption_verified: true } });
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD.getThread(t.id).assumption_verified, true, 'assumption_verified should be true');
   });
 
   OAD.test('cawSave: assumption_verified stays false when step1 denies', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW assumption no', assumption_verified: false }));
     OAD._caw = wizardState(t.id, { step1: { what_done: 'Still uncertain', assumption_verified: false } });
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD.getThread(t.id).assumption_verified, false, 'assumption_verified should remain false');
   });
 
   OAD.test('cawSave: stalled thread moves to open after action completed', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW stalled', status: 'stalled' }));
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD.getThread(t.id).status, 'open', 'stalled should become open');
   });
 
   OAD.test('cawSave: waiting thread stays waiting after action completed', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW waiting', status: 'waiting' }));
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD.getThread(t.id).status, 'waiting', 'waiting status should be preserved');
   });
 
   OAD.test('cawSave: open thread stays open after action completed', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW open', status: 'open' }));
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD.getThread(t.id).status, 'open', 'open status should be preserved');
-  });
-
-  OAD.test('cawSave: closed=yes sets status closed and closing_condition_met', function () {
-    const t = OAD.addThread(OAD.makeThread({
-      title: 'CAW close it',
-      status: 'waiting',
-      closing_condition: 'Equipment received and in use'
-    }));
-    OAD._caw = wizardState(t.id);
-    withClosedRadio('yes', function () { OAD._cawSave(); });
-    const u = OAD.getThread(t.id);
-    OAD._assertEqual(u.status, 'closed', 'status should be closed');
-    OAD._assertEqual(u.closing_condition_met, true, 'closing_condition_met should be true');
-  });
-
-  OAD.test('cawSave: closed=yes logs closure in evolution', function () {
-    const t = OAD.addThread(OAD.makeThread({ title: 'CAW close log', status: 'open' }));
-    OAD._caw = wizardState(t.id);
-    withClosedRadio('yes', function () { OAD._cawSave(); });
-    const note = OAD.getThread(t.id).evolution_log.slice(-1)[0].note;
-    OAD._assert(note.includes('closed'), 'closure log entry should mention closed');
   });
 
   OAD.test('cawSave: clears _caw state after save', function () {
     const t = OAD.addThread(OAD.makeThread({ title: 'CAW cleanup' }));
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     OAD._assertEqual(OAD._caw, null, '_caw should be null after save');
   });
 
@@ -422,7 +392,7 @@ OAD.test('suggestArea: VR&E → Legal', function () {
     }));
     const before = OAD.pressure(t);
     OAD._caw = wizardState(t.id, { step1: { what_done: 'Confirmed the fact', assumption_verified: true } });
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     const after = OAD.pressure(OAD.getThread(t.id));
     OAD._assert(after < before, `Pressure should drop after assumption verified. Before: ${before}, After: ${after}`);
   });
@@ -436,9 +406,83 @@ OAD.test('suggestArea: VR&E → Legal', function () {
     }));
     const before = OAD.pressure(t);
     OAD._caw = wizardState(t.id);
-    withClosedRadio('no', function () { OAD._cawSave(); });
+    OAD._cawSave();
     const after = OAD.pressure(OAD.getThread(t.id));
     OAD._assert(after < before, `Pressure should drop after stalled→open. Before: ${before}, After: ${after}`);
+  });
+
+  // ── _cawSaveClose (YES path — thread closes immediately) ─────────────
+
+  OAD.test('cawSaveClose: sets status closed and closing_condition_met without step2', function () {
+    const t = OAD.addThread(OAD.makeThread({
+      title: 'CAW close it',
+      status: 'waiting',
+      closing_condition: 'Equipment received and in use'
+    }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Got the gear', assumption_verified: false }, step2: null };
+    OAD._cawSaveClose();
+    const u = OAD.getThread(t.id);
+    OAD._assertEqual(u.status, 'closed', 'status should be closed');
+    OAD._assertEqual(u.closing_condition_met, true, 'closing_condition_met should be true');
+  });
+
+  OAD.test('cawSaveClose: logs closure in evolution', function () {
+    const t = OAD.addThread(OAD.makeThread({ title: 'CAW close log', status: 'open' }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Final task done', assumption_verified: false }, step2: null };
+    OAD._cawSaveClose();
+    const note = OAD.getThread(t.id).evolution_log.slice(-1)[0].note;
+    OAD._assert(note.includes('closed'), 'closure log entry should mention closed');
+    OAD._assert(note.includes('Final task done'), 'closure log should include what_done');
+  });
+
+  OAD.test('cawSaveClose: clears _caw state after close', function () {
+    const t = OAD.addThread(OAD.makeThread({ title: 'CAW close cleanup' }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Done', assumption_verified: false }, step2: null };
+    OAD._cawSaveClose();
+    OAD._assertEqual(OAD._caw, null, '_caw should be null after close');
+  });
+
+  // ── _isClosingAction + _cawStep3Next ────────────────────────────────
+
+  OAD.test('isClosingAction: empty string, nothing, closed, and Nothing - it\'s closed are all closing actions', function () {
+    OAD._assert(OAD._isClosingAction(''),                       'empty string should be closing');
+    OAD._assert(OAD._isClosingAction('nothing'),                '"nothing" should be closing');
+    OAD._assert(OAD._isClosingAction('closed'),                 '"closed" should be closing');
+    OAD._assert(OAD._isClosingAction('Nothing - it\'s closed'), '"Nothing - it\'s closed" should be closing');
+    OAD._assert(!OAD._isClosingAction('Call Robin by Friday'),  'normal next action should not be closing');
+    OAD._assert(!OAD._isClosingAction('Send the report'),       '"Send the report" should not be closing');
+  });
+
+  OAD.test('cawStep3Next: skips By When validation when action is a closing phrase', function () {
+    const fields = {
+      'ca-action':     { value: "Nothing - it's closed" },
+      'ca-date':       { value: '' },
+      'ca-channel':    { value: 'email' },
+      'ca-contact':    { value: '' },
+      'ca-ctg-date':   { value: '' },
+      'ca-ctg-action': { value: '' }
+    };
+    const origGetEl = document.getElementById.bind(document);
+    document.getElementById = function (id) { return fields[id] || origGetEl(id); };
+
+    let alertFired = false;
+    const origAlert = window.alert;
+    window.alert = function () { alertFired = true; };
+
+    const t = OAD.addThread(OAD.makeThread({ title: 'Closing action no date' }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Done', assumption_verified: false }, step2: null };
+
+    const origSave = OAD._cawSave;
+    OAD._cawSave = function () {};
+
+    OAD._cawStep3Next();
+
+    document.getElementById = origGetEl;
+    window.alert = origAlert;
+    OAD._cawSave = origSave;
+    OAD._caw = null;
+
+    OAD._assert(!alertFired, 'By When alert should not fire for closing action with no date');
   });
 
 }());
