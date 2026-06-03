@@ -1,5 +1,21 @@
 # One-A-Day — Build Spec for Claude Code
 
+## Long-Term Target: Published Mobile App
+The end goal is a published app on the iOS App Store and Google Play Store. Every architecture decision must be made with this in mind — not just what works on localhost today.
+
+**Future requirements to design toward (not implement now):**
+- Authentication — per-user identity, sessions, token management
+- Per-user data isolation — no shared state between accounts
+- Server-side persistence — localStorage is a local prototype; data must eventually live on a server
+- Access controls — API keys, admin vs. user roles, data ownership
+- Export/import features — design these with eventual multi-user security in mind, not just localhost convenience; an export that works fine solo can become a data-leakage vector in a multi-user system
+
+**What this means for current work:**
+- Don't hardcode assumptions that there is only one user
+- Don't build export/import flows that would be insecure if another user's data were present
+- Don't architect around localStorage as a permanent solution — it's a scaffold, not the foundation
+- Flag any decision that would be painful to undo once real users and real data exist
+
 ## File Structure
 one-a-day/
 ├── index.html          # Shell only — loads all layers in order
@@ -195,6 +211,9 @@ UI behavior:
 - System randomly surfaces one idea per week in the main view as idea of the week
 - No due dates, no pressure scores, no overdue states
 - An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
+
+## Next Priority — Habit Check-in Panel
+Build the habit check-in panel as a dedicated view (not in the thread list). One-tap yes/no per habit, current streak visible, optional one-line reflection. No pressure scores, no overdue states, no automation. Data model and seed habits are already fully specified below.
 
 ## Data Model — Cadence
 Cadences are date-anchored mandatory obligations that recur on a known schedule. Not Threads (no closing condition). Not Habits (not a practice — a hard obligation with real consequences if missed). Not Ideas. The date IS the work. Missing a Cadence is not a pressure score event — it's a failure state.
