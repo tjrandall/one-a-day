@@ -184,6 +184,87 @@ OAD.test('makeThread: defaults are valid', function () {
   OAD._assert(Array.isArray(t.ai_insights), 'ai_insights is array');
 });
 
+// ── Tests: persistence ────────────────────────────────────────────────
+
+OAD.test('saveDB/loadDB: round-trips threads with correct field values', function () {
+  const prevKey     = OAD._DB_KEY;
+  const prevPersist = OAD._DB_PERSIST;
+  OAD._DB_KEY     = '_oad_test_' + Date.now();
+  OAD._DB_PERSIST = true;
+  try {
+    const t = OAD.addThread(OAD.makeThread({ title: 'Persist me', status: 'waiting', priority: 'high' }));
+    const savedDB = JSON.parse(JSON.stringify(OAD.DB));
+    OAD.DB = { threads: [], cadences: [], persona: OAD.DB.persona };
+
+    const found = OAD.loadDB();
+    OAD._assert(found === true, 'loadDB should return true when data exists');
+    const restored = OAD.DB.threads.find(function (x) { return x.title === 'Persist me'; });
+    OAD._assert(!!restored, 'thread should survive localStorage round-trip');
+    OAD._assertEqual(restored.status,   'waiting', 'status should survive round-trip');
+    OAD._assertEqual(restored.priority, 'high',    'priority should survive round-trip');
+
+    OAD.DB = savedDB;
+  } finally {
+    localStorage.removeItem(OAD._DB_KEY);
+    OAD._DB_KEY     = prevKey;
+    OAD._DB_PERSIST = prevPersist;
+  }
+});
+
+OAD.test('saveDB/loadDB: round-trips persona fields', function () {
+  const prevKey     = OAD._DB_KEY;
+  const prevPersist = OAD._DB_PERSIST;
+  OAD._DB_KEY     = '_oad_test_' + Date.now();
+  OAD._DB_PERSIST = true;
+  try {
+    OAD.DB.persona.life_context.pressure_level = 'extreme';
+    OAD.saveDB();
+    const savedDB = JSON.parse(JSON.stringify(OAD.DB));
+    OAD.DB = { threads: [], cadences: [], persona: { life_context: { pressure_level: 'low' }, tone_calibration: {}, counsel_history: [], assumption_tendencies: [], what_is_working: [], what_is_not_working: [] } };
+
+    OAD.loadDB();
+    OAD._assertEqual(OAD.DB.persona.life_context.pressure_level, 'extreme', 'persona pressure_level should survive round-trip');
+
+    OAD.DB = savedDB;
+  } finally {
+    localStorage.removeItem(OAD._DB_KEY);
+    OAD._DB_KEY     = prevKey;
+    OAD._DB_PERSIST = prevPersist;
+  }
+});
+
+OAD.test('loadDB: returns false when storage is empty', function () {
+  const prevKey     = OAD._DB_KEY;
+  const prevPersist = OAD._DB_PERSIST;
+  OAD._DB_KEY     = '_oad_test_empty_' + Date.now();
+  OAD._DB_PERSIST = true;
+  try {
+    localStorage.removeItem(OAD._DB_KEY);
+    const result = OAD.loadDB();
+    OAD._assertEqual(result, false, 'loadDB should return false when no data in storage');
+  } finally {
+    localStorage.removeItem(OAD._DB_KEY);
+    OAD._DB_KEY     = prevKey;
+    OAD._DB_PERSIST = prevPersist;
+  }
+});
+
+OAD.test('loadDB: returns false on corrupt JSON without throwing', function () {
+  const prevKey     = OAD._DB_KEY;
+  const prevPersist = OAD._DB_PERSIST;
+  OAD._DB_KEY     = '_oad_test_corrupt_' + Date.now();
+  OAD._DB_PERSIST = true;
+  try {
+    localStorage.setItem(OAD._DB_KEY, 'not valid json {{{');
+    const result = OAD.loadDB();
+    OAD._assertEqual(result, false, 'loadDB should return false on corrupt JSON, not throw');
+  } finally {
+    localStorage.removeItem(OAD._DB_KEY);
+    OAD._DB_KEY     = prevKey;
+    OAD._DB_PERSIST = prevPersist;
+  }
+});
+
 // ── Tests: suggestArea ────────────────────────────────────────────────
 
 OAD.test('suggestArea: detects Career', function () {
@@ -398,8 +479,13 @@ OAD._dismissTests = function () {
 };
 
 OAD._initApp = function () {
+  OAD._DB_PERSIST = true;
   OAD.loadApiKey();
-  OAD._seedData();
+  const hasData = OAD.loadDB();
+  if (!hasData) {
+    OAD._seedData();
+    OAD.importCourseData(); // async — fetches 58 threads, calls renderList() on completion
+  }
   OAD.renderList();
   const first = OAD.DB.threads[0];
   if (first) OAD.selectThread(first.id);

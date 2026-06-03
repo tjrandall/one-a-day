@@ -334,6 +334,7 @@ OAD._savePersona = function () {
   p.what_is_working    = toArr('f-working');
   p.what_is_not_working = toArr('f-not-working');
   p.assumption_tendencies = toArr('f-tendencies');
+  OAD.saveDB();
   OAD.closeModal();
   OAD.renderPersonaBar();
 };
