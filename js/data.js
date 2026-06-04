@@ -35,6 +35,14 @@ OAD.EDGE_TYPES = ['blocks', 'enables', 'relates'];
 
 OAD.CLOSING_TYPES = ['outcome', 'action'];
 
+OAD._generateUUID = function () {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+    var r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+};
+
 OAD.nextId = function () {
   const ids = OAD.DB.threads.map(t => t.id);
   return ids.length ? Math.max(...ids) + 1 : 1;
@@ -42,6 +50,10 @@ OAD.nextId = function () {
 
 OAD.getThread = function (id) {
   return OAD.DB.threads.find(t => t.id === id) || null;
+};
+
+OAD.getThreadByUUID = function (uuid) {
+  return OAD.DB.threads.find(t => t.uuid === uuid) || null;
 };
 
 OAD.addThread = function (thread) {
@@ -92,6 +104,7 @@ OAD.addInsight = function (id, insight) {
 
 OAD.makeThread = function (overrides) {
   return Object.assign({
+    uuid: OAD._generateUUID(), // stable identifier — used for export/import matching
     id: null,
     title: '',
     life_area: 'Other',
@@ -267,8 +280,9 @@ OAD.checkInHabit = function (id, done, note) {
 
 // ── Import ────────────────────────────────────────────────────────────
 // Accepts the moat-safe export JSON format.
-// New threads are created immediately.
-// Existing threads (matched by title) are staged for user confirmation.
+// Matching is by UUID only — title is never used for matching.
+// New threads (no UUID match) are created immediately.
+// Existing threads (UUID match) are staged for user confirmation.
 // Evolution log is always appended — never overwritten.
 
 OAD.parseImportFile = function (jsonString) {
@@ -282,9 +296,7 @@ OAD.parseImportFile = function (jsonString) {
         results.invalid.push(row);
         return;
       }
-      const existing = OAD.DB.threads.find(function (t) {
-        return t.title.trim().toLowerCase() === row.title.trim().toLowerCase();
-      });
+      const existing = row.uuid ? OAD.getThreadByUUID(row.uuid) : null;
       if (existing) {
         results.update.push({ incoming: row, existing: existing });
       } else {
@@ -322,7 +334,8 @@ OAD.applyImport = function (results, confirmedUpdates) {
   });
 
   (confirmedUpdates || []).forEach(function (item) {
-    const existing = item.existing;
+    // Re-lookup at apply time so we never operate on a stale reference
+    const existing = OAD.getThreadByUUID(item.incoming.uuid) || item.existing;
     const row      = item.incoming;
     const patch    = {};
     if (row.status            && row.status !== existing.status)
@@ -356,6 +369,7 @@ OAD.applyImport = function (results, confirmedUpdates) {
 OAD.exportThreads = function () {
   const threads = (OAD.DB.threads || []).map(function (t) {
     return {
+      uuid:              t.uuid,
       title:             t.title,
       status:            t.status,
       priority:          t.priority,
@@ -435,12 +449,17 @@ OAD.ideaOfTheWeek = function () {
   return ideas[weekIndex % ideas.length];
 };
 
-// Ensures all expected arrays exist after loading from storage (handles old data missing new fields).
+// Ensures all expected arrays exist and all threads have UUIDs.
+// Called after loading from localStorage or Supabase.
 OAD._normalizeDB = function () {
   OAD.DB.threads  = OAD.DB.threads  || [];
   OAD.DB.cadences = OAD.DB.cadences || [];
   OAD.DB.habits   = OAD.DB.habits   || [];
   OAD.DB.ideas    = OAD.DB.ideas    || [];
+  // Backfill UUIDs for any threads created before this field existed
+  OAD.DB.threads.forEach(function (t) {
+    if (!t.uuid) t.uuid = OAD._generateUUID();
+  });
 };
 
 // ── Persistence ───────────────────────────────────────────────────────

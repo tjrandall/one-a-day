@@ -112,7 +112,7 @@ OAD.test('pressure: contingency < 3 days adds 25', function () {
 
 // ── Tests: exportThreads ─────────────────────────────────────────────
 
-OAD.test('exportThreads: includes required fields and excludes moat data', function () {
+OAD.test('exportThreads: includes uuid and required fields, excludes moat data', function () {
   const t = OAD.addThread(OAD.makeThread({
     title: 'Export subject',
     status: 'open', priority: 'high', life_area: 'Career',
@@ -125,9 +125,10 @@ OAD.test('exportThreads: includes required fields and excludes moat data', funct
   OAD.addEvolution(t.id, 'Did a thing');
 
   const parsed = JSON.parse(OAD.exportThreads());
-  const row = parsed.threads.find(function (x) { return x.title === 'Export subject'; });
+  const row = parsed.threads.find(function (x) { return x.uuid === t.uuid; });
 
-  OAD._assert(!!row,                            'thread present in export');
+  OAD._assert(!!row,                            'thread present in export (matched by uuid)');
+  OAD._assert('uuid'              in row,       'uuid included');
   OAD._assert('title'             in row,       'title included');
   OAD._assert('status'            in row,       'status included');
   OAD._assert('priority'          in row,       'priority included');
@@ -147,21 +148,34 @@ OAD.test('exportThreads: includes required fields and excludes moat data', funct
 
 // ── Tests: importThreads ─────────────────────────────────────────────
 
-OAD.test('parseImportFile: new thread goes to create list', function () {
+OAD.test('parseImportFile: row without uuid goes to create list', function () {
   const json = JSON.stringify({ threads: [{ title: 'Brand new thread', status: 'open' }] });
   const results = OAD.parseImportFile(json);
   OAD._assert(!results.error, 'no error');
-  OAD._assertEqual(results.create.length, 1, 'one item to create');
+  OAD._assertEqual(results.create.length, 1, 'no uuid → create');
   OAD._assertEqual(results.update.length, 0, 'nothing to update');
 });
 
-OAD.test('parseImportFile: existing title goes to update list', function () {
-  const t = OAD.addThread(OAD.makeThread({ title: 'Existing for import test' }));
-  const json = JSON.stringify({ threads: [{ title: 'Existing for import test', status: 'closed' }] });
+OAD.test('parseImportFile: row with uuid matching existing thread goes to update list', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'UUID match test' }));
+  const json = JSON.stringify({ threads: [{ uuid: t.uuid, title: t.title, status: 'closed' }] });
   const results = OAD.parseImportFile(json);
-  OAD._assertEqual(results.update.length, 1, 'one item to update');
+  OAD._assertEqual(results.update.length, 1, 'uuid match → update');
   OAD._assertEqual(results.update[0].existing.id, t.id, 'matched to correct thread');
   OAD._assertEqual(results.create.length, 0, 'nothing to create');
+});
+
+OAD.test('parseImportFile: row with unknown uuid goes to create list', function () {
+  const json = JSON.stringify({ threads: [{ uuid: 'unknown-uuid-1234', title: 'Unknown UUID', status: 'open' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assertEqual(results.create.length, 1, 'unknown uuid → create');
+  OAD._assertEqual(results.update.length, 0, 'nothing to update');
+});
+
+OAD.test('getThreadByUUID: returns thread with matching uuid', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'UUID lookup' }));
+  OAD._assertEqual(OAD.getThreadByUUID(t.uuid)?.id, t.id, 'lookup by uuid returns thread');
+  OAD._assertEqual(OAD.getThreadByUUID('no-such-uuid'), null, 'unknown uuid returns null');
 });
 
 OAD.test('parseImportFile: returns error on invalid JSON', function () {
@@ -181,17 +195,17 @@ OAD.test('applyImport: creates new thread with evolution log appended', function
     'imported evolution entry appended');
 });
 
-OAD.test('applyImport: update never overwrites evolution log entries', function () {
+OAD.test('applyImport: updates thread matched by uuid, never overwrites evolution log', function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'Import no-overwrite test' }));
   OAD.addEvolution(t.id, 'Original entry');
-  const results = {
-    create: [],
-    update: [{ incoming: { title: t.title, status: 'waiting',
+  const updateItem = {
+    incoming: { uuid: t.uuid, title: t.title, status: 'waiting',
       evolution_log: [{ date: '2026-06-01', note: 'Imported entry' }] },
-      existing: t }]
+    existing: t
   };
-  OAD.applyImport(results, [results.update[0]]);
+  OAD.applyImport({ create: [], update: [updateItem] }, [updateItem]);
   const updated = OAD.getThread(t.id);
+  OAD._assertEqual(updated.status, 'waiting', 'status updated');
   OAD._assert(updated.evolution_log.some(function (e) { return e.note === 'Original entry'; }),
     'original evolution entry preserved');
   OAD._assert(updated.evolution_log.some(function (e) { return e.note === 'Imported entry'; }),
