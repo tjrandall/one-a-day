@@ -18,28 +18,45 @@ The end goal is a published app on the iOS App Store and Google Play Store. Ever
 
 ## File Structure
 one-a-day/
-├── index.html          # Shell only — loads all layers in order
+├── index.html              # Shell only — loads all layers in order
+├── schema.sql              # Supabase schema — run once in SQL editor
 ├── css/
-│   └── app.css         # All styles and design tokens
+│   └── app.css             # All styles and design tokens
 ├── js/
-│   ├── data.js         # DB, persona, constants, data access
-│   ├── engine.js       # Pure functions: pressure(), suggestArea(), esc()
-│   ├── api.js          # Anthropic API calls: genInsight(), draftEmail()
-│   ├── render.js       # All DOM rendering: renderList(), renderDetail()
-│   └── modals.js       # All modal functions and form handling
+│   ├── supabase-client.js  # Supabase client init (URL + publishable key)
+│   ├── data.js             # DB, persona, constants, data access + cloud save/load
+│   ├── engine.js           # Pure functions: pressure(), deadlineState(), suggestArea(), esc()
+│   ├── api.js              # Anthropic API calls: genInsight(), draftEmail()
+│   ├── render.js           # All DOM rendering: renderList(), renderDetail()
+│   └── modals.js           # All modal functions, form handling, auth modals
 ├── tests/
-│   ├── tests.js        # Full test suite + OAD.boot() entry point
-│   └── tests.data.js   # Customizable seed data loaded on boot
+│   ├── tests.js            # Full test suite + OAD.boot() + _initApp + _bootAfterAuth
+│   └── tests.data.js       # Seed data loaded on boot
 └── README.md
 
 ## Script Load Order in index.html
-js/data.js → js/engine.js → js/api.js → js/render.js → js/modals.js → tests/tests.data.js → tests/tests.js → OAD.boot()
+supabase (CDN) → js/supabase-client.js → js/data.js → js/engine.js → js/api.js → js/render.js → js/modals.js → tests/tests.data.js → tests/tests.js → OAD.boot()
 
 ## The Raptor Principle
 Tests run before any UI renders. OAD.boot() in tests.js runs the full test suite first. If any test fails, UI is blocked. This is non-negotiable.
 
 ## Global Namespace
 All code lives on window.OAD = {}. No modules, no bundler — plain vanilla JS that runs in a browser via python3 -m http.server 8080.
+
+## Persistence Architecture — Supabase (LIVE)
+- Backend: Supabase (PostgreSQL + JSONB + RLS). Project: hypddwbncupihqfhwiwb.supabase.co
+- Schema: single `user_data` table — one row per user, entire OAD.DB stored as JSONB `db` column
+- RLS: `auth.uid() = user_id` on all operations — DB enforces per-user isolation
+- localStorage: kept as local cache only; saves on every mutation, Supabase is authoritative
+- Auth: email/password via Supabase Auth. Session persists across reloads (no re-login required)
+- Boot flow: tests → "Launch App" → check Supabase session → if session: load cloud data (or seed + push) → render; if no session: show sign-in modal
+- Sign out: available in Settings modal
+
+**Key functions:**
+- `OAD._saveToCloud()` — async, fire-and-forget, called by saveDB() when authenticated
+- `OAD._loadFromCloud()` — async, called on boot/sign-in; returns true if data found
+- `OAD._bootAfterAuth()` — called after sign-in/sign-up; loads cloud, migrates localStorage, seeds if empty
+- `OAD._finishBoot()` — renders list and selects first thread
 
 ## Data Model — Thread
 Every thread has:
@@ -51,52 +68,44 @@ Every thread has:
 - assumption_verified (boolean) — has this been confirmed as fact?
 - next_action, next_action_date, next_action_channel, next_action_contact
 - contingency_trigger_date, contingency_action, contingency_escalation
+- deadline (ISO date, optional), effortEstimate, weeklyCommitment, effortLogged
 - connections[] — graph edges: {to_label, edge_type: blocks|enables|relates}
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
 
-## Data Model — Deadline-Driven Prioritization
+## Data Model — Deadline-Driven Prioritization (LIVE)
 
-### The Problem
-The dependency graph models *what depends on what* but has no concept of *when something must be done* or *how much work it takes to get there*. A thread with a hard deadline and weekly effort requirements looks identical to an open-ended thread. This is a silent failure mode — the graph won't warn you that you're falling behind, and "I'll get to it" becomes a lie the math doesn't support.
+### Design Principle
+Work backwards from the deadline, not forward from today. If something is due 6/26 and requires 4 sessions of work, the app must surface that *this week's session is not optional* — before it feels urgent, not after.
 
-### The Design Principle
-Work backwards from the deadline, not forward from today. If something is due 6/26 and requires 6 sessions of work, the app must surface that *this week's session is not optional* — before it feels urgent, not after.
-
-### Thread Attributes to Add
-- `deadline` — ISO date string, optional
+### Thread Attributes
+- `deadline` — ISO date string, optional. Set in edit form under "Deadline Tracking"
 - `effortEstimate` — total estimated sessions needed
-- `weeklyCommitment` — minimum sessions per week required to hit deadline (derived or user-set)
-- `effortLogged` — sessions completed to date (increments on Complete Action)
+- `weeklyCommitment` — minimum sessions per week required to hit deadline
+- `effortLogged` — sessions completed to date (auto-increments on Complete Action)
 
-### Derived State (computed, not stored)
-- `weeksRemaining` — from today to deadline
+### Derived State — `OAD.deadlineState(thread)` in engine.js
+- `daysRemaining`, `weeksRemaining` — from today to deadline
 - `sessionsRemaining` — effortEstimate minus effortLogged
 - `onTrack` — boolean: sessionsRemaining <= weeksRemaining * weeklyCommitment
-- `behindBy` — if not on track, how many sessions in deficit
+- `behindBy` — sessions in deficit when not on track
 
-### UI Behavior
-- Threads with deadlines surface a countdown: "3 weeks, 4 sessions remaining"
-- `onTrack: false` triggers a visible warning — not a subtle badge, an actual flag
-- The main thread list sorts or visually elevates deadline-driven threads that are at risk
-- Weekly review mode (future): show all deadline threads and their current trajectory
+### UI Behavior (implemented)
+- Thread list: deadline threads show compact row — "3w remaining · 4 sessions left ⚑ 1 behind"
+- Thread list: at-risk threads (onTrack: false) get red left border + subtle background
+- Detail view: "Deadline Tracking" card with full countdown, on-track/at-risk badge, progress
+- Edit form: "Deadline Tracking" section with deadline, effortEstimate, weeklyCommitment fields
 
 ### Pressure Score Integration
-Deadline-driven threads feed into the existing pressure() function:
 - deadline within 7 days and not on track: +30
 - deadline within 14 days and not on track: +20
 - deadline within 30 days and not on track: +10
 - behind by 2+ sessions: additional +15
 
-### First Real-World Case
-- Thread: eCornell Python Final Presentation
-- Deadline: June 26, 2026
-- Effort: TBD once syllabus reviewed (check 9am June 1)
-- Weekly commitment: minimum 1 dedicated session/week
-- Status: load as t11 with deadline attributes once effort is known
-
-### Why This Is a Game Changer
-The graph is the moat — but a graph without time is just topology. Adding deadline-driven prioritization makes the graph *alive*. It tells you not just what's blocked, but what's *burning*. This is the difference between a task manager and an executive assistant.
+### Live Test Case
+- Thread: eCornell Python for Data Science — deadline June 26, 2026
+- effortEstimate: 4, weeklyCommitment: 1, effortLogged: 0
+- Current state: at-risk (1 session behind), pressure score elevated
 
 ## Data Model — Persona (the moat)
 OAD.DB.persona contains:
@@ -126,13 +135,22 @@ OAD.pressure(thread) returns 0-100:
 - Requires server context for CORS — run via python3 -m http.server 8080
 
 ## Render Layer (render.js)
-- OAD.renderList() — thread list with persona bar, pressure scores, sorted by pressure desc
-- OAD.renderDetail(id) — full thread detail: next action first, AI insight, closing condition, assumption, contingency, connections, evolution log
+- OAD.renderList() — thread list with persona bar, pressure scores, sorted by pressure desc; deadline countdown rows; at-risk elevation
+- OAD.renderDetail(id) — full thread detail: next action, deadline card, AI insight, closing condition, assumption, contingency, connections, evolution log
+- OAD.renderCadencePanel() — cadence view with overdue banners and mark-done actions
 - Zero API calls in this layer
 
-## Test Data (tests/tests.data.js)
-Pre-loaded threads for TJ Randall:
-1. VR&E equipment (waiting, high)
+## Remaining Architecture Queue
+1. ✅ Supabase project + schema + RLS
+2. ✅ Replace saveDB/loadDB with Supabase client calls
+3. ✅ Auth UI (sign in, sign up, sign out, session restore)
+4. Realtime cross-device sync — subscribe to user_data table changes, re-render on update
+5. Capacitor mobile packaging — wrap for iOS App Store + Google Play
+
+localStorage is a temporary bridge only — do not build new features on top of it.
+
+## Next Priority — Habit Check-in Panel
+Build the habit check-in panel as a dedicated view (not in the thread list). One-tap yes/no per habit, current streak visible, optional one-line reflection. No pressure scores, no overdue states, no automation. Data model and seed habits are fully specified below.
 
 ## Data Model — Habit
 Habits are living practices that never close. Not tasks. Not threads.
@@ -211,30 +229,6 @@ UI behavior:
 - System randomly surfaces one idea per week in the main view as idea of the week
 - No due dates, no pressure scores, no overdue states
 - An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
-
-## TOP PRIORITY — Supabase Migration (ACTIVE)
-Stack decision is final. Do not re-propose alternatives. Do not re-estimate in weeks.
-localStorage is a dead end. Without persistent cross-session data this app is unusable.
-All feature work is blocked until Phase 2 is complete.
-
-**Stack:** Supabase (PostgreSQL + JSONB blobs + RLS + Realtime) + Capacitor for mobile packaging.
-
-**Implementation order — execute one phase per session when instructed:**
-1. ✅ Architecture decided
-2. Supabase project + schema + RLS policies  ← NEXT
-3. Replace saveDB/loadDB with Supabase client calls
-4. Auth UI (sign in, sign up, sign out, session restore)
-5. Realtime cross-device sync
-6. Capacitor mobile packaging
-
-**Rules:**
-- localStorage is a temporary bridge only — do not build new features on top of it
-- Each phase is a focused Claude Code sprint
-- JSONB blobs per table (threads, persona, habits, cadences, ideas); normalize after schema stabilizes
-- RLS enforces per-user isolation at the DB layer — no application-layer access control code
-
-## Deprioritized — Habit Check-in Panel
-BLOCKED until Supabase migration is complete. Data model is fully specced — build when instructed.
 
 ## Data Model — Cadence
 Cadences are date-anchored mandatory obligations that recur on a known schedule. Not Threads (no closing condition). Not Habits (not a practice — a hard obligation with real consequences if missed). Not Ideas. The date IS the work. Missing a Cadence is not a pressure score event — it's a failure state.
