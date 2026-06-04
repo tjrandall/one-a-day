@@ -212,6 +212,24 @@ UI behavior:
 - No due dates, no pressure scores, no overdue states
 - An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
 
+## Next Architecture Priority — Supabase Migration
+Stack decision is final. Do not re-propose alternatives. Do not re-estimate in weeks.
+
+**Stack:** Supabase (PostgreSQL + JSONB blobs + RLS + Realtime) + Capacitor for mobile packaging.
+
+**Implementation order — execute one phase per session when instructed:**
+1. Supabase project + schema + RLS policies
+2. Replace saveDB/loadDB with Supabase client calls
+3. Auth UI (sign in, sign up, sign out, session restore)
+4. Realtime cross-device sync
+5. Capacitor mobile packaging
+
+**Rules:**
+- localStorage is a temporary bridge only — do not build new features on top of it
+- Each phase is a focused Claude Code sprint
+- JSONB blobs per table (threads, persona, habits, cadences, ideas); normalize after schema stabilizes
+- RLS enforces per-user isolation at the DB layer — no application-layer access control code
+
 ## Next Priority — Habit Check-in Panel
 Build the habit check-in panel as a dedicated view (not in the thread list). One-tap yes/no per habit, current streak visible, optional one-line reflection. No pressure scores, no overdue states, no automation. Data model and seed habits are already fully specified below.
 
