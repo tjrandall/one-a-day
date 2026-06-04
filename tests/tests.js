@@ -531,25 +531,7 @@ OAD._initApp = async function () {
     const { data: { session } } = await OAD.supabase.auth.getSession();
     if (session) {
       OAD._userId = session.user.id;
-      const cloudLoaded = await OAD._loadFromCloud();
-      if (!cloudLoaded) {
-        // First sign-in: try to migrate localStorage data, then seed if empty
-        const localResult = OAD.loadDB();
-        if (localResult === null) {
-          alert(
-            'One-A-Day found corrupt local data. It has not been overwritten.\n' +
-            'Run localStorage.removeItem("oad_db") in the console, then reload.'
-          );
-          return;
-        }
-        if (!localResult) {
-          OAD._seedData();
-          await OAD.importCourseData();
-        }
-        // Push whatever we have (migrated or seeded) up to Supabase
-        await OAD._saveToCloud();
-      }
-      OAD._finishBoot();
+      await OAD._bootAfterAuth();
       return;
     }
     // No session — show sign-in modal, boot continues after successful auth
@@ -574,7 +556,29 @@ OAD._initApp = async function () {
   OAD._finishBoot();
 };
 
-// Called after successful auth (sign-in, sign-up, or restored session).
+// Called after successful auth to load cloud data (or seed if none), then render.
+OAD._bootAfterAuth = async function () {
+  const cloudLoaded = await OAD._loadFromCloud();
+  if (!cloudLoaded) {
+    // New user or cloud empty: try migrating localStorage, otherwise seed fresh.
+    const localResult = OAD.loadDB();
+    if (localResult === null) {
+      alert(
+        'One-A-Day found corrupt local data. It has not been overwritten.\n' +
+        'Run localStorage.removeItem("oad_db") in the console, then reload.'
+      );
+      return;
+    }
+    if (!localResult) {
+      OAD._seedData();
+      await OAD.importCourseData();
+    }
+    await OAD._saveToCloud();
+  }
+  OAD._finishBoot();
+};
+
+// Called once data is loaded and ready — renders the list and selects the first thread.
 OAD._finishBoot = function () {
   OAD.renderList();
   const first = OAD.DB.threads[0];

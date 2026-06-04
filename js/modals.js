@@ -664,7 +664,7 @@ OAD._signIn = async function () {
   }
   OAD._userId = data.user.id;
   OAD.closeModal();
-  OAD._finishBoot();
+  await OAD._bootAfterAuth();
 };
 
 OAD._signUp = async function () {
@@ -681,9 +681,25 @@ OAD._signUp = async function () {
     if (btn) { btn.disabled = false; btn.textContent = 'Create Account'; }
     return;
   }
+  // If Supabase requires email confirmation, data.session is null.
+  // Tell the user to confirm, then sign in.
+  if (!data.session) {
+    OAD.openModal(`
+      <h2>Check Your Email</h2>
+      <p style="color:var(--text-muted);font-size:14px;line-height:1.5">
+        A confirmation link has been sent to <strong>${OAD.esc(email)}</strong>.<br><br>
+        Click the link in that email, then come back and <strong>Sign In</strong> with your credentials.<br><br>
+        To skip this step in future: Supabase dashboard → Authentication → Providers →
+        disable <em>Confirm email</em>.
+      </p>
+      <div class="modal-footer">
+        <button class="success" style="width:100%" onclick="OAD.openSignInModal()">Go to Sign In</button>
+      </div>`);
+    return;
+  }
   OAD._userId = data.user.id;
   OAD.closeModal();
-  OAD._finishBoot();
+  await OAD._bootAfterAuth();
 };
 
 OAD.openSignOutModal = function () {
