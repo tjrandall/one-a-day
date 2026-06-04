@@ -212,17 +212,20 @@ UI behavior:
 - No due dates, no pressure scores, no overdue states
 - An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
 
-## Next Architecture Priority — Supabase Migration
+## TOP PRIORITY — Supabase Migration (ACTIVE)
 Stack decision is final. Do not re-propose alternatives. Do not re-estimate in weeks.
+localStorage is a dead end. Without persistent cross-session data this app is unusable.
+All feature work is blocked until Phase 2 is complete.
 
 **Stack:** Supabase (PostgreSQL + JSONB blobs + RLS + Realtime) + Capacitor for mobile packaging.
 
 **Implementation order — execute one phase per session when instructed:**
-1. Supabase project + schema + RLS policies
-2. Replace saveDB/loadDB with Supabase client calls
-3. Auth UI (sign in, sign up, sign out, session restore)
-4. Realtime cross-device sync
-5. Capacitor mobile packaging
+1. ✅ Architecture decided
+2. Supabase project + schema + RLS policies  ← NEXT
+3. Replace saveDB/loadDB with Supabase client calls
+4. Auth UI (sign in, sign up, sign out, session restore)
+5. Realtime cross-device sync
+6. Capacitor mobile packaging
 
 **Rules:**
 - localStorage is a temporary bridge only — do not build new features on top of it
@@ -230,8 +233,8 @@ Stack decision is final. Do not re-propose alternatives. Do not re-estimate in w
 - JSONB blobs per table (threads, persona, habits, cadences, ideas); normalize after schema stabilizes
 - RLS enforces per-user isolation at the DB layer — no application-layer access control code
 
-## Next Priority — Habit Check-in Panel
-Build the habit check-in panel as a dedicated view (not in the thread list). One-tap yes/no per habit, current streak visible, optional one-line reflection. No pressure scores, no overdue states, no automation. Data model and seed habits are already fully specified below.
+## Deprioritized — Habit Check-in Panel
+BLOCKED until Supabase migration is complete. Data model is fully specced — build when instructed.
 
 ## Data Model — Cadence
 Cadences are date-anchored mandatory obligations that recur on a known schedule. Not Threads (no closing condition). Not Habits (not a practice — a hard obligation with real consequences if missed). Not Ideas. The date IS the work. Missing a Cadence is not a pressure score event — it's a failure state.
