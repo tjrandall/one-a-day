@@ -1,5 +1,10 @@
 # One-A-Day — Build Spec for Claude Code
 
+## Keeping This Document Current
+At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
+
+---
+
 ## Long-Term Target: Published Mobile App
 The end goal is a published app on the iOS App Store and Google Play Store. Every architecture decision must be made with this in mind — not just what works on localhost today.
 
@@ -16,6 +21,8 @@ The end goal is a published app on the iOS App Store and Google Play Store. Ever
 - Don't architect around localStorage as a permanent solution — it's a scaffold, not the foundation
 - Flag any decision that would be painful to undo once real users and real data exist
 
+---
+
 ## File Structure
 one-a-day/
 ├── index.html              # Shell only — loads all layers in order
@@ -24,14 +31,14 @@ one-a-day/
 │   └── app.css             # All styles and design tokens
 ├── js/
 │   ├── supabase-client.js  # Supabase client init (URL + publishable key)
-│   ├── data.js             # DB, persona, constants, data access + cloud save/load
+│   ├── data.js             # DB, persona, constants, data access, cloud save/load, export/import
 │   ├── engine.js           # Pure functions: pressure(), deadlineState(), suggestArea(), esc()
 │   ├── api.js              # Anthropic API calls: genInsight(), draftEmail()
-│   ├── render.js           # All DOM rendering: renderList(), renderDetail()
+│   ├── render.js           # All DOM rendering
 │   └── modals.js           # All modal functions, form handling, auth modals
 ├── tests/
-│   ├── tests.js            # Full test suite + OAD.boot() + _initApp + _bootAfterAuth
-│   └── tests.data.js       # Seed data loaded on boot
+│   ├── tests.js            # Full test suite (69 tests) + boot functions
+│   └── tests.data.js       # Seed data: threads, cadences, habits, ideas
 └── README.md
 
 ## Script Load Order in index.html
@@ -42,6 +49,8 @@ Tests run before any UI renders. OAD.boot() in tests.js runs the full test suite
 
 ## Global Namespace
 All code lives on window.OAD = {}. No modules, no bundler — plain vanilla JS that runs in a browser via python3 -m http.server 8080.
+
+---
 
 ## Persistence Architecture — Supabase (LIVE)
 - Backend: Supabase (PostgreSQL + JSONB + RLS). Project: hypddwbncupihqfhwiwb.supabase.co
@@ -57,15 +66,29 @@ All code lives on window.OAD = {}. No modules, no bundler — plain vanilla JS t
 - `OAD._loadFromCloud()` — async, called on boot/sign-in; returns true if data found
 - `OAD._bootAfterAuth()` — called after sign-in/sign-up; loads cloud, migrates localStorage, seeds if empty
 - `OAD._finishBoot()` — renders list and selects first thread
+- `OAD._normalizeDB()` — ensures all arrays exist and backfills UUIDs on threads that predate the field
+
+---
+
+## Remaining Architecture Queue
+1. ✅ Supabase project + schema + RLS
+2. ✅ Replace saveDB/loadDB with Supabase client calls
+3. ✅ Auth UI (sign in, sign up, sign out, session restore)
+4. **Realtime cross-device sync** — subscribe to user_data table changes, re-render on update
+5. **Capacitor mobile packaging** — wrap for iOS App Store + Google Play
+
+localStorage is a temporary bridge only — do not build new features on top of it.
+
+---
 
 ## Data Model — Thread
 Every thread has:
-- id, title, life_area, status (open|waiting|stalled|closed), priority (critical|high|medium|low)
+- **uuid** — stable UUID assigned at creation (`crypto.randomUUID()`). Used for export/import matching. Never changes. Backfilled by `_normalizeDB()` for threads that predate this field.
+- id — sequential integer, internal use only
+- title, life_area, status (open|waiting|stalled|closed), priority (critical|high|medium|low)
 - closing_condition (string) — what verified OUTCOME closes this, not what action
-- closing_condition_type (outcome|action)
-- closing_condition_met (boolean)
-- current_assumption (string) — what we are assuming right now
-- assumption_verified (boolean) — has this been confirmed as fact?
+- closing_condition_type (outcome|action), closing_condition_met (boolean)
+- current_assumption (string), assumption_verified (boolean)
 - next_action, next_action_date, next_action_channel, next_action_contact
 - contingency_trigger_date, contingency_action, contingency_escalation
 - deadline (ISO date, optional), effortEstimate, weeklyCommitment, effortLogged
@@ -105,7 +128,7 @@ Work backwards from the deadline, not forward from today. If something is due 6/
 ### Live Test Case
 - Thread: eCornell Python for Data Science — deadline June 26, 2026
 - effortEstimate: 4, weeklyCommitment: 1, effortLogged: 0
-- Current state: at-risk (1 session behind), pressure score elevated
+- Current state: at-risk (1 session behind)
 
 ## Data Model — Persona (the moat)
 OAD.DB.persona contains:
@@ -135,24 +158,37 @@ OAD.pressure(thread) returns 0-100:
 - Requires server context for CORS — run via python3 -m http.server 8080
 
 ## Render Layer (render.js)
-- OAD.renderList() — thread list with persona bar, pressure scores, sorted by pressure desc; deadline countdown rows; at-risk elevation
-- OAD.renderDetail(id) — full thread detail: next action, deadline card, AI insight, closing condition, assumption, contingency, connections, evolution log
-- OAD.renderCadencePanel() — cadence view with overdue banners and mark-done actions
+- `OAD.renderList()` — thread list with persona bar, pressure scores, sorted by pressure desc; deadline countdown rows; at-risk elevation
+- `OAD.renderDetail(id)` — full thread detail: next action, deadline card, AI insight, closing condition, assumption, contingency, connections, evolution log
+- `OAD.renderCadencePanel()` — cadence view with overdue banners and mark-done actions
+- `OAD.renderHabitPanel()` — daily habit check-in panel; yes/no per habit, streak, reflection note, Change button
+- `OAD.renderIdeaPanel()` — idea incubation list; idea-of-the-week callout, grouped by type, promote-to-thread flow
 - Zero API calls in this layer
 
-## Remaining Architecture Queue
-1. ✅ Supabase project + schema + RLS
-2. ✅ Replace saveDB/loadDB with Supabase client calls
-3. ✅ Auth UI (sign in, sign up, sign out, session restore)
-4. Realtime cross-device sync — subscribe to user_data table changes, re-render on update
-5. Capacitor mobile packaging — wrap for iOS App Store + Google Play
+---
 
-localStorage is a temporary bridge only — do not build new features on top of it.
+## Export / Import (LIVE)
+Located in `js/data.js` and `js/modals.js`. Accessible from the Settings modal.
 
-## Next Priority — Habit Check-in Panel
-Build the habit check-in panel as a dedicated view (not in the thread list). One-tap yes/no per habit, current streak visible, optional one-line reflection. No pressure scores, no overdue states, no automation. Data model and seed habits are fully specified below.
+### Export (`OAD.exportThreads()`)
+Moat-safe flat JSON. Includes per thread: uuid, title, status, priority, life_area, pressure score, closing_condition, next_action, next_action_date, full evolution_log. Calls `_normalizeDB()` + `saveDB()` before building the payload so UUID backfill is always complete.
 
-## Data Model — Habit
+**Deliberately excludes:** connections[] (the graph is the moat), current_assumption, assumption_verified, ai_insights[], persona data.
+
+Includes `exported_by: user_id` — ownership-stamped for future multi-user scoping.
+
+### Import (`OAD.parseImportFile()` + `OAD.applyImport()`)
+Accepts the same JSON format. Matching is by **UUID only** — title is never used for matching and title uniqueness is never assumed.
+
+- Row with UUID matching an existing thread → staged as update (shows field-by-field diff, requires per-item checkbox confirmation)
+- Row with unknown or absent UUID → create
+- Evolution log is always appended, never overwritten; deduped by date+note
+
+`applyImport()` re-looks up each thread by UUID at apply time, not from stored references, to avoid stale-reference bugs.
+
+---
+
+## Data Model — Habit (LIVE)
 Habits are living practices that never close. Not tasks. Not threads.
 The check-in question is not "did I do it" but "how is this going in my life right now."
 
@@ -161,41 +197,26 @@ Every habit has:
 - frequency — daily | weekly | every-other-day | custom
 - time_of_day — morning | evening | flexible
 - current_streak, longest_streak
-- last_checked_in (date), last_check_in_note (string)
+- last_checked_in (date), last_check_in_done (boolean), last_check_in_note (string)
 - phase — active | check-in | dormant
 - why — the anchor: why does this practice matter
 
-Seed habits (TJ's Plan of Life):
-- Daily Rosary — daily, morning, personal
-- Reading and Prayer 20min — daily, 6:30am, personal
-- Evening Examen — daily, 8pm, personal
-- Attend Mass — weekly Thursday, personal
-- Morning Offering — daily, morning, personal
-- Prayer to St. Joseph — daily, 7:30am, personal
-- Morning Prayers routine — daily, morning, personal
-- Ave Maris Stella — daily, morning, personal
-- Litany of Humility — every-other-day, morning, personal
-- Prayer before work — every workday, morning, personal
-- Consecration to Sacred Heart — weekly Sunday, personal
+11 seed habits from TJ's Plan of Life (morning prayers through Evening Examen).
 
 UI behavior:
-- Habits do NOT appear in the thread list
-- Habits have their own view — a simple daily check-in panel
-- Check-in is a single tap yes/no plus optional one-line reflection
+- Habits have their own panel — click "Habits" in the header nav
+- Check-in is yes/no + optional one-line reflection, inline on the card
+- Streak increments on consecutive daily yes check-ins; resets on no
 - Streak is visible but not weaponized — missing a day is noted, not catastrophized
-- Missing 3+ days triggers a gentle counsel engine observation, not a pressure score
+- Missing 3+ days shown as "Last checked in N days ago" on the card
 
-Counsel engine cross-data-type behavior:
+Counsel engine cross-data-type behavior (future):
 - Notices when habit check-ins are sparse during high-pressure thread weeks
-- Example insight: "Your rosary check-ins have been sparse this week. Your three
-  highest-pressure threads are all in job_search and finances. This may be worth noticing."
-- This is a core product differentiator. No other app can do this because no other app
-  holds both the life graph and the spiritual practice in the same system with a reasoning
-  engine across both.
+- This is a core product differentiator — no other app holds both the life graph and spiritual practice with a reasoning engine across both
 
-## Data Model — Idea
+## Data Model — Idea (LIVE)
 Ideas and deferred reading that are not ready to schedule and have no closing condition.
-Not threads. Not habits. Intentions sitting in a holding area waiting for the right moment.
+A holding area for what matters but isn't ready.
 
 Every idea has:
 - id, title, notes, source, added_date, last_surfaced
@@ -203,54 +224,29 @@ Every idea has:
 - energy_required — low | medium | high
 - tags[]
 
-Seed ideas (TJ's real Todoist data):
-
-Creative incubation:
-- NaNoWriMo: Book idea — Enemy (creative)
-- Hailstone Sequence (Collatz conjecture) — trackback to Adam and Eve (creative)
-- Zen of Tommy notes (creative)
-- T-shirt: G-Man / Dirty Dozen — apostles as movie poster headshots (creative)
-
-Read Later:
-- The New Economics for Industry Government Education — W. Edwards Deming (book)
-- Five Dysfunctions of a Team — Patrick Lencioni (book)
-- Heroic Leadership — Chris Lowney (book)
-- Safety at the Sharp End — Rhona Flin (book)
-- Managing the Unexpected — Weick (book)
-- The Human Contribution — James Reason (book)
-- Sources of Power — Gary Klein (book)
-- Judith Herman — Trauma and Recovery (book)
-- Bessel Van Der Kolk — trauma theory (book)
-- The Heart of Change — John Kotter (book)
+14 seed ideas: 4 creative + 10 books from TJ's real Todoist data.
 
 UI behavior:
-- Ideas do NOT appear in the thread list
-- Ideas have their own view — a simple scrollable incubation list
-- System randomly surfaces one idea per week in the main view as idea of the week
+- Ideas have their own panel — click "Ideas" in the header nav
+- `OAD.ideaOfTheWeek()` — deterministic weekly rotation; same idea all week, cycles list
+- Grouped by type: Creative, Books, Other
 - No due dates, no pressure scores, no overdue states
-- An idea becomes a thread only when you consciously decide to act on it — this is a deliberate friction point. The system never automatically promotes an idea to a thread.
+- "→ Promote to Thread" opens the full thread form pre-filled with the title — deliberate friction; the user must define closing condition, next action, etc. Idea stays in the incubation list.
+- "Remove" deletes from incubation list with confirmation
 
-## Data Model — Cadence
-Cadences are date-anchored mandatory obligations that recur on a known schedule. Not Threads (no closing condition). Not Habits (not a practice — a hard obligation with real consequences if missed). Not Ideas. The date IS the work. Missing a Cadence is not a pressure score event — it's a failure state.
+## Data Model — Cadence (LIVE)
+Cadences are date-anchored mandatory obligations that recur on a known schedule. The date IS the work. Missing a Cadence is a failure state.
 
 Every cadence has:
 - id, title, life_area
 - recurrence — monthly-1st | monthly-15th | monthly-last | weekly | custom
-- trigger_dates[] — computed list of upcoming due dates
-- last_completed (date)
-- next_due (date) — derived from recurrence + last_completed
-- overdue (boolean) — derived: next_due < today and not completed
-- notes — what specifically needs to happen on this date
-- consequences — what breaks if this is missed (plain language)
+- last_completed (date), next_due (date), overdue (boolean)
+- notes, consequences
 
-Seed cadences:
-- Pay the Bills (1st) — recurrence: monthly-1st | consequences: late fees, service disruption
-- Pay the Bills (15th) — recurrence: monthly-15th | consequences: late fees, service disruption
+2 seed cadences: Pay the Bills (1st) and Pay the Bills (15th).
 
 UI behavior:
-- Cadences do NOT appear in the thread list
-- Cadences surface in a dedicated panel — a simple calendar-style view of upcoming trigger dates
-- Overdue cadences surface as a hard banner — not subtle, not a badge
-- Completed cadences for the current period show a checkmark; they reset automatically on next trigger date
-- No pressure score — Cadences are binary: done or not done
-- Counsel engine awareness: if a Cadence is overdue and the user is interacting with low-priority threads, surface an interruption: "Pay the Bills (1st) is overdue. Everything else can wait."
+- Cadences panel — click "Cadences" in the header nav
+- Overdue cadences surface as a hard banner in the detail panel
+- Completed cadences show ✓; reset automatically on next trigger date
+- No pressure score — binary: done or not done
