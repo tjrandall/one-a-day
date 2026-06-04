@@ -522,24 +522,60 @@ OAD._dismissTests = function () {
   OAD._initApp();
 };
 
-OAD._initApp = function () {
+OAD._initApp = async function () {
   OAD._DB_PERSIST = true;
   OAD.loadApiKey();
+
+  // ── Supabase path ────────────────────────────────────────────────────
+  if (OAD.supabase) {
+    const { data: { session } } = await OAD.supabase.auth.getSession();
+    if (session) {
+      OAD._userId = session.user.id;
+      const cloudLoaded = await OAD._loadFromCloud();
+      if (!cloudLoaded) {
+        // First sign-in: try to migrate localStorage data, then seed if empty
+        const localResult = OAD.loadDB();
+        if (localResult === null) {
+          alert(
+            'One-A-Day found corrupt local data. It has not been overwritten.\n' +
+            'Run localStorage.removeItem("oad_db") in the console, then reload.'
+          );
+          return;
+        }
+        if (!localResult) {
+          OAD._seedData();
+          await OAD.importCourseData();
+        }
+        // Push whatever we have (migrated or seeded) up to Supabase
+        await OAD._saveToCloud();
+      }
+      OAD._finishBoot();
+      return;
+    }
+    // No session — show sign-in modal, boot continues after successful auth
+    OAD.openSignInModal();
+    return;
+  }
+
+  // ── localStorage fallback (no Supabase configured) ───────────────────
   const loadResult = OAD.loadDB();
   if (loadResult === null) {
-    // Corrupt data in storage — do NOT overwrite, halt and surface the problem.
     alert(
       'One-A-Day could not load your saved data — it appears to be corrupt.\n\n' +
       'Your data has NOT been overwritten. To recover, open the browser console and ' +
-      'run: localStorage.removeItem("oad_db")\n\n' +
-      'Then reload the page to start fresh.'
+      'run: localStorage.removeItem("oad_db")\n\nThen reload the page to start fresh.'
     );
     return;
   }
   if (!loadResult) {
     OAD._seedData();
-    OAD.importCourseData(); // async — fetches 58 threads, calls renderList() on completion
+    OAD.importCourseData();
   }
+  OAD._finishBoot();
+};
+
+// Called after successful auth (sign-in, sign-up, or restored session).
+OAD._finishBoot = function () {
   OAD.renderList();
   const first = OAD.DB.threads[0];
   if (first) OAD.selectThread(first.id);

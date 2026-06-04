@@ -341,6 +341,14 @@ OAD._savePersona = function () {
 
 OAD.openSettingsModal = function () {
   OAD.loadApiKey();
+  const userEmail = OAD.supabase
+    ? (OAD.supabase.auth.getSession().then ? '' : '')
+    : '';
+  const signOutBtn = OAD._userId
+    ? `<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
+         <button class="ghost" style="width:100%;color:var(--text-muted)" onclick="OAD.closeModal();OAD.openSignOutModal()">Sign Out</button>
+       </div>`
+    : '';
   OAD.openModal(`
     <h2>Settings</h2>
     <div class="field">
@@ -348,6 +356,7 @@ OAD.openSettingsModal = function () {
       <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
     </div>
     <p class="text-muted text-sm">Key is stored in localStorage — never sent anywhere except Anthropic's API.</p>
+    ${signOutBtn}
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveSettings()">Save</button>
@@ -609,4 +618,89 @@ OAD._cawSaveClose = function () {
   OAD.closeModal();
   OAD.renderList();
   OAD.renderDetail(caw.id);
+};
+
+// ── Auth modal ────────────────────────────────────────────────────────
+
+OAD.openSignInModal = function (opts) {
+  opts = opts || {};
+  const msg = opts.message ? `<div class="auth-message">${OAD.esc(opts.message)}</div>` : '';
+  OAD.openModal(`
+    <h2>Sign In to One-A-Day</h2>
+    ${msg}
+    <div class="field">
+      <label>Email</label>
+      <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
+    </div>
+    <div class="field">
+      <label>Password</label>
+      <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password">
+    </div>
+    <div id="auth-error" style="color:var(--critical);font-size:13px;min-height:18px"></div>
+    <div class="modal-footer" style="flex-direction:column;gap:8px">
+      <button class="success" style="width:100%" onclick="OAD._signIn()">Sign In</button>
+      <button class="secondary" style="width:100%" onclick="OAD._signUp()">Create Account</button>
+    </div>`);
+  setTimeout(() => document.getElementById('auth-email')?.focus(), 50);
+};
+
+OAD._authError = function (msg) {
+  const el = document.getElementById('auth-error');
+  if (el) el.textContent = msg;
+};
+
+OAD._signIn = async function () {
+  const email    = document.getElementById('auth-email')?.value.trim();
+  const password = document.getElementById('auth-password')?.value;
+  if (!email || !password) { OAD._authError('Email and password are required.'); return; }
+  OAD._authError('');
+  const btn = document.querySelector('.modal .success');
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+  const { data, error } = await OAD.supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    OAD._authError(error.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Sign In'; }
+    return;
+  }
+  OAD._userId = data.user.id;
+  OAD.closeModal();
+  OAD._finishBoot();
+};
+
+OAD._signUp = async function () {
+  const email    = document.getElementById('auth-email')?.value.trim();
+  const password = document.getElementById('auth-password')?.value;
+  if (!email || !password) { OAD._authError('Email and password are required.'); return; }
+  if (password.length < 6) { OAD._authError('Password must be at least 6 characters.'); return; }
+  OAD._authError('');
+  const btn = document.querySelector('.modal .secondary');
+  if (btn) { btn.disabled = true; btn.textContent = 'Creating…'; }
+  const { data, error } = await OAD.supabase.auth.signUp({ email, password });
+  if (error) {
+    OAD._authError(error.message);
+    if (btn) { btn.disabled = false; btn.textContent = 'Create Account'; }
+    return;
+  }
+  OAD._userId = data.user.id;
+  OAD.closeModal();
+  OAD._finishBoot();
+};
+
+OAD.openSignOutModal = function () {
+  OAD.openModal(`
+    <h2>Sign Out</h2>
+    <p style="color:var(--text-muted);font-size:14px">Your data is saved to Supabase. You can sign back in on any device.</p>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._signOut()">Sign Out</button>
+    </div>`);
+};
+
+OAD._signOut = async function () {
+  await OAD.supabase.auth.signOut();
+  OAD._userId = null;
+  OAD._DB_PERSIST = false;
+  OAD.DB = { threads: [], cadences: [], persona: JSON.parse(JSON.stringify(OAD.DB.persona)) };
+  OAD.closeModal();
+  OAD.openSignInModal({ message: 'You have been signed out.' });
 };

@@ -177,6 +177,9 @@ OAD.bulkImport = function (arr) {
 
 OAD._DB_KEY     = 'oad_db';
 OAD._DB_PERSIST = false; // set true by _initApp after tests pass; keeps test suite writes out of localStorage
+OAD._userId     = null;  // set on successful Supabase sign-in
+
+// ── localStorage (sync, used by tests and as local cache) ──────────────
 
 OAD.saveDB = function () {
   if (!OAD._DB_PERSIST) return;
@@ -185,6 +188,8 @@ OAD.saveDB = function () {
   } catch (e) {
     console.warn('[OAD] saveDB failed:', e);
   }
+  // Also push to Supabase when authenticated (fire and forget)
+  if (OAD.supabase && OAD._userId) OAD._saveToCloud();
 };
 
 OAD.loadDB = function () {
@@ -203,6 +208,43 @@ OAD.loadDB = function () {
 
 OAD.clearDB = function () {
   localStorage.removeItem(OAD._DB_KEY);
+};
+
+// ── Supabase cloud persistence ──────────────────────────────────────────
+
+OAD._saveToCloud = async function () {
+  try {
+    var { error } = await OAD.supabase
+      .from('user_data')
+      .upsert({ user_id: OAD._userId, db: OAD.DB });
+    if (error) console.warn('[OAD] cloud save failed:', error.message);
+  } catch (e) {
+    console.warn('[OAD] cloud save error:', e);
+  }
+};
+
+OAD._loadFromCloud = async function () {
+  try {
+    var { data, error } = await OAD.supabase
+      .from('user_data')
+      .select('db')
+      .eq('user_id', OAD._userId)
+      .single();
+    if (error && error.code !== 'PGRST116') { // PGRST116 = row not found
+      console.warn('[OAD] cloud load failed:', error.message);
+      return false;
+    }
+    if (data && data.db && Array.isArray(data.db.threads)) {
+      OAD.DB = data.db;
+      // Keep localStorage in sync as local cache
+      OAD.saveDB();
+      return true;
+    }
+    return false; // no cloud data yet
+  } catch (e) {
+    console.warn('[OAD] cloud load error:', e);
+    return false;
+  }
 };
 
 // Fetches both course seed files and loads them. Call from console: OAD.importCourseData()
