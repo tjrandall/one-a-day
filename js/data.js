@@ -367,6 +367,11 @@ OAD.applyImport = function (results, confirmedUpdates) {
 };
 
 OAD.exportThreads = function () {
+  // Ensure UUIDs are assigned before building the export — backfills any threads
+  // that predate this field, then persists so they remain stable across sessions.
+  OAD._normalizeDB();
+  OAD.saveDB();
+
   const threads = (OAD.DB.threads || []).map(function (t) {
     return {
       uuid:              t.uuid,
