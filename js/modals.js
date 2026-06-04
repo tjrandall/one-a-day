@@ -170,6 +170,33 @@ OAD._readThreadForm = function (base) {
   });
 };
 
+OAD.openPromoteIdeaModal = function (id) {
+  const idea = OAD.getIdea(id);
+  if (!idea) return;
+  const starter = OAD.makeThread({ title: idea.title });
+  OAD.openModal(`
+    <h2>Promote Idea to Thread</h2>
+    <div class="promote-notice">
+      You are turning an incubated idea into a committed thread. This means defining a closing condition,
+      a next action, and taking ownership of it. The idea will remain in your incubation list.
+    </div>
+    ${OAD._threadForm(starter)}
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel — keep incubating</button>
+      <button onclick="OAD._savePromotedThread()">Create Thread</button>
+    </div>`);
+};
+
+OAD._savePromotedThread = function () {
+  const data = OAD._readThreadForm(OAD.makeThread());
+  if (!data) return;
+  const thread = OAD.addThread(data);
+  OAD.addEvolution(thread.id, 'Thread promoted from idea incubation.');
+  OAD.closeModal();
+  OAD.renderList();
+  OAD.selectThread(thread.id);
+};
+
 OAD.openNewThreadModal = function () {
   const blank = OAD.makeThread();
   OAD.openModal(`

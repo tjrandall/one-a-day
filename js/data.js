@@ -4,6 +4,7 @@ OAD.DB = {
   threads: [],
   cadences: [],
   habits: [],
+  ideas: [],
 
   persona: {
     assumption_tendencies: [],
@@ -254,11 +255,68 @@ OAD.checkInHabit = function (id, done, note) {
   return h;
 };
 
+// ── Idea data model ───────────────────────────────────────────────────
+
+OAD.makeIdea = function (overrides) {
+  return Object.assign({
+    id:             null,
+    title:          '',
+    notes:          '',
+    source:         '',
+    added_date:     new Date().toISOString().slice(0, 10),
+    last_surfaced:  null,
+    type:           'other',   // book | article | creative | project-seed | other
+    energy_required: 'medium', // low | medium | high
+    tags:           []
+  }, overrides);
+};
+
+OAD.nextIdeaId = function () {
+  const ids = OAD.DB.ideas.map(function (i) { return i.id; });
+  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+};
+
+OAD.addIdea = function (idea) {
+  idea.id = OAD.nextIdeaId();
+  OAD.DB.ideas.push(idea);
+  OAD.saveDB();
+  return idea;
+};
+
+OAD.getIdea = function (id) {
+  return OAD.DB.ideas.find(function (i) { return i.id === id; }) || null;
+};
+
+OAD.updateIdea = function (id, patch) {
+  const idea = OAD.getIdea(id);
+  if (!idea) return null;
+  Object.assign(idea, patch);
+  OAD.saveDB();
+  return idea;
+};
+
+OAD.deleteIdea = function (id) {
+  const idx = OAD.DB.ideas.findIndex(function (i) { return i.id === id; });
+  if (idx === -1) return false;
+  OAD.DB.ideas.splice(idx, 1);
+  OAD.saveDB();
+  return true;
+};
+
+// Returns the same idea all week, cycling through the list week-over-week.
+OAD.ideaOfTheWeek = function () {
+  const ideas = OAD.DB.ideas || [];
+  if (!ideas.length) return null;
+  const weekIndex = Math.floor(Date.now() / (7 * 86400000));
+  return ideas[weekIndex % ideas.length];
+};
+
 // Ensures all expected arrays exist after loading from storage (handles old data missing new fields).
 OAD._normalizeDB = function () {
   OAD.DB.threads  = OAD.DB.threads  || [];
   OAD.DB.cadences = OAD.DB.cadences || [];
   OAD.DB.habits   = OAD.DB.habits   || [];
+  OAD.DB.ideas    = OAD.DB.ideas    || [];
 };
 
 // ── Persistence ───────────────────────────────────────────────────────

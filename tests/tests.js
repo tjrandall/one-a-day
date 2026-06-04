@@ -110,6 +110,47 @@ OAD.test('pressure: contingency < 3 days adds 25', function () {
   OAD._assert(s >= 25, `Expected >= 25 for contingency < 3d, got ${s}`);
 });
 
+// ── Tests: Idea data model ────────────────────────────────────────────
+
+OAD.test('makeIdea: defaults are valid', function () {
+  const i = OAD.makeIdea({});
+  OAD._assertEqual(i.type,             'other',   'default type');
+  OAD._assertEqual(i.energy_required,  'medium',  'default energy');
+  OAD._assert(Array.isArray(i.tags),             'tags is array');
+  OAD._assert(i.added_date.length === 10,        'added_date is ISO date');
+  OAD._assertEqual(i.last_surfaced,    null,      'last_surfaced null');
+});
+
+OAD.test('addIdea: assigns id and appends to DB', function () {
+  const before = OAD.DB.ideas.length;
+  const idea = OAD.addIdea(OAD.makeIdea({ title: 'Test idea' }));
+  OAD._assert(idea.id > 0, 'id should be positive');
+  OAD._assertEqual(OAD.DB.ideas.length, before + 1, 'ideas count should increase');
+  OAD._assertEqual(OAD.getIdea(idea.id).title, 'Test idea', 'should retrieve by id');
+});
+
+OAD.test('deleteIdea: removes from DB', function () {
+  const idea = OAD.addIdea(OAD.makeIdea({ title: 'Delete me' }));
+  const before = OAD.DB.ideas.length;
+  OAD.deleteIdea(idea.id);
+  OAD._assertEqual(OAD.DB.ideas.length, before - 1, 'count should decrease');
+  OAD._assertEqual(OAD.getIdea(idea.id), null, 'should not be findable after delete');
+});
+
+OAD.test('ideaOfTheWeek: returns an idea when ideas exist', function () {
+  const idea = OAD.addIdea(OAD.makeIdea({ title: 'Week idea' }));
+  const result = OAD.ideaOfTheWeek();
+  OAD._assert(result !== null, 'should return an idea');
+  OAD._assert(OAD.DB.ideas.includes(result), 'returned idea should be in DB');
+});
+
+OAD.test('ideaOfTheWeek: returns null when no ideas', function () {
+  const saved = OAD.DB.ideas.slice();
+  OAD.DB.ideas = [];
+  OAD._assertEqual(OAD.ideaOfTheWeek(), null, 'null when no ideas');
+  OAD.DB.ideas = saved;
+});
+
 // ── Tests: Habit data model ───────────────────────────────────────────
 
 OAD.test('makeHabit: defaults are valid', function () {

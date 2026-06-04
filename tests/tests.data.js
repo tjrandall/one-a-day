@@ -4,6 +4,7 @@ OAD._seedData = function () {
   OAD.DB.threads  = [];
   OAD.DB.cadences = [];
   OAD.DB.habits   = [];
+  OAD.DB.ideas    = [];
 
   // t1 — VR&E Equipment (Amanda)
   OAD.addThread(OAD.makeThread({
@@ -400,5 +401,95 @@ OAD._seedData = function () {
     title: 'Consecration to Sacred Heart',
     frequency: 'weekly', time_of_day: 'morning', life_area: 'Personal Growth',
     why: 'Sunday renewal of consecration to the Sacred Heart of Jesus.'
+  }));
+
+  // ── Seed ideas — TJ's real Todoist data ───────────────────────────────
+
+  // Creative incubation
+  OAD.addIdea(OAD.makeIdea({
+    title: 'NaNoWriMo: Book idea — Enemy',
+    type: 'creative', energy_required: 'high',
+    notes: 'A novel. The enemy is the premise.',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Hailstone Sequence — trackback to Adam and Eve',
+    type: 'creative', energy_required: 'medium',
+    notes: 'The Collatz conjecture as metaphor for the human condition. Every sequence eventually returns.',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Zen of Tommy notes',
+    type: 'creative', energy_required: 'low',
+    notes: 'Personal observations, aphorisms, the slow accumulation of a worldview.',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'T-shirt: G-Man / Dirty Dozen — apostles as movie poster headshots',
+    type: 'creative', energy_required: 'medium',
+    notes: 'Twelve apostles in the style of a heist-film poster. Cast of characters.',
+    added_date: '2026-01-01'
+  }));
+
+  // Read later — books
+  OAD.addIdea(OAD.makeIdea({
+    title: 'The New Economics for Industry, Government, Education',
+    source: 'W. Edwards Deming',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Five Dysfunctions of a Team',
+    source: 'Patrick Lencioni',
+    type: 'book', energy_required: 'low',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Heroic Leadership',
+    source: 'Chris Lowney',
+    type: 'book', energy_required: 'medium',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Safety at the Sharp End',
+    source: 'Rhona Flin',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Managing the Unexpected',
+    source: 'Weick',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'The Human Contribution',
+    source: 'James Reason',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Sources of Power',
+    source: 'Gary Klein',
+    type: 'book', energy_required: 'medium',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'Trauma and Recovery',
+    source: 'Judith Herman',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'The Body Keeps the Score',
+    source: 'Bessel van der Kolk',
+    type: 'book', energy_required: 'high',
+    added_date: '2026-01-01'
+  }));
+  OAD.addIdea(OAD.makeIdea({
+    title: 'The Heart of Change',
+    source: 'John Kotter',
+    type: 'book', energy_required: 'medium',
+    added_date: '2026-01-01'
   }));
 };

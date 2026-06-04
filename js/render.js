@@ -356,6 +356,87 @@ OAD.renderCadencePanel = function () {
     '</div>';
 };
 
+// ── Idea panel ───────────────────────────────────────────────────────
+
+OAD.renderIdeaPanel = function () {
+  OAD._activeId = null;
+  OAD.renderList();
+
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  const ideas = OAD.DB.ideas || [];
+  if (!ideas.length) {
+    panel.innerHTML = '<div class="detail-empty">No ideas yet.</div>';
+    return;
+  }
+
+  const spotlight = OAD.ideaOfTheWeek();
+
+  function ideaCard(idea, highlighted) {
+    const typeBadge  = '<span class="idea-type-badge idea-type-' + OAD.esc(idea.type) + '">' + OAD.esc(idea.type) + '</span>';
+    const energyBadge = '<span class="idea-energy idea-energy-' + OAD.esc(idea.energy_required) + '">' + OAD.esc(idea.energy_required) + ' energy</span>';
+    const sourceHtml  = idea.source ? '<div class="idea-source">' + OAD.esc(idea.source) + '</div>' : '';
+    const notesHtml   = idea.notes  ? '<div class="idea-notes">'  + OAD.esc(idea.notes)  + '</div>' : '';
+    const cls = highlighted ? 'idea-card idea-card-spotlight' : 'idea-card';
+    return '<div class="' + cls + '">' +
+      '<div class="idea-card-header">' +
+        '<div class="idea-title">' + OAD.esc(idea.title) + '</div>' +
+        '<div class="idea-badges">' + typeBadge + energyBadge + '</div>' +
+      '</div>' +
+      sourceHtml +
+      notesHtml +
+      '<div class="idea-actions">' +
+        '<button class="idea-promote-btn" onclick="OAD.openPromoteIdeaModal(' + idea.id + ')">→ Promote to Thread</button>' +
+        '<button class="ghost" style="font-size:12px;padding:4px 10px" onclick="OAD._deleteIdeaConfirm(' + idea.id + ')">Remove</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // Group remaining ideas by type (exclude spotlight from groups to avoid duplication)
+  const groups = { creative: [], book: [], other: [] };
+  ideas.forEach(function (idea) {
+    if (idea.type === 'creative')     groups.creative.push(idea);
+    else if (idea.type === 'book')    groups.book.push(idea);
+    else                              groups.other.push(idea);
+  });
+
+  function groupSection(label, list) {
+    if (!list.length) return '';
+    return '<div class="idea-group">' +
+      '<div class="idea-group-label">' + OAD.esc(label) + ' <span class="idea-group-count">(' + list.length + ')</span></div>' +
+      list.map(function (i) { return ideaCard(i, false); }).join('') +
+    '</div>';
+  }
+
+  const spotlightHtml = spotlight
+    ? '<div class="idea-spotlight-section">' +
+        '<div class="idea-spotlight-label">✦ Idea of the Week</div>' +
+        ideaCard(spotlight, true) +
+      '</div>'
+    : '';
+
+  panel.innerHTML =
+    '<div class="idea-panel">' +
+      '<div class="idea-panel-header">' +
+        '<h2>Ideas</h2>' +
+      '</div>' +
+      '<p class="text-muted text-sm idea-subtitle">A holding area for what matters but isn\'t ready. An idea becomes a thread only when you consciously decide to act on it.</p>' +
+      spotlightHtml +
+      groupSection('Creative', groups.creative) +
+      groupSection('Books', groups.book) +
+      groupSection('Other', groups.other) +
+    '</div>';
+};
+
+OAD._deleteIdeaConfirm = function (id) {
+  const idea = OAD.getIdea(id);
+  if (!idea) return;
+  if (!confirm('Remove "' + idea.title + '" from the incubation list?')) return;
+  OAD.deleteIdea(id);
+  OAD.renderIdeaPanel();
+};
+
 // ── Habit panel ──────────────────────────────────────────────────────
 
 OAD._habitShowButtons = new Set(); // habits whose "Change" was clicked
