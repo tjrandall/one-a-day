@@ -110,6 +110,94 @@ OAD.test('pressure: contingency < 3 days adds 25', function () {
   OAD._assert(s >= 25, `Expected >= 25 for contingency < 3d, got ${s}`);
 });
 
+// ── Tests: exportThreads ─────────────────────────────────────────────
+
+OAD.test('exportThreads: includes required fields and excludes moat data', function () {
+  const t = OAD.addThread(OAD.makeThread({
+    title: 'Export subject',
+    status: 'open', priority: 'high', life_area: 'Career',
+    closing_condition: 'Offer letter signed',
+    next_action: 'Send follow-up', next_action_date: '2026-07-01',
+    connections: [{ to_label: 'Secret graph edge', edge_type: 'blocks' }],
+    current_assumption: 'They will reply', assumption_verified: false,
+    ai_insights: [{ observation: 'Secret counsel' }]
+  }));
+  OAD.addEvolution(t.id, 'Did a thing');
+
+  const parsed = JSON.parse(OAD.exportThreads());
+  const row = parsed.threads.find(function (x) { return x.title === 'Export subject'; });
+
+  OAD._assert(!!row,                            'thread present in export');
+  OAD._assert('title'             in row,       'title included');
+  OAD._assert('status'            in row,       'status included');
+  OAD._assert('priority'          in row,       'priority included');
+  OAD._assert('life_area'         in row,       'life_area included');
+  OAD._assert('pressure'          in row,       'pressure included');
+  OAD._assert('closing_condition' in row,       'closing_condition included');
+  OAD._assert('next_action'       in row,       'next_action included');
+  OAD._assert('next_action_date'  in row,       'next_action_date included');
+  OAD._assert(row.evolution_log.length > 0,     'evolution_log included');
+  OAD._assert(!('connections'         in row),  'connections excluded — graph is moat');
+  OAD._assert(!('current_assumption'  in row),  'assumption excluded');
+  OAD._assert(!('assumption_verified' in row),  'assumption_verified excluded');
+  OAD._assert(!('ai_insights'         in row),  'ai_insights excluded');
+  OAD._assert('exported_at'   in parsed,        'export has timestamp');
+  OAD._assert('thread_count'  in parsed,        'export has thread_count');
+});
+
+// ── Tests: importThreads ─────────────────────────────────────────────
+
+OAD.test('parseImportFile: new thread goes to create list', function () {
+  const json = JSON.stringify({ threads: [{ title: 'Brand new thread', status: 'open' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assert(!results.error, 'no error');
+  OAD._assertEqual(results.create.length, 1, 'one item to create');
+  OAD._assertEqual(results.update.length, 0, 'nothing to update');
+});
+
+OAD.test('parseImportFile: existing title goes to update list', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Existing for import test' }));
+  const json = JSON.stringify({ threads: [{ title: 'Existing for import test', status: 'closed' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assertEqual(results.update.length, 1, 'one item to update');
+  OAD._assertEqual(results.update[0].existing.id, t.id, 'matched to correct thread');
+  OAD._assertEqual(results.create.length, 0, 'nothing to create');
+});
+
+OAD.test('parseImportFile: returns error on invalid JSON', function () {
+  const results = OAD.parseImportFile('not json {{{');
+  OAD._assert(!!results.error, 'should return error');
+});
+
+OAD.test('applyImport: creates new thread with evolution log appended', function () {
+  const before = OAD.DB.threads.length;
+  const results = { create: [{ title: 'Imported new', status: 'open', priority: 'low',
+    evolution_log: [{ date: '2026-01-01', note: 'From export' }] }], update: [] };
+  OAD.applyImport(results, []);
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'one thread added');
+  const created = OAD.DB.threads.find(function (t) { return t.title === 'Imported new'; });
+  OAD._assert(!!created, 'thread found');
+  OAD._assert(created.evolution_log.some(function (e) { return e.note === 'From export'; }),
+    'imported evolution entry appended');
+});
+
+OAD.test('applyImport: update never overwrites evolution log entries', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Import no-overwrite test' }));
+  OAD.addEvolution(t.id, 'Original entry');
+  const results = {
+    create: [],
+    update: [{ incoming: { title: t.title, status: 'waiting',
+      evolution_log: [{ date: '2026-06-01', note: 'Imported entry' }] },
+      existing: t }]
+  };
+  OAD.applyImport(results, [results.update[0]]);
+  const updated = OAD.getThread(t.id);
+  OAD._assert(updated.evolution_log.some(function (e) { return e.note === 'Original entry'; }),
+    'original evolution entry preserved');
+  OAD._assert(updated.evolution_log.some(function (e) { return e.note === 'Imported entry'; }),
+    'new evolution entry appended');
+});
+
 // ── Tests: Idea data model ────────────────────────────────────────────
 
 OAD.test('makeIdea: defaults are valid', function () {

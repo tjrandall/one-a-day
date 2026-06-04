@@ -255,6 +255,130 @@ OAD.checkInHabit = function (id, done, note) {
   return h;
 };
 
+// ── Moat-safe export ─────────────────────────────────────────────────
+// Exports surface-level thread data only. Deliberately excludes:
+//   connections[] — the dependency graph is the product moat
+//   current_assumption / assumption_verified — assumption audit trail
+//   ai_insights[] — counsel engine history
+//   persona data — behavioral profile
+// Safe to share without leaking proprietary architecture.
+// In a multi-user system this must be scoped to the authenticated user —
+// the exported_by field makes ownership explicit for that future.
+
+// ── Import ────────────────────────────────────────────────────────────
+// Accepts the moat-safe export JSON format.
+// New threads are created immediately.
+// Existing threads (matched by title) are staged for user confirmation.
+// Evolution log is always appended — never overwritten.
+
+OAD.parseImportFile = function (jsonString) {
+  try {
+    const parsed = JSON.parse(jsonString);
+    const rows = Array.isArray(parsed) ? parsed : (parsed.threads || []);
+    if (!Array.isArray(rows)) return { error: 'Invalid format: expected a threads array.' };
+    const results = { create: [], update: [], invalid: [] };
+    rows.forEach(function (row) {
+      if (!row.title || typeof row.title !== 'string') {
+        results.invalid.push(row);
+        return;
+      }
+      const existing = OAD.DB.threads.find(function (t) {
+        return t.title.trim().toLowerCase() === row.title.trim().toLowerCase();
+      });
+      if (existing) {
+        results.update.push({ incoming: row, existing: existing });
+      } else {
+        results.create.push(row);
+      }
+    });
+    return results;
+  } catch (e) {
+    return { error: 'Could not parse JSON: ' + e.message };
+  }
+};
+
+OAD.applyImport = function (results, confirmedUpdates) {
+  var created = 0, updated = 0;
+
+  (results.create || []).forEach(function (row) {
+    const t = OAD.makeThread({
+      title:             row.title,
+      status:            row.status            || 'open',
+      priority:          row.priority          || 'medium',
+      life_area:         row.life_area         || 'Other',
+      closing_condition: row.closing_condition || '',
+      next_action:       row.next_action       || '',
+      next_action_date:  row.next_action_date  || ''
+    });
+    const added = OAD.addThread(t);
+    // Append imported evolution log entries
+    (row.evolution_log || []).forEach(function (e) {
+      if (e.date && e.note) {
+        added.evolution_log.push({ date: e.date, note: e.note });
+      }
+    });
+    OAD.addEvolution(added.id, 'Imported from export file.');
+    created++;
+  });
+
+  (confirmedUpdates || []).forEach(function (item) {
+    const existing = item.existing;
+    const row      = item.incoming;
+    const patch    = {};
+    if (row.status            && row.status !== existing.status)
+      patch.status = row.status;
+    if (row.priority          && row.priority !== existing.priority)
+      patch.priority = row.priority;
+    if (row.closing_condition !== undefined && row.closing_condition !== existing.closing_condition)
+      patch.closing_condition = row.closing_condition;
+    if (row.next_action !== undefined && row.next_action !== existing.next_action)
+      patch.next_action = row.next_action;
+    if (row.next_action_date !== undefined && row.next_action_date !== existing.next_action_date)
+      patch.next_action_date = row.next_action_date;
+    if (Object.keys(patch).length) OAD.updateThread(existing.id, patch);
+    // Append only new evolution entries (dedupe by date+note)
+    const existingKeys = new Set(
+      (existing.evolution_log || []).map(function (e) { return e.date + '|' + e.note; })
+    );
+    (row.evolution_log || []).forEach(function (e) {
+      if (e.date && e.note && !existingKeys.has(e.date + '|' + e.note)) {
+        existing.evolution_log.push({ date: e.date, note: e.note });
+      }
+    });
+    OAD.addEvolution(existing.id, 'Updated via import.');
+    updated++;
+  });
+
+  OAD.saveDB();
+  return { created: created, updated: updated };
+};
+
+OAD.exportThreads = function () {
+  const threads = (OAD.DB.threads || []).map(function (t) {
+    return {
+      title:             t.title,
+      status:            t.status,
+      priority:          t.priority,
+      life_area:         t.life_area,
+      pressure:          OAD.pressure(t),
+      closing_condition: t.closing_condition || '',
+      next_action:       t.next_action || '',
+      next_action_date:  t.next_action_date || '',
+      evolution_log:     (t.evolution_log || []).map(function (e) {
+        return { date: e.date, note: e.note };
+      })
+    };
+  });
+
+  return JSON.stringify({
+    exported_at:   new Date().toISOString(),
+    exported_by:   OAD._userId || 'local',
+    thread_count:  threads.length,
+    note:          'Moat-safe export: graph edges, assumption audit, and counsel history excluded.',
+    threads:       threads
+  }, null, 2);
+};
+
 // ── Idea data model ───────────────────────────────────────────────────
 
 OAD.makeIdea = function (overrides) {

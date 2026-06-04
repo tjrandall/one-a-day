@@ -387,11 +387,140 @@ OAD._savePersona = function () {
   OAD.renderPersonaBar();
 };
 
+// ── Import ────────────────────────────────────────────────────────────
+
+OAD.openImportModal = function () {
+  OAD.openModal(`
+    <h2>Import Threads</h2>
+    <p class="text-muted text-sm" style="margin-bottom:14px">
+      Accepts the One-A-Day export JSON format. New threads are created immediately.
+      Threads matched by title will show a diff — you confirm before anything changes.
+      Evolution logs are always appended, never overwritten.
+    </p>
+    <div class="field">
+      <label>Select export file (.json)</label>
+      <input id="import-file" type="file" accept=".json,application/json" style="padding:6px">
+    </div>
+    <div id="import-preview" style="margin-top:8px"></div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._readImportFile()">Preview</button>
+    </div>`);
+};
+
+OAD._readImportFile = function () {
+  const file = document.getElementById('import-file')?.files[0];
+  if (!file) { alert('Select a file first.'); return; }
+  const reader = new FileReader();
+  reader.onload = function (e) { OAD._previewImport(e.target.result); };
+  reader.readAsText(file);
+};
+
+OAD._previewImport = function (jsonString) {
+  const results = OAD.parseImportFile(jsonString);
+  if (results.error) { alert(results.error); return; }
+
+  OAD._pendingImport = results;
+
+  const { create, update, invalid } = results;
+  let html = '';
+
+  if (create.length) {
+    html += '<div class="import-section-label">New threads (' + create.length + ') — will be created</div>';
+    html += create.map(function (r) {
+      return '<div class="import-row import-new">+ ' + OAD.esc(r.title) + '</div>';
+    }).join('');
+  }
+
+  if (update.length) {
+    html += '<div class="import-section-label" style="margin-top:12px">Existing threads (' + update.length + ') — review changes</div>';
+    html += update.map(function (item, idx) {
+      const diffs = OAD._diffImportItem(item);
+      const diffHtml = diffs.length
+        ? diffs.map(function (d) {
+            return '<div class="import-diff-line">' +
+              '<span class="import-diff-field">' + OAD.esc(d.field) + '</span> ' +
+              '<span class="import-diff-old">' + OAD.esc(d.old || '—') + '</span>' +
+              ' → <span class="import-diff-new">' + OAD.esc(d.new_ || '—') + '</span>' +
+            '</div>';
+          }).join('')
+        : '<div class="text-muted text-sm">No field changes (evolution log may append)</div>';
+      return '<div class="import-row import-update">' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
+          '<input type="checkbox" class="import-confirm-cb" data-idx="' + idx + '" ' +
+            'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + OAD.esc(item.incoming.title) + '</div>' +
+            diffHtml +
+          '</div>' +
+        '</label>' +
+      '</div>';
+    }).join('');
+  }
+
+  if (invalid.length) {
+    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Skipped (' + invalid.length + ') — missing title</div>';
+  }
+
+  if (!create.length && !update.length) {
+    html = '<p class="text-muted text-sm">Nothing to import.</p>';
+  }
+
+  OAD.openModal(`
+    <h2>Import Preview</h2>
+    <div class="import-preview-scroll">${html}</div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.openImportModal()">← Back</button>
+      <button class="success" onclick="OAD._confirmImport()">Apply Import</button>
+    </div>`);
+};
+
+OAD._diffImportItem = function (item) {
+  const fields = ['status', 'priority', 'closing_condition', 'next_action', 'next_action_date'];
+  const diffs = [];
+  fields.forEach(function (f) {
+    const incoming = item.incoming[f] != null ? String(item.incoming[f]) : '';
+    const existing = item.existing[f]  != null ? String(item.existing[f])  : '';
+    if (incoming && incoming !== existing) {
+      diffs.push({ field: f, old: existing, new_: incoming });
+    }
+  });
+  return diffs;
+};
+
+OAD._confirmImport = function () {
+  if (!OAD._pendingImport) return;
+  const checkboxes = document.querySelectorAll('.import-confirm-cb');
+  const confirmedUpdates = [];
+  checkboxes.forEach(function (cb) {
+    if (cb.checked) {
+      const idx = parseInt(cb.dataset.idx, 10);
+      confirmedUpdates.push(OAD._pendingImport.update[idx]);
+    }
+  });
+  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates);
+  OAD._pendingImport = null;
+  OAD.closeModal();
+  OAD.renderList();
+  alert('Import complete: ' + result.created + ' created, ' + result.updated + ' updated.');
+};
+
+OAD._downloadExport = function () {
+  const json = OAD.exportThreads();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'one-a-day-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
 OAD.openSettingsModal = function () {
   OAD.loadApiKey();
-  const userEmail = OAD.supabase
-    ? (OAD.supabase.auth.getSession().then ? '' : '')
-    : '';
+  const count = (OAD.DB.threads || []).length;
   const signOutBtn = OAD._userId
     ? `<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
          <button class="ghost" style="width:100%;color:var(--text-muted)" onclick="OAD.closeModal();OAD.openSignOutModal()">Sign Out</button>
@@ -404,6 +533,17 @@ OAD.openSettingsModal = function () {
       <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
     </div>
     <p class="text-muted text-sm">Key is stored in localStorage — never sent anywhere except Anthropic's API.</p>
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
+      <p class="text-muted text-sm" style="margin-bottom:10px">
+        Flat JSON of all ${count} thread${count !== 1 ? 's' : ''}: title, status, priority, area, pressure, next action, by-when, closing condition, and full evolution log.
+        Graph edges, assumptions, and counsel history are excluded.
+      </p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="secondary" style="font-size:13px" onclick="OAD._downloadExport()">↓ Export JSON</button>
+        <button class="secondary" style="font-size:13px" onclick="OAD.closeModal();OAD.openImportModal()">↑ Import JSON</button>
+      </div>
+    </div>
     ${signOutBtn}
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
