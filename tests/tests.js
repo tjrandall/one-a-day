@@ -110,6 +110,72 @@ OAD.test('pressure: contingency < 3 days adds 25', function () {
   OAD._assert(s >= 25, `Expected >= 25 for contingency < 3d, got ${s}`);
 });
 
+// ── Tests: Habit data model ───────────────────────────────────────────
+
+OAD.test('makeHabit: defaults are valid', function () {
+  const h = OAD.makeHabit({});
+  OAD._assertEqual(h.frequency,        'daily',    'default frequency');
+  OAD._assertEqual(h.time_of_day,      'morning',  'default time_of_day');
+  OAD._assertEqual(h.current_streak,   0,          'default streak 0');
+  OAD._assertEqual(h.last_checked_in,  null,       'default last_checked_in null');
+  OAD._assertEqual(h.last_check_in_done, null,     'default done null');
+  OAD._assertEqual(h.phase,            'active',   'default phase active');
+});
+
+OAD.test('addHabit: assigns id and appends to DB', function () {
+  const before = OAD.DB.habits.length;
+  const h = OAD.addHabit(OAD.makeHabit({ title: 'Test habit' }));
+  OAD._assert(h.id > 0, 'id should be positive');
+  OAD._assertEqual(OAD.DB.habits.length, before + 1, 'habit count should increase');
+  OAD._assertEqual(OAD.getHabit(h.id).title, 'Test habit', 'should retrieve by id');
+});
+
+OAD.test('checkInHabit: first yes → streak 1', function () {
+  const h = OAD.addHabit(OAD.makeHabit({ title: 'Streak start' }));
+  OAD.checkInHabit(h.id, true, '');
+  OAD._assertEqual(OAD.getHabit(h.id).current_streak, 1, 'first yes → streak 1');
+  OAD._assertEqual(OAD.getHabit(h.id).longest_streak, 1, 'longest_streak updated');
+});
+
+OAD.test('checkInHabit: no → streak 0', function () {
+  const h = OAD.addHabit(OAD.makeHabit({ title: 'No check' }));
+  OAD.checkInHabit(h.id, false, '');
+  OAD._assertEqual(OAD.getHabit(h.id).current_streak, 0, 'no → streak stays 0');
+  OAD._assertEqual(OAD.getHabit(h.id).last_check_in_done, false, 'done=false saved');
+});
+
+OAD.test('checkInHabit: consecutive yes from yesterday increments streak', function () {
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const h = OAD.addHabit(OAD.makeHabit({
+    title: 'Streak continue',
+    current_streak: 3, longest_streak: 3,
+    last_checked_in: yesterday, last_check_in_done: true
+  }));
+  OAD.checkInHabit(h.id, true, '');
+  OAD._assertEqual(OAD.getHabit(h.id).current_streak, 4, 'consecutive yes → streak 4');
+  OAD._assertEqual(OAD.getHabit(h.id).longest_streak, 4, 'longest_streak updated');
+});
+
+OAD.test('checkInHabit: yes today twice does not double-count streak', function () {
+  const h = OAD.addHabit(OAD.makeHabit({ title: 'Idempotent today' }));
+  OAD.checkInHabit(h.id, true, 'first');
+  OAD.checkInHabit(h.id, true, 'second');
+  OAD._assertEqual(OAD.getHabit(h.id).current_streak, 1, 'checking yes twice today should not double streak');
+  OAD._assertEqual(OAD.getHabit(h.id).last_check_in_note, 'second', 'note updated on re-checkin');
+});
+
+OAD.test('checkInHabit: flip yes→no today undoes streak increment', function () {
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const h = OAD.addHabit(OAD.makeHabit({
+    title: 'Flip yes to no',
+    current_streak: 2, longest_streak: 2,
+    last_checked_in: yesterday, last_check_in_done: true
+  }));
+  OAD.checkInHabit(h.id, true, '');   // yes today → streak 3
+  OAD.checkInHabit(h.id, false, '');  // flip to no → undo → streak 2
+  OAD._assertEqual(OAD.getHabit(h.id).current_streak, 2, 'flip yes→no undoes increment');
+});
+
 // ── Tests: deadlineState() ───────────────────────────────────────────
 
 OAD.test('deadlineState: returns null when no deadline', function () {

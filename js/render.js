@@ -356,6 +356,107 @@ OAD.renderCadencePanel = function () {
     '</div>';
 };
 
+// ── Habit panel ──────────────────────────────────────────────────────
+
+OAD._habitShowButtons = new Set(); // habits whose "Change" was clicked
+
+OAD.renderHabitPanel = function () {
+  OAD._activeId = null;
+  OAD.renderList();
+
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  const habits = OAD.DB.habits || [];
+  if (!habits.length) {
+    panel.innerHTML = '<div class="detail-empty">No habits configured.</div>';
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  const items = habits.map(function (h) {
+    const checkedToday = h.last_checked_in === today;
+    const showButtons  = !checkedToday || OAD._habitShowButtons.has(h.id);
+
+    // Days since last check-in (for "not yet started" / missing 3+ days note)
+    const daysSince = h.last_checked_in
+      ? Math.round((new Date(today) - new Date(h.last_checked_in + 'T00:00:00')) / 86400000)
+      : null;
+    let missingHtml = '';
+    if (!checkedToday) {
+      if (daysSince === null) {
+        missingHtml = '<div class="habit-missing">Not yet started</div>';
+      } else if (daysSince >= 3) {
+        missingHtml = '<div class="habit-missing">Last checked in ' + daysSince + ' day' + (daysSince !== 1 ? 's' : '') + ' ago</div>';
+      }
+    }
+
+    const streakHtml = h.current_streak > 0
+      ? '<span class="habit-streak">🔥 ' + h.current_streak + '</span>'
+      : '<span class="habit-streak-zero">0</span>';
+
+    let checkInHtml;
+    if (showButtons) {
+      checkInHtml =
+        '<div class="habit-checkin-row">' +
+          '<button class="habit-yes" onclick="OAD._checkIn(' + h.id + ', true)">✓ Yes</button>' +
+          '<button class="habit-no"  onclick="OAD._checkIn(' + h.id + ', false)">✗ No</button>' +
+          '<input class="habit-note-input" id="habit-note-' + h.id + '" type="text" ' +
+            'placeholder="One-line reflection…" maxlength="140" ' +
+            'value="' + OAD.esc(h.last_check_in_note || '') + '">' +
+        '</div>';
+    } else if (h.last_check_in_done) {
+      checkInHtml =
+        '<div class="checkin-done">' +
+          '<span class="checkin-yes-label">✓ Done</span>' +
+          (h.last_check_in_note ? '<span class="checkin-note">“' + OAD.esc(h.last_check_in_note) + '”</span>' : '') +
+          '<button class="ghost" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
+        '</div>';
+    } else {
+      checkInHtml =
+        '<div class="checkin-missed">' +
+          '<span class="checkin-no-label">— Missed</span>' +
+          (h.last_check_in_note ? '<span class="checkin-note">“' + OAD.esc(h.last_check_in_note) + '”</span>' : '') +
+          '<button class="ghost" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
+        '</div>';
+    }
+
+    return '<div class="habit-card" id="habit-card-' + h.id + '">' +
+      '<div class="habit-header">' +
+        '<div class="habit-title">' + OAD.esc(h.title) + '</div>' +
+        streakHtml +
+      '</div>' +
+      '<div class="habit-meta">' + OAD.esc(h.frequency) + ' · ' + OAD.esc(h.time_of_day) + '</div>' +
+      missingHtml +
+      checkInHtml +
+    '</div>';
+  }).join('');
+
+  panel.innerHTML =
+    '<div class="habit-panel">' +
+      '<div class="habit-panel-header">' +
+        '<h2>Habits</h2>' +
+        '<span class="habit-date">' + OAD.esc(todayLabel) + '</span>' +
+      '</div>' +
+      '<p class="text-muted text-sm habit-subtitle">How is this going in your life right now?</p>' +
+      items +
+    '</div>';
+};
+
+OAD._checkIn = function (id, done) {
+  const note = document.getElementById('habit-note-' + id)?.value.trim() || '';
+  OAD._habitShowButtons.delete(id);
+  OAD.checkInHabit(id, done, note);
+  OAD.renderHabitPanel();
+};
+
+OAD._showHabitButtons = function (id) {
+  OAD._habitShowButtons.add(id);
+  OAD.renderHabitPanel();
+};
+
 OAD.draftEmailModal = async function (id) {
   const t = OAD.getThread(id);
   if (!t) return;

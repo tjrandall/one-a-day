@@ -1,8 +1,9 @@
 window.OAD = window.OAD || {};
 
 OAD._seedData = function () {
-  OAD.DB.threads = [];
+  OAD.DB.threads  = [];
   OAD.DB.cadences = [];
+  OAD.DB.habits   = [];
 
   // t1 — VR&E Equipment (Amanda)
   OAD.addThread(OAD.makeThread({
@@ -343,4 +344,61 @@ OAD._seedData = function () {
   ];
   OAD.DB.persona.tone_calibration.current_mode = 'problem-solving';
   OAD.DB.persona.tone_calibration.challenge_tolerance = 'medium';
+
+  // ── Seed habits — TJ's Plan of Life ───────────────────────────────────
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Morning Offering',
+    frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Consecrate the day to God before it begins.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Reading and Prayer',
+    frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: '20 minutes of lectio divina or spiritual reading — 6:30am.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Prayer to St. Joseph',
+    frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Patron of workers and fathers — 7:30am.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Morning Prayers',
+    frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Full morning prayer routine — Lauds, intentions, day offering.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Ave Maris Stella',
+    frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Marian hymn as part of the morning routine.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Prayer before work',
+    frequency: 'every workday', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Ask for grace and focus before beginning work.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Daily Rosary',
+    frequency: 'daily', time_of_day: 'flexible', life_area: 'Personal Growth',
+    why: 'Core Marian practice. The most important habit in the list.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Litany of Humility',
+    frequency: 'every-other-day', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Counter-formation against pride and self-seeking.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Attend Mass',
+    frequency: 'weekly', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Thursday Mass — source and summit of the Christian life.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Evening Examen',
+    frequency: 'daily', time_of_day: 'evening', life_area: 'Personal Growth',
+    why: 'Ignatian review of the day — gratitude, awareness, resolution. 8pm.'
+  }));
+  OAD.addHabit(OAD.makeHabit({
+    title: 'Consecration to Sacred Heart',
+    frequency: 'weekly', time_of_day: 'morning', life_area: 'Personal Growth',
+    why: 'Sunday renewal of consecration to the Sacred Heart of Jesus.'
+  }));
 };

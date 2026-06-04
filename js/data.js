@@ -3,6 +3,7 @@ window.OAD = window.OAD || {};
 OAD.DB = {
   threads: [],
   cadences: [],
+  habits: [],
 
   persona: {
     assumption_tendencies: [],
@@ -173,6 +174,93 @@ OAD.bulkImport = function (arr) {
   return count;
 };
 
+// ── Habit data model ─────────────────────────────────────────────────
+
+OAD.makeHabit = function (overrides) {
+  return Object.assign({
+    id: null,
+    title: '',
+    life_area: 'Personal Growth',
+    frequency: 'daily',       // daily | weekly | every-other-day | custom
+    time_of_day: 'morning',   // morning | evening | flexible
+    current_streak: 0,
+    longest_streak: 0,
+    last_checked_in: null,    // ISO date string
+    last_check_in_done: null, // boolean — true=yes, false=no
+    last_check_in_note: '',
+    phase: 'active',          // active | check-in | dormant
+    why: ''
+  }, overrides);
+};
+
+OAD.nextHabitId = function () {
+  const ids = OAD.DB.habits.map(function (h) { return h.id; });
+  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+};
+
+OAD.addHabit = function (habit) {
+  habit.id = OAD.nextHabitId();
+  OAD.DB.habits.push(habit);
+  OAD.saveDB();
+  return habit;
+};
+
+OAD.getHabit = function (id) {
+  return OAD.DB.habits.find(function (h) { return h.id === id; }) || null;
+};
+
+OAD.updateHabit = function (id, patch) {
+  const h = OAD.getHabit(id);
+  if (!h) return null;
+  Object.assign(h, patch);
+  OAD.saveDB();
+  return h;
+};
+
+OAD.checkInHabit = function (id, done, note) {
+  const h = OAD.getHabit(id);
+  if (!h) return null;
+  const today     = new Date().toISOString().slice(0, 10);
+  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const alreadyToday = h.last_checked_in === today;
+
+  if (done) {
+    if (!alreadyToday) {
+      if (h.last_checked_in === yesterday && h.last_check_in_done) {
+        h.current_streak = (h.current_streak || 0) + 1;
+      } else {
+        h.current_streak = 1;
+      }
+    } else if (!h.last_check_in_done) {
+      // Was no today, flipping to yes — restart from 1
+      h.current_streak = 1;
+    }
+    // Already yes today → streak unchanged
+    h.longest_streak = Math.max(h.longest_streak || 0, h.current_streak);
+  } else {
+    if (alreadyToday && h.last_check_in_done) {
+      // Flipping yes→no today — undo the increment
+      h.current_streak = Math.max(0, (h.current_streak || 0) - 1);
+    } else if (!alreadyToday) {
+      h.current_streak = 0;
+    }
+    // Already no today → no change
+  }
+
+  h.last_checked_in    = today;
+  h.last_check_in_done = done;
+  h.last_check_in_note = note != null ? note : '';
+  OAD.saveDB();
+  return h;
+};
+
+// Ensures all expected arrays exist after loading from storage (handles old data missing new fields).
+OAD._normalizeDB = function () {
+  OAD.DB.threads  = OAD.DB.threads  || [];
+  OAD.DB.cadences = OAD.DB.cadences || [];
+  OAD.DB.habits   = OAD.DB.habits   || [];
+};
+
 // ── Persistence ───────────────────────────────────────────────────────
 
 OAD._DB_KEY     = 'oad_db';
@@ -199,6 +287,7 @@ OAD.loadDB = function () {
     var data = JSON.parse(raw);
     if (!data || !Array.isArray(data.threads)) return false;
     OAD.DB = data;
+    OAD._normalizeDB();
     return true;
   } catch (e) {
     console.warn('[OAD] loadDB failed:', e);
@@ -236,6 +325,7 @@ OAD._loadFromCloud = async function () {
     }
     if (data && data.db && Array.isArray(data.db.threads)) {
       OAD.DB = data.db;
+      OAD._normalizeDB();
       // Keep localStorage in sync as local cache
       OAD.saveDB();
       return true;
