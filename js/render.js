@@ -21,9 +21,30 @@ OAD.renderList = function () {
     const pc = OAD.pressureClass(t._score);
     const active = t.id === OAD._activeId ? ' active' : '';
     const ds = t.deadline ? OAD.deadlineState(t) : null;
-    const atRiskHtml = ds && !ds.onTrack ? '<span class="at-risk-flag">⚑ At Risk</span>' : '';
+    const atRisk = ds && !ds.onTrack;
+    const riskClass = atRisk ? ' is-at-risk' : '';
+
+    let deadlineLineHtml = '';
+    if (ds) {
+      const days = ds.daysRemaining;
+      const timeText = days <= 0 ? 'Past deadline'
+        : ds.weeksRemaining > 0
+          ? ds.weeksRemaining + 'w remaining'
+          : days + 'd remaining';
+      const sessText = ds.sessionsRemaining != null
+        ? ' · ' + ds.sessionsRemaining + ' session' + (ds.sessionsRemaining !== 1 ? 's' : '') + ' left'
+        : '';
+      const riskText = atRisk
+        ? ' <span class="deadline-behind">⚑ ' + ds.behindBy + ' behind</span>'
+        : '';
+      deadlineLineHtml = '<div class="deadline-line">' +
+        '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
+        riskText +
+        '</div>';
+    }
+
     return `
-      <div class="thread-item${active}" data-id="${t.id}" onclick="OAD.selectThread(${t.id})">
+      <div class="thread-item${active}${riskClass}" data-id="${t.id}" onclick="OAD.selectThread(${t.id})">
         <div class="thread-item-top">
           <div class="thread-title">${OAD.esc(t.title)}</div>
           <div class="pressure-badge ${pc}">${t._score}</div>
@@ -32,8 +53,8 @@ OAD.renderList = function () {
           <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
           <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
           <span>${OAD.esc(t.life_area)}</span>
-          ${atRiskHtml}
         </div>
+        ${deadlineLineHtml}
       </div>`;
   }).join('');
 

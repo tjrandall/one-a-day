@@ -167,6 +167,9 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 }
 .thread-item:hover { background: var(--surface2); }
 .thread-item.active { background: var(--accent-dim); border-left: 3px solid var(--accent); }
+.thread-item.is-at-risk { border-left: 3px solid var(--critical); background: #ff4d6d06; }
+.thread-item.is-at-risk:hover { background: #ff4d6d10; }
+.thread-item.is-at-risk.active { background: var(--accent-dim); border-left: 3px solid var(--accent); }
 
 .thread-item-top {
   display: flex;
@@ -381,6 +384,10 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 .at-risk-badge { font-size: 11px; font-weight: 700; color: var(--critical); background: #ff4d6d18; padding: 2px 8px; border-radius: 20px; letter-spacing: .03em; }
 .on-track-badge { font-size: 11px; font-weight: 600; color: var(--open); background: #06d6a018; padding: 2px 8px; border-radius: 20px; }
 .at-risk-flag { font-size: 10px; font-weight: 700; color: var(--critical); background: #ff4d6d18; padding: 1px 6px; border-radius: 10px; letter-spacing: .03em; flex-shrink: 0; }
+.deadline-line { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-size: 11px; }
+.deadline-tag { color: var(--text-muted); font-family: var(--mono); }
+.deadline-behind { color: var(--critical); font-weight: 700; }
+.field-section-label { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-muted); margin-top: 8px; margin-bottom: 4px; padding-top: 12px; border-top: 1px solid var(--border); }
 
 /* ── Overdue Banner ── */
 #overdue-banner { background: #ff4d6d14; border-bottom: 2px solid var(--critical); flex-shrink: 0; }

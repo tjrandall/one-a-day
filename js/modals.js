@@ -123,6 +123,22 @@ OAD._threadForm = function (t) {
     <div class="field">
       <label>Escalation</label>
       <input id="f-ctg-escalation" type="text" value="${OAD.esc(t.contingency_escalation)}" placeholder="Who or what is the escalation path?">
+    </div>
+
+    <div class="field-section-label">Deadline Tracking <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
+    <div class="field-row">
+      <div class="field">
+        <label>Deadline</label>
+        <input id="f-deadline" type="date" value="${OAD.esc(t.deadline || '')}">
+      </div>
+      <div class="field">
+        <label>Total sessions needed</label>
+        <input id="f-effort-estimate" type="number" min="1" step="1" value="${t.effortEstimate != null ? t.effortEstimate : ''}" placeholder="e.g. 4">
+      </div>
+      <div class="field">
+        <label>Sessions/week required</label>
+        <input id="f-weekly-commitment" type="number" min="1" step="1" value="${t.weeklyCommitment != null ? t.weeklyCommitment : ''}" placeholder="e.g. 1">
+      </div>
     </div>`;
 };
 
@@ -145,7 +161,12 @@ OAD._readThreadForm = function (base) {
     next_action_contact:     document.getElementById('f-next-contact')?.value.trim() || '',
     contingency_trigger_date: document.getElementById('f-ctg-date')?.value || '',
     contingency_action:      document.getElementById('f-ctg-action')?.value.trim() || '',
-    contingency_escalation:  document.getElementById('f-ctg-escalation')?.value.trim() || ''
+    contingency_escalation:  document.getElementById('f-ctg-escalation')?.value.trim() || '',
+    deadline:          document.getElementById('f-deadline')?.value || null,
+    effortEstimate:    document.getElementById('f-effort-estimate')?.value !== ''
+                         ? parseInt(document.getElementById('f-effort-estimate').value, 10) : null,
+    weeklyCommitment:  document.getElementById('f-weekly-commitment')?.value !== ''
+                         ? parseInt(document.getElementById('f-weekly-commitment').value, 10) : null
   });
 };
 

@@ -110,6 +110,53 @@ OAD.test('pressure: contingency < 3 days adds 25', function () {
   OAD._assert(s >= 25, `Expected >= 25 for contingency < 3d, got ${s}`);
 });
 
+// ── Tests: deadlineState() ───────────────────────────────────────────
+
+OAD.test('deadlineState: returns null when no deadline', function () {
+  OAD._assertEqual(OAD.deadlineState(OAD.makeThread({})), null, 'no deadline → null');
+});
+
+OAD.test('deadlineState: onTrack true when sessions fit in remaining weeks', function () {
+  const t = OAD.makeThread({ deadline: '2026-12-31', effortEstimate: 2, effortLogged: 0, weeklyCommitment: 1 });
+  const ds = OAD.deadlineState(t);
+  OAD._assert(ds !== null, 'should return state');
+  OAD._assert(ds.onTrack, 'should be on track with plenty of time');
+  OAD._assertEqual(ds.behindBy, 0, 'behindBy should be 0');
+});
+
+OAD.test('deadlineState: onTrack false and behindBy correct when behind', function () {
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 7); // 1 week out
+  const t = OAD.makeThread({ deadline: soon.toISOString().slice(0, 10), effortEstimate: 5, effortLogged: 0, weeklyCommitment: 1 });
+  const ds = OAD.deadlineState(t);
+  OAD._assert(!ds.onTrack, 'should not be on track');
+  OAD._assert(ds.behindBy >= 4, 'should be behind by at least 4 sessions');
+});
+
+OAD.test('deadlineState: sessionsRemaining accounts for effortLogged', function () {
+  const t = OAD.makeThread({ deadline: '2026-12-31', effortEstimate: 6, effortLogged: 2, weeklyCommitment: 1 });
+  const ds = OAD.deadlineState(t);
+  OAD._assertEqual(ds.sessionsRemaining, 4, 'sessionsRemaining = effortEstimate - effortLogged');
+});
+
+OAD.test('deadlineState: no effortEstimate → onTrack true, sessionsRemaining null', function () {
+  const t = OAD.makeThread({ deadline: '2026-12-31', effortEstimate: null, effortLogged: 0, weeklyCommitment: 1 });
+  const ds = OAD.deadlineState(t);
+  OAD._assert(ds.onTrack, 'no estimate means on track by default');
+  OAD._assertEqual(ds.sessionsRemaining, null, 'sessionsRemaining null when no estimate');
+});
+
+OAD.test('pressure: deadline within 7 days not on track adds 30', function () {
+  const soon = new Date();
+  soon.setDate(soon.getDate() + 3);
+  const t = OAD.makeThread({
+    status: 'open', priority: 'low', connections: [],
+    deadline: soon.toISOString().slice(0, 10),
+    effortEstimate: 10, effortLogged: 0, weeklyCommitment: 1
+  });
+  OAD._assert(OAD.pressure(t) >= 30, 'deadline pressure should add >= 30');
+});
+
 // ── Tests: esc() ──────────────────────────────────────────────────────
 
 OAD.test('esc: escapes < > & " \'', function () {

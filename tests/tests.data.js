@@ -210,11 +210,11 @@ OAD._seedData = function () {
     ai_insights: []
   }));
 
-  // t8 — eCornell Python for Data Science
+  // t8 — eCornell Python for Data Science (final presentation June 26)
   OAD.addThread(OAD.makeThread({
     id: 't8',
     title: 'eCornell Python for Data Science',
-    life_area: 'education',
+    life_area: 'Education',
     status: 'open',
     priority: 'high',
     closing_condition: 'Certificate earned and VR&E subsistence payments confirmed through course completion',
@@ -222,20 +222,25 @@ OAD._seedData = function () {
     closing_condition_met: false,
     current_assumption: 'Course load manageable alongside ENV-118 biweekly cadence — syllabus not yet reviewed',
     assumption_verified: false,
-    next_action: 'Get syllabus at 9am June 1 and assess weekly time commitment before committing to a schedule',
-    next_action_date: '2026-06-01',
+    next_action: 'Review syllabus and map remaining assignments against June 26 final presentation deadline',
+    next_action_date: '2026-06-05',
     next_action_channel: 'portal',
     next_action_contact: 'eCornell / Amanda (eva@va.gov)',
-    contingency_trigger_date: '',
-    contingency_action: 'If load is unmanageable, contact Amanda at eva@va.gov before dropping or deferring',
+    contingency_trigger_date: '2026-06-19',
+    contingency_action: 'If presentation is not prepared by June 19, contact Amanda before missing submission',
     contingency_escalation: '',
+    deadline: '2026-06-26',
+    effortEstimate: 4,
+    weeklyCommitment: 1,
+    effortLogged: 0,
     connections: [
       { to_label: 'Northeastern GIS certificate', edge_type: 'enables' },
       { to_label: 'VR&E service plan', edge_type: 'relates' }
     ],
     evolution_log: [
       { date: '2026-05-31', note: 'Orientation completed.' },
-      { date: '2026-06-03', note: 'Course starts per VR&E plan.' }
+      { date: '2026-06-03', note: 'Course starts per VR&E plan.' },
+      { date: '2026-06-04', note: 'Deadline tracking enabled. Final presentation due June 26. Estimating 4 sessions at 1/week minimum — currently behind by 1 session.' }
     ],
     ai_insights: []
   }));
