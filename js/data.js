@@ -26,7 +26,11 @@ OAD.DB = {
 
 OAD.LIFE_AREAS = [
   'Career', 'Health', 'Finance', 'Relationships',
-  'Education', 'Housing', 'Legal', 'Personal Growth', 'Other'
+  'Education', 'Housing', 'Legal', 'Personal Growth', 'App Dev', 'Other'
+];
+
+OAD.RECURRENCES = [
+  'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'custom'
 ];
 
 OAD.STATUSES   = ['open', 'waiting', 'stalled', 'closed'];
@@ -159,6 +163,22 @@ OAD.addCadence = function (cadence) {
 
 OAD.getCadence = function (id) {
   return OAD.DB.cadences.find(function (c) { return c.id === id; }) || null;
+};
+
+OAD.updateCadence = function (id, patch) {
+  const c = OAD.getCadence(id);
+  if (!c) return null;
+  Object.assign(c, patch);
+  OAD.saveDB();
+  return c;
+};
+
+OAD.deleteCadence = function (id) {
+  const idx = OAD.DB.cadences.findIndex(function (c) { return c.id === id; });
+  if (idx === -1) return false;
+  OAD.DB.cadences.splice(idx, 1);
+  OAD.saveDB();
+  return true;
 };
 
 // Maps the camelCase JSON seed schema to the snake_case thread model.

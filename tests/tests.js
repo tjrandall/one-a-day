@@ -216,6 +216,29 @@ OAD.test('applyImport: updates thread matched by uuid, never overwrites evolutio
     'new evolution entry appended');
 });
 
+// ── Tests: Cadence CRUD ──────────────────────────────────────────────
+
+OAD.test('updateCadence: merges patch fields', function () {
+  const c = OAD.addCadence(OAD.makeCadence({ title: 'Test cadence', recurrence: 'monthly-1st' }));
+  OAD.updateCadence(c.id, { title: 'Updated cadence', next_due: '2026-07-01' });
+  const updated = OAD.getCadence(c.id);
+  OAD._assertEqual(updated.title,    'Updated cadence', 'title updated');
+  OAD._assertEqual(updated.next_due, '2026-07-01',      'next_due updated');
+  OAD._assertEqual(updated.recurrence, 'monthly-1st',   'untouched field preserved');
+});
+
+OAD.test('deleteCadence: removes from DB', function () {
+  const c = OAD.addCadence(OAD.makeCadence({ title: 'Delete me cadence' }));
+  const before = OAD.DB.cadences.length;
+  OAD.deleteCadence(c.id);
+  OAD._assertEqual(OAD.DB.cadences.length, before - 1, 'count decreased');
+  OAD._assertEqual(OAD.getCadence(c.id), null, 'not findable after delete');
+});
+
+OAD.test('LIFE_AREAS: includes App Dev', function () {
+  OAD._assert(OAD.LIFE_AREAS.includes('App Dev'), 'App Dev should be in LIFE_AREAS');
+});
+
 // ── Tests: Idea data model ────────────────────────────────────────────
 
 OAD.test('makeIdea: defaults are valid', function () {

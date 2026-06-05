@@ -311,20 +311,20 @@ OAD.renderCadencePanel = function () {
   if (!panel) return;
 
   const cadences = OAD.DB.cadences;
+  const today    = new Date().toISOString().slice(0, 10);
 
-  if (!cadences.length) {
-    panel.innerHTML = '<div class="detail-empty">No cadences configured.</div>';
-    return;
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-
-  const items = cadences.map(function (c) {
-    const overdue      = OAD.cadenceOverdue(c);
-    const dueToday     = !overdue && c.next_due === today;
-    const prevDue      = OAD.prevCadenceDue(c.recurrence);
+  const items = cadences.length ? cadences.map(function (c) {
+    const overdue        = OAD.cadenceOverdue(c);
+    const dueToday       = !overdue && c.next_due === today;
+    const prevDue        = OAD.prevCadenceDue(c.recurrence);
     const doneThisPeriod = !overdue && !dueToday && c.last_completed && prevDue && c.last_completed >= prevDue;
-    const itemClass    = overdue ? 'is-overdue' : dueToday ? 'is-due-today' : doneThisPeriod ? 'is-done' : '';
+    const itemClass      = overdue ? 'is-overdue' : dueToday ? 'is-due-today' : doneThisPeriod ? 'is-done' : '';
+
+    const dueDateHtml = '<div class="cadence-due-row">' +
+      '<span class="cadence-due-label">Next due:</span>' +
+      '<input type="date" class="cadence-due-input" value="' + OAD.esc(c.next_due || '') + '" ' +
+        'onchange="OAD._adjustCadenceDue(' + c.id + ', this.value)">' +
+    '</div>';
 
     let statusHtml;
     if (overdue) {
@@ -344,16 +344,30 @@ OAD.renderCadencePanel = function () {
         '<div class="cadence-meta">' + OAD.esc(c.recurrence) + ' · ' + OAD.esc(c.life_area) + '</div>' +
         (c.notes ? '<div class="cadence-notes">' + OAD.esc(c.notes) + '</div>' : '') +
         (c.consequences ? '<div class="cadence-consequences">If missed: ' + OAD.esc(c.consequences) + '</div>' : '') +
+        dueDateHtml +
       '</div>' +
-      '<div class="cadence-actions">' + statusHtml + '</div>' +
-      '</div>';
-  }).join('');
+      '<div class="cadence-actions">' +
+        statusHtml +
+        '<div class="cadence-edit-btns">' +
+          '<button class="ghost" style="font-size:12px;padding:4px 10px" onclick="OAD.openEditCadenceModal(' + c.id + ')">Edit</button>' +
+          '<button class="ghost" style="font-size:12px;padding:4px 10px;color:var(--critical)" onclick="OAD._deleteCadence(' + c.id + ')">Delete</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('') : '<p class="text-muted text-sm">No cadences yet. Add one below.</p>';
 
   panel.innerHTML = '<div class="cadence-panel">' +
-    '<h2>Cadences</h2>' +
-    '<p class="text-muted text-sm" style="margin-bottom:4px">Date-anchored obligations that recur on a fixed schedule.</p>' +
+    '<div class="cadence-panel-header">' +
+      '<h2>Cadences</h2>' +
+      '<button onclick="OAD.openNewCadenceModal()">+ Add Cadence</button>' +
+    '</div>' +
+    '<p class="text-muted text-sm cadence-subtitle">Date-anchored obligations that recur on a fixed schedule. Missing one is a failure state.</p>' +
     items +
     '</div>';
+};
+
+OAD._adjustCadenceDue = function (id, dateValue) {
+  OAD.updateCadence(id, { next_due: dateValue || null });
 };
 
 // ── Idea panel ───────────────────────────────────────────────────────

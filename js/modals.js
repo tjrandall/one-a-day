@@ -387,6 +387,116 @@ OAD._savePersona = function () {
   OAD.renderPersonaBar();
 };
 
+// ── Cadence modals ───────────────────────────────────────────────────
+
+OAD._cadenceForm = function (c) {
+  const recurrenceOpts = OAD.RECURRENCES.map(function (r) {
+    return '<option value="' + r + '" ' + (c.recurrence === r ? 'selected' : '') + '>' + r + '</option>';
+  }).join('');
+  const areaOpts = OAD.LIFE_AREAS.map(function (a) {
+    return '<option value="' + OAD.esc(a) + '" ' + (c.life_area === a ? 'selected' : '') + '>' + OAD.esc(a) + '</option>';
+  }).join('');
+  return `
+    <div class="field">
+      <label>Title <span style="color:var(--critical)">*</span></label>
+      <input id="cd-title" type="text" value="${OAD.esc(c.title)}" placeholder="What must be done on this date?">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Recurrence</label>
+        <select id="cd-recurrence">${recurrenceOpts}</select>
+      </div>
+      <div class="field">
+        <label>Life Area</label>
+        <select id="cd-area">${areaOpts}</select>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Next Due Date</label>
+        <input id="cd-next-due" type="date" value="${OAD.esc(c.next_due || '')}">
+      </div>
+      <div class="field">
+        <label>Last Completed</label>
+        <input id="cd-last-completed" type="date" value="${OAD.esc(c.last_completed || '')}">
+      </div>
+    </div>
+    <div class="field">
+      <label>Notes</label>
+      <input id="cd-notes" type="text" value="${OAD.esc(c.notes || '')}" placeholder="What specifically needs to happen?">
+    </div>
+    <div class="field">
+      <label>Consequences if missed</label>
+      <input id="cd-consequences" type="text" value="${OAD.esc(c.consequences || '')}" placeholder="What breaks if this is skipped?">
+    </div>`;
+};
+
+OAD._readCadenceForm = function (base) {
+  const title = document.getElementById('cd-title')?.value.trim();
+  if (!title) { alert('Title is required.'); return null; }
+  return Object.assign({}, base, {
+    title,
+    recurrence:     document.getElementById('cd-recurrence')?.value     || 'monthly-1st',
+    life_area:      document.getElementById('cd-area')?.value           || 'Other',
+    next_due:       document.getElementById('cd-next-due')?.value       || null,
+    last_completed: document.getElementById('cd-last-completed')?.value || null,
+    notes:          document.getElementById('cd-notes')?.value.trim()        || '',
+    consequences:   document.getElementById('cd-consequences')?.value.trim() || ''
+  });
+};
+
+OAD.openNewCadenceModal = function () {
+  const blank = OAD.makeCadence({ life_area: 'Finance' });
+  OAD.openModal(`
+    <h2>New Cadence</h2>
+    ${OAD._cadenceForm(blank)}
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveNewCadence()">Create</button>
+    </div>`);
+  setTimeout(() => document.getElementById('cd-title')?.focus(), 50);
+};
+
+OAD._saveNewCadence = function () {
+  const data = OAD._readCadenceForm(OAD.makeCadence());
+  if (!data) return;
+  OAD.addCadence(data);
+  OAD.closeModal();
+  OAD.renderCadencePanel();
+};
+
+OAD.openEditCadenceModal = function (id) {
+  const c = OAD.getCadence(id);
+  if (!c) return;
+  OAD.openModal(`
+    <h2>Edit Cadence</h2>
+    ${OAD._cadenceForm(c)}
+    <div class="modal-footer">
+      <button class="danger" onclick="OAD._deleteCadence(${id})">Delete</button>
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveEditCadence(${id})">Save</button>
+    </div>`);
+};
+
+OAD._saveEditCadence = function (id) {
+  const c = OAD.getCadence(id);
+  if (!c) return;
+  const data = OAD._readCadenceForm(c);
+  if (!data) return;
+  OAD.updateCadence(id, data);
+  OAD.closeModal();
+  OAD.renderCadencePanel();
+};
+
+OAD._deleteCadence = function (id) {
+  const c = OAD.getCadence(id);
+  if (!c) return;
+  if (!confirm('Delete "' + c.title + '"? This cannot be undone.')) return;
+  OAD.deleteCadence(id);
+  OAD.closeModal();
+  OAD.renderCadencePanel();
+};
+
 // ── Import ────────────────────────────────────────────────────────────
 
 OAD.openImportModal = function () {
