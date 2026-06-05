@@ -1,37 +1,65 @@
 window.OAD = window.OAD || {};
 
-OAD.pressure = function (thread) {
-  let score = 0;
+// _inBleedUp: true when called recursively for bleed-up, suppresses second-hop bleed-up
+OAD.pressure = function (thread, _inBleedUp) {
+  var score = 0;
 
-  if (thread.status === 'stalled')  score += 30;
-  else if (thread.status === 'waiting') score += 15;
+  // Status
+  if      (thread.status === 'stalled')  score += 30;
+  else if (thread.status === 'waiting')  score += 15;
 
+  // Unverified assumption
   if (!thread.assumption_verified && thread.current_assumption) score += 20;
 
-  if (thread.priority === 'critical') score += 30;
-  else if (thread.priority === 'high')   score += 20;
-  else if (thread.priority === 'medium') score += 10;
+  // Priority
+  if      (thread.priority === 'critical') score += 30;
+  else if (thread.priority === 'high')     score += 20;
+  else if (thread.priority === 'medium')   score += 10;
 
-  const blocking = (thread.connections || []).filter(c => c.edge_type === 'blocks').length;
-  score += blocking * 10;
-
-  if (thread.contingency_trigger_date) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const ctg = new Date(thread.contingency_trigger_date);
-    const days = Math.ceil((ctg - today) / 86400000);
-    if (days < 3)        score += 25;
-    else if (days < 7)   score += 15;
-    else if (days < 14)  score += 5;
+  // One-hop bleed-up from blocking connections.
+  // For each connection that blocks a resolvable thread: add 30% of that thread's pressure.
+  // For unresolvable labels (no thread found): flat +10 fallback.
+  // Capped at +20 total. _inBleedUp prevents recursing past one hop.
+  if (!_inBleedUp) {
+    var blockingConns = (thread.connections || []).filter(function (c) { return c.edge_type === 'blocks'; });
+    var bleedUp = 0;
+    blockingConns.forEach(function (c) {
+      var label = (c.to_label || '').toLowerCase();
+      var blocked = (OAD.DB.threads || []).find(function (t) {
+        return t !== thread && t.title.toLowerCase() === label;
+      });
+      bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
+    });
+    score += Math.min(Math.round(bleedUp), 20);
   }
 
+  // Contingency proximity — quadratic over 14-day window.
+  // Produces a smooth 0→25 curve as the date approaches instead of step thresholds.
+  if (thread.contingency_trigger_date) {
+    var ctgToday = new Date();
+    ctgToday.setHours(0, 0, 0, 0);
+    var ctg = new Date(thread.contingency_trigger_date + 'T00:00:00');
+    var ctgDays = Math.ceil((ctg - ctgToday) / 86400000);
+    var ctgRatio = Math.max(0, Math.min(1, 1 - ctgDays / 14));
+    score += Math.round(ctgRatio * ctgRatio * 25);
+  }
+
+  // Deadline proximity — quadratic continuous slope.
+  // urgencyRatio² × 40 base, amplified ×1.5 when off-track, +10 when behind by 2+ sessions.
+  // totalDays is effort-derived (sessions/week → weeks) or falls back to a 90-day window.
   if (thread.deadline) {
-    const ds = OAD.deadlineState(thread);
-    if (ds && !ds.onTrack) {
-      if (ds.daysRemaining <= 7)       score += 30;
-      else if (ds.daysRemaining <= 14) score += 20;
-      else if (ds.daysRemaining <= 30) score += 10;
-      if (ds.behindBy >= 2)            score += 15;
+    var ds = OAD.deadlineState(thread);
+    if (ds) {
+      var totalDays = 90;
+      if (thread.effortEstimate && thread.weeklyCommitment) {
+        totalDays = Math.round((thread.effortEstimate / thread.weeklyCommitment) * 7);
+      }
+      totalDays = Math.max(totalDays, 1);
+      var dlRatio = Math.max(0, Math.min(1, 1 - ds.daysRemaining / totalDays));
+      var dp = dlRatio * dlRatio * 40;
+      if (!ds.onTrack) dp *= 1.5;
+      if (ds.behindBy >= 2) dp += 10;
+      score += Math.round(dp);
     }
   }
 

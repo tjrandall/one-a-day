@@ -97,17 +97,21 @@ OAD.test('pressure: capped at 100', function () {
   OAD._assertEqual(OAD.pressure(t), 100, 'pressure should cap at 100');
 });
 
-OAD.test('pressure: contingency < 3 days adds 25', function () {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const t = OAD.makeThread({
-    status: 'open',
-    priority: 'low',
-    connections: [],
-    contingency_trigger_date: tomorrow.toISOString().slice(0, 10)
-  });
-  const s = OAD.pressure(t);
-  OAD._assert(s >= 25, `Expected >= 25 for contingency < 3d, got ${s}`);
+OAD.test('pressure: contingency adds more pressure when closer (quadratic curve)', function () {
+  const d = function (offset) {
+    const dt = new Date(); dt.setDate(dt.getDate() + offset);
+    return dt.toISOString().slice(0, 10);
+  };
+  const base = { status: 'open', priority: 'low', connections: [] };
+  const tNear = OAD.makeThread(Object.assign({}, base, { contingency_trigger_date: d(1) }));
+  const tMid  = OAD.makeThread(Object.assign({}, base, { contingency_trigger_date: d(7) }));
+  const tFar  = OAD.makeThread(Object.assign({}, base, { contingency_trigger_date: d(13) }));
+  const sNear = OAD.pressure(tNear);
+  const sMid  = OAD.pressure(tMid);
+  const sFar  = OAD.pressure(tFar);
+  OAD._assert(sNear > sMid,  'contingency tomorrow > contingency in 7 days');
+  OAD._assert(sMid  > sFar,  'contingency in 7 days > contingency in 13 days');
+  OAD._assert(sNear > 0,     'contingency tomorrow adds nonzero pressure');
 });
 
 // ── Tests: exportThreads ─────────────────────────────────────────────
@@ -830,6 +834,14 @@ OAD._bootAfterAuth = async function () {
       await OAD.importCourseData();
     }
     await OAD._saveToCloud();
+  } else {
+    // Cloud data loaded — migrate any arrays added after the user's initial seed.
+    // This handles the case where habits/ideas were added to the app after the user
+    // already had data in Supabase, so _seedData() was never run for those arrays.
+    var needsSave = false;
+    if (!OAD.DB.habits.length)  { OAD._seedHabits(); needsSave = true; }
+    if (!OAD.DB.ideas.length)   { OAD._seedIdeas();  needsSave = true; }
+    if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();
 };

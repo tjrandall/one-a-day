@@ -346,7 +346,11 @@ OAD._seedData = function () {
   OAD.DB.persona.tone_calibration.current_mode = 'problem-solving';
   OAD.DB.persona.tone_calibration.challenge_tolerance = 'medium';
 
-  // ── Seed habits — TJ's Plan of Life ───────────────────────────────────
+  OAD._seedHabits();
+  OAD._seedIdeas();
+};
+
+OAD._seedHabits = function () {
   OAD.addHabit(OAD.makeHabit({
     title: 'Morning Offering',
     frequency: 'daily', time_of_day: 'morning', life_area: 'Personal Growth',
@@ -403,9 +407,9 @@ OAD._seedData = function () {
     why: 'Sunday renewal of consecration to the Sacred Heart of Jesus.'
   }));
 
-  // ── Seed ideas — TJ's real Todoist data ───────────────────────────────
+};
 
-  // Creative incubation
+OAD._seedIdeas = function () {
   OAD.addIdea(OAD.makeIdea({
     title: 'NaNoWriMo: Book idea — Enemy',
     type: 'creative', energy_required: 'high',
@@ -493,3 +497,4 @@ OAD._seedData = function () {
     added_date: '2026-01-01'
   }));
 };
+
