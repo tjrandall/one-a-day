@@ -616,27 +616,39 @@ button.success:hover { opacity: .88; }
 .import-diff-new   { color: var(--open); }
 
 /* ── Daily Summary View ───────────────────────────────────────────────── */
-.ds-panel { padding: 24px; max-width: 780px; }
+/* ADA: every state uses icon + text label + border style, never color alone */
+.ds-panel { max-width: 780px; }
 .ds-header { margin-bottom: 20px; }
-.ds-header h2 { font-size: 22px; font-weight: 700; }
-.ds-date { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+.ds-header h2 { font-size: 22px; font-weight: 700; margin: 0; }
+.ds-date { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
 
-.ds-bucket { margin-bottom: 24px; }
+/* Bucket sections */
+.ds-bucket { margin-bottom: 28px; }
 .ds-bucket-header {
-  display: flex; align-items: center; gap: 10px;
-  margin-bottom: 8px; padding-bottom: 6px;
-  border-bottom: 2px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px; padding: 8px 12px; border-radius: 6px;
+  font-size: 0; /* children set their own size */
 }
-.ds-bucket-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-.ds-bucket-count { font-size: 11px; font-weight: 700; font-family: var(--mono); background: var(--surface2); padding: 1px 7px; border-radius: 99px; }
+.ds-bucket-icon  { font-size: 14px; line-height: 1; flex-shrink: 0; }
+.ds-bucket-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; flex: 1; }
+.ds-bucket-count { font-size: 11px; font-weight: 700; font-family: var(--mono); background: rgba(255,255,255,.08); padding: 2px 8px; border-radius: 99px; }
 
-.ds-label-overdue { border-color: var(--critical); }
-.ds-label-overdue .ds-bucket-label { color: var(--critical); }
-.ds-label-today   { border-color: var(--accent); }
-.ds-label-today   .ds-bucket-label { color: var(--accent); }
-.ds-label-week    { border-color: var(--border); }
-.ds-label-week    .ds-bucket-label { color: var(--text-muted); }
+/* Overdue bucket: icon ⚠ + filled background + dashed row borders */
+.ds-bucket-overdue .ds-bucket-header { background: #ff4d6d18; }
+.ds-bucket-overdue .ds-bucket-label  { color: var(--critical); }
+.ds-bucket-overdue .ds-bucket-icon   { color: var(--critical); }
+/* Today bucket: icon ▶ + accent tint */
+.ds-bucket-today   .ds-bucket-header { background: #6c63ff18; }
+.ds-bucket-today   .ds-bucket-label  { color: var(--accent); }
+.ds-bucket-today   .ds-bucket-icon   { color: var(--accent); }
+/* This Week: icon ○ + neutral */
+.ds-bucket-week    .ds-bucket-header { background: var(--surface2); }
+.ds-bucket-week    .ds-bucket-label  { color: var(--text-muted); }
+/* Active/undated: icon ◇ + subdued */
+.ds-bucket-active  .ds-bucket-header { background: var(--surface2); }
+.ds-bucket-active  .ds-bucket-label  { color: var(--text-muted); }
 
+/* Rows */
 .ds-row {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -647,28 +659,48 @@ button.success:hover { opacity: .88; }
   transition: background .1s;
 }
 .ds-row:hover { background: var(--surface2); }
-.ds-bucket-overdue .ds-row { border-left: 3px solid var(--critical); }
-.ds-bucket-today   .ds-row { border-left: 3px solid var(--accent); }
 
-.ds-row-main { display: flex; align-items: center; gap: 10px; }
-.ds-row-text { flex: 1; min-width: 0; }
-.ds-row-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ds-row-sub   { font-size: 12px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ds-overdue-days { font-size: 11px; font-weight: 700; color: var(--critical); white-space: nowrap; flex-shrink: 0; }
-.ds-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
-.ds-streak { font-size: 12px; }
-
-.ds-type-tag {
-  font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-  padding: 2px 6px; border-radius: 99px; flex-shrink: 0; white-space: nowrap;
+/* ADA row states: left border style+color + background tint */
+.ds-row-overdue {
+  border-left: 4px dashed var(--critical);  /* dashed = texture, not color alone */
+  background: #ff4d6d04;
 }
-.ds-type-cadence { background: #4cc9f018; color: var(--waiting); }
-.ds-type-habit   { background: #f7258518; color: var(--stalled); }
+.ds-row-today {
+  border-left: 4px solid var(--accent);
+  background: #6c63ff04;
+}
+.ds-row-week   { border-left: 4px solid var(--border); }
+.ds-row-active { border-left: 2px dotted var(--border); opacity: .85; }
+
+.ds-row-main { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
+.ds-row-text { flex: 1; min-width: 0; }
+.ds-row-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ds-row-sub   { font-size: 12px; color: var(--text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-no-action { font-style: italic; }
+.ds-meta-tag  { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.ds-streak    { font-size: 12px; flex-shrink: 0; }
+
+/* ADA text badges on individual rows — state name as text, not just color */
+.ds-status-badge {
+  font-size: 9px; font-weight: 800; letter-spacing: .08em;
+  padding: 1px 5px; border-radius: 3px; flex-shrink: 0; white-space: nowrap;
+}
+.ds-badge-overdue { background: var(--critical); color: #fff; }
+.ds-badge-today   { background: var(--accent);   color: #fff; }
+
+/* Type tags (cadence/habit) — icon + text */
+.ds-type-tag {
+  font-size: 10px; font-weight: 600; letter-spacing: .02em;
+  padding: 2px 7px; border-radius: 99px; flex-shrink: 0; white-space: nowrap;
+}
+.ds-type-cadence { background: #4cc9f018; color: var(--waiting); border: 1px solid #4cc9f030; }
+.ds-type-habit   { background: #6c63ff18; color: #a09cff;        border: 1px solid #6c63ff30; }
 
 .ds-habit-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
-.ds-note-input { font-size: 12px; padding: 4px 8px; width: 120px; }
+.ds-note-input { font-size: 12px; padding: 4px 8px; width: 100px; }
 
 .ds-all-clear {
   text-align: center; padding: 48px 24px;
-  color: var(--open); font-size: 16px; font-weight: 600;
+  font-size: 15px; font-weight: 600; color: var(--text-muted);
+  border: 2px dashed var(--border); border-radius: 12px; margin-top: 8px;
 }

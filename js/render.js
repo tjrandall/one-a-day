@@ -587,7 +587,6 @@ OAD.renderDailyView = function () {
   const todayStr = todayDt.toISOString().slice(0, 10);
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
-
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   // ── Threads ────────────────────────────────────────────────────────
@@ -599,6 +598,9 @@ OAD.renderDailyView = function () {
   const overdueThreads = active.filter(function (t) { return t.next_action_date && t.next_action_date < todayStr; });
   const todayThreads   = active.filter(function (t) { return t.next_action_date === todayStr; });
   const weekThreads    = active.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str; });
+  // Threads with no scheduled date — still active, still need attention
+  const scheduledSet   = new Set(overdueThreads.concat(todayThreads).concat(weekThreads).map(function (t) { return t.id; }));
+  const undatedThreads = active.filter(function (t) { return !scheduledSet.has(t.id); });
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.DB.cadences || [];
@@ -615,56 +617,61 @@ OAD.renderDailyView = function () {
   }
 
   const overdueHabits = activeHabits.filter(function (h) { return daysSince(h) >= 3; });
-
-  const dailyFreqs = ['daily', 'every workday', 'every-other-day'];
-  const todayHabits = activeHabits.filter(function (h) {
+  const dailyFreqs    = ['daily', 'every workday', 'every-other-day'];
+  const todayHabits   = activeHabits.filter(function (h) {
     if (overdueHabits.indexOf(h) !== -1) return false;
     if (h.last_checked_in === todayStr) return false;
     return dailyFreqs.indexOf(h.frequency) !== -1;
   });
-
   const weekHabits = activeHabits.filter(function (h) {
     if (overdueHabits.indexOf(h) !== -1) return false;
     if (h.frequency !== 'weekly') return false;
     return daysSince(h) >= 6;
   });
 
-  // ── Row renderers ──────────────────────────────────────────────────
+  // ── Row renderers — ADA: icon + text label + border style, not color alone ──
 
-  function threadRow(t) {
+  function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
-    const daysOver = t.next_action_date < todayStr
+    // ADA badge: text tag surfacing urgency state independently of color
+    var badge = '';
+    if (context === 'overdue') badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
+    if (context === 'today')   badge = '<span class="ds-status-badge ds-badge-today"   aria-label="Due today">TODAY</span>';
+    const daysOver = (context === 'overdue' && t.next_action_date)
       ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
       : null;
-    const dateHtml = daysOver !== null
-      ? '<span class="ds-overdue-days">' + daysOver + 'd overdue</span>'
+    const metaHtml = daysOver !== null
+      ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
       : (t.next_action_date > todayStr
-          ? '<span class="ds-date">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
+          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
           : '');
-    return '<div class="ds-row ds-thread" onclick="OAD.selectThread(' + t.id + ')">' +
+    const rowClass = 'ds-row ds-thread ds-row-' + (context || 'active');
+    return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
       '<div class="ds-row-main">' +
-        '<span class="pressure-badge ' + pc + '" style="flex-shrink:0">' + t._score + '</span>' +
+        '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + '</div>' +
-          (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '') +
+          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
+          (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
         '</div>' +
-        dateHtml +
+        metaHtml +
       '</div>' +
     '</div>';
   }
 
   function cadenceRow(c) {
     const isOverdue = OAD.cadenceOverdue(c);
-    return '<div class="ds-row ds-cadence">' +
+    const badge = isOverdue ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
+    const rowClass = 'ds-row ds-cadence ds-row-' + (isOverdue ? 'overdue' : 'today');
+    return '<div class="' + rowClass + '">' +
       '<div class="ds-row-main">' +
-        '<span class="ds-type-tag ds-type-cadence">cadence</span>' +
+        '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(c.title) + '</div>' +
-          (isOverdue && c.consequences
-            ? '<div class="ds-row-sub" style="color:var(--critical)">' + OAD.esc(c.consequences) + '</div>'
-            : '<div class="ds-row-sub">' + OAD.esc(c.recurrence) + '</div>') +
+          '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
+          '<div class="ds-row-sub">' + OAD.esc(c.recurrence) +
+            (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
+          'aria-label="Mark ' + OAD.esc(c.title) + ' done" ' +
           'onclick="event.stopPropagation();OAD._dailyMarkCadenceDone(' + c.id + ')">Mark Done</button>' +
       '</div>' +
     '</div>';
@@ -673,71 +680,73 @@ OAD.renderDailyView = function () {
   function habitRow(h) {
     const ds = daysSince(h);
     const subText = ds >= 3
-      ? 'Last checked in ' + (ds >= 999 ? 'never' : ds + ' days ago')
+      ? (ds >= 999 ? 'Never checked in' : 'Last checked in ' + ds + ' days ago')
       : h.frequency;
-    const streakHtml = h.current_streak > 0
-      ? '<span class="ds-streak">🔥 ' + h.current_streak + '</span>'
-      : '';
-    return '<div class="ds-row ds-habit" id="ds-habit-' + h.id + '">' +
+    const badge = ds >= 3 ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
+    const streakHtml = h.current_streak > 0 ? '<span class="ds-streak" aria-label="Streak ' + h.current_streak + ' days"> 🔥 ' + h.current_streak + '</span>' : '';
+    const rowClass = 'ds-row ds-habit ds-row-' + (ds >= 3 ? 'overdue' : 'today');
+    return '<div class="' + rowClass + '" id="ds-habit-' + h.id + '">' +
       '<div class="ds-row-main">' +
-        '<span class="ds-type-tag ds-type-habit">habit</span>' +
+        '<span class="ds-type-tag ds-type-habit" aria-label="Habit">✦ habit</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(h.title) + ' ' + streakHtml + '</div>' +
+          '<div class="ds-row-title">' + OAD.esc(h.title) + streakHtml + badge + '</div>' +
           '<div class="ds-row-sub">' + OAD.esc(subText) + '</div>' +
         '</div>' +
         '<div class="ds-habit-btns">' +
           '<input class="ds-note-input" id="ds-note-' + h.id + '" type="text" ' +
+            'aria-label="Reflection note for ' + OAD.esc(h.title) + '" ' +
             'placeholder="Note…" maxlength="120" onclick="event.stopPropagation()">' +
           '<button class="habit-yes" style="font-size:12px;padding:4px 12px" ' +
+            'aria-label="Yes, completed ' + OAD.esc(h.title) + '" ' +
             'onclick="event.stopPropagation();OAD._dailyCheckIn(' + h.id + ', true)">✓ Yes</button>' +
           '<button class="habit-no" style="font-size:12px;padding:4px 12px" ' +
+            'aria-label="No, did not complete ' + OAD.esc(h.title) + '" ' +
             'onclick="event.stopPropagation();OAD._dailyCheckIn(' + h.id + ', false)">✗ No</button>' +
         '</div>' +
       '</div>' +
     '</div>';
   }
 
-  function bucket(id, label, labelClass, items) {
+  // icon + text label in bucket header — not color alone
+  function bucket(id, icon, label, items) {
     if (!items.length) return '';
-    const count = items.length;
-    return '<div class="ds-bucket ds-bucket-' + id + '">' +
-      '<div class="ds-bucket-header ' + labelClass + '">' +
+    return '<section class="ds-bucket ds-bucket-' + id + '" aria-label="' + label + '">' +
+      '<h3 class="ds-bucket-header">' +
+        '<span class="ds-bucket-icon" aria-hidden="true">' + icon + '</span>' +
         '<span class="ds-bucket-label">' + label + '</span>' +
-        '<span class="ds-bucket-count">' + count + '</span>' +
-      '</div>' +
+        '<span class="ds-bucket-count" aria-label="' + items.length + ' items">' + items.length + '</span>' +
+      '</h3>' +
       items.join('') +
-    '</div>';
+    '</section>';
   }
 
-  const overdueItems = overdueThreads.map(threadRow)
+  const overdueItems = overdueThreads.map(function (t) { return threadRow(t, 'overdue'); })
     .concat(overdueCadences.map(cadenceRow))
     .concat(overdueHabits.map(habitRow));
 
-  const todayItems = todayThreads.map(threadRow)
+  const todayItems = todayThreads.map(function (t) { return threadRow(t, 'today'); })
     .concat(todayCadences.map(cadenceRow))
     .concat(todayHabits.map(habitRow));
 
-  const weekItems = weekThreads.map(threadRow)
+  const weekItems = weekThreads.map(function (t) { return threadRow(t, 'week'); })
     .concat(weekCadences.map(cadenceRow))
     .concat(weekHabits.map(habitRow));
 
-  const allEmpty = !overdueItems.length && !todayItems.length && !weekItems.length;
-
-  const body = allEmpty
-    ? '<div class="ds-all-clear">✓ All clear — nothing overdue, nothing due today or this week.</div>'
-    : bucket('overdue', 'Overdue', 'ds-label-overdue', overdueItems) +
-      bucket('today',   'Today',   'ds-label-today',   todayItems)   +
-      bucket('week',    'This Week','ds-label-week',    weekItems);
+  const activeItems = undatedThreads.map(function (t) { return threadRow(t, 'active'); });
 
   panel.innerHTML =
-    '<div class="ds-panel">' +
-      '<div class="ds-header">' +
-        '<div>' +
-          '<h2 style="margin:0">Daily Summary</h2>' +
-          '<div class="ds-date">' + OAD.esc(dateLabel) + '</div>' +
-        '</div>' +
-      '</div>' +
-      body +
+    '<div class="ds-panel" role="main">' +
+      '<header class="ds-header">' +
+        '<h2>Daily Summary</h2>' +
+        '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
+      '</header>' +
+      bucket('overdue', '⚠', 'Overdue', overdueItems) +
+      bucket('today',   '▶', 'Today',   todayItems)   +
+      bucket('week',    '○', 'This Week', weekItems)   +
+      bucket('active',  '◇', 'Active — no date set', activeItems) +
+      (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length
+        ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, nothing due today or this week.</div>'
+        : '') +
     '</div>';
 };
 
