@@ -614,3 +614,61 @@ button.success:hover { opacity: .88; }
 .import-diff-field { font-weight: 600; color: var(--text); }
 .import-diff-old   { color: var(--critical); }
 .import-diff-new   { color: var(--open); }
+
+/* ── Daily Summary View ───────────────────────────────────────────────── */
+.ds-panel { padding: 24px; max-width: 780px; }
+.ds-header { margin-bottom: 20px; }
+.ds-header h2 { font-size: 22px; font-weight: 700; }
+.ds-date { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+
+.ds-bucket { margin-bottom: 24px; }
+.ds-bucket-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px; padding-bottom: 6px;
+  border-bottom: 2px solid var(--border);
+}
+.ds-bucket-label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.ds-bucket-count { font-size: 11px; font-weight: 700; font-family: var(--mono); background: var(--surface2); padding: 1px 7px; border-radius: 99px; }
+
+.ds-label-overdue { border-color: var(--critical); }
+.ds-label-overdue .ds-bucket-label { color: var(--critical); }
+.ds-label-today   { border-color: var(--accent); }
+.ds-label-today   .ds-bucket-label { color: var(--accent); }
+.ds-label-week    { border-color: var(--border); }
+.ds-label-week    .ds-bucket-label { color: var(--text-muted); }
+
+.ds-row {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.ds-row:hover { background: var(--surface2); }
+.ds-bucket-overdue .ds-row { border-left: 3px solid var(--critical); }
+.ds-bucket-today   .ds-row { border-left: 3px solid var(--accent); }
+
+.ds-row-main { display: flex; align-items: center; gap: 10px; }
+.ds-row-text { flex: 1; min-width: 0; }
+.ds-row-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-row-sub   { font-size: 12px; color: var(--text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-overdue-days { font-size: 11px; font-weight: 700; color: var(--critical); white-space: nowrap; flex-shrink: 0; }
+.ds-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+.ds-streak { font-size: 12px; }
+
+.ds-type-tag {
+  font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  padding: 2px 6px; border-radius: 99px; flex-shrink: 0; white-space: nowrap;
+}
+.ds-type-cadence { background: #4cc9f018; color: var(--waiting); }
+.ds-type-habit   { background: #f7258518; color: var(--stalled); }
+
+.ds-habit-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.ds-note-input { font-size: 12px; padding: 4px 8px; width: 120px; }
+
+.ds-all-clear {
+  text-align: center; padding: 48px 24px;
+  color: var(--open); font-size: 16px; font-weight: 600;
+}

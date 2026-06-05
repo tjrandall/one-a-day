@@ -869,11 +869,9 @@ OAD._bootAfterAuth = async function () {
   OAD._finishBoot();
 };
 
-// Called once data is loaded and ready — renders the list and selects the first thread.
+// Called once data is loaded and ready — renders the daily summary as the default landing view.
 OAD._finishBoot = function () {
-  OAD.renderList();
-  const first = OAD.DB.threads[0];
-  if (first) OAD.selectThread(first.id);
+  OAD.renderDailyView();
 };
 
 OAD.boot = function () {
