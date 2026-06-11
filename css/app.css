@@ -680,6 +680,26 @@ button.success:hover { opacity: .88; }
 .ds-meta-tag  { font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 .ds-streak    { font-size: 12px; flex-shrink: 0; }
 
+/* Parent thread cards — child summary shown beneath the next action */
+.ds-row-parent { border-left-width: 3px; }
+.ds-children-summary {
+  display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap;
+}
+.ds-child-count {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12);
+  padding: 1px 7px; border-radius: 99px; color: var(--text-muted); flex-shrink: 0;
+}
+.ds-child-overdue {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+  background: #ff4d6d22; border: 1px solid #ff4d6d44;
+  padding: 1px 7px; border-radius: 99px; color: var(--critical); flex-shrink: 0;
+}
+.ds-child-next {
+  font-size: 11px; color: var(--text-muted); font-style: italic;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ADA text badges on individual rows — state name as text, not just color */
 .ds-status-badge {
   font-size: 9px; font-weight: 800; letter-spacing: .08em;

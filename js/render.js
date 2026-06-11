@@ -595,12 +595,40 @@ OAD.renderDailyView = function () {
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
-  const overdueThreads = active.filter(function (t) { return t.next_action_date && t.next_action_date < todayStr; });
-  const todayThreads   = active.filter(function (t) { return t.next_action_date === todayStr; });
-  const weekThreads    = active.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str; });
-  // Threads with no scheduled date — still active, still need attention
-  const scheduledSet   = new Set(overdueThreads.concat(todayThreads).concat(weekThreads).map(function (t) { return t.id; }));
-  const undatedThreads = active.filter(function (t) { return !scheduledSet.has(t.id); });
+  // ── Parent/child grouping ──────────────────────────────────────────
+  // Children with an active parent are suppressed from appearing as independent
+  // rows. The parent card surfaces child count and highest-pressure child's next action.
+  // Effective date for a parent = earliest of its own date and any child dates,
+  // so an overdue child pulls its parent into the overdue bucket.
+  const activeByUUID = {};
+  active.forEach(function (t) { activeByUUID[t.uuid] = t; });
+
+  const childrenByParentUUID = {};
+  active.forEach(function (t) {
+    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
+      if (!childrenByParentUUID[t.parent_uuid]) childrenByParentUUID[t.parent_uuid] = [];
+      childrenByParentUUID[t.parent_uuid].push(t);
+    }
+  });
+  const suppressedUUIDs = new Set();
+  Object.keys(childrenByParentUUID).forEach(function (puuid) {
+    childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
+  });
+
+  function effectiveDate(t) {
+    var d = t.next_action_date || '';
+    (childrenByParentUUID[t.uuid] || []).forEach(function (c) {
+      if (c.next_action_date && (!d || c.next_action_date < d)) d = c.next_action_date;
+    });
+    return d;
+  }
+
+  const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
+  const overdueThreads  = filteredActive.filter(function (t) { var ed = effectiveDate(t); return ed && ed < todayStr; });
+  const todayThreads    = filteredActive.filter(function (t) { var ed = effectiveDate(t); return ed === todayStr; });
+  const weekThreads     = filteredActive.filter(function (t) { var ed = effectiveDate(t); return ed > todayStr && ed <= in7Str; });
+  const scheduledSet    = new Set(overdueThreads.concat(todayThreads).concat(weekThreads).map(function (t) { return t.id; }));
+  const undatedThreads  = filteredActive.filter(function (t) { return !scheduledSet.has(t.id); });
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.DB.cadences || [];
@@ -645,13 +673,30 @@ OAD.renderDailyView = function () {
       : (t.next_action_date > todayStr
           ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
           : '');
-    const rowClass = 'ds-row ds-thread ds-row-' + (context || 'active');
+
+    // If this thread has active children, show a summary row beneath the title
+    const children = childrenByParentUUID[t.uuid] || [];
+    var childSummaryHtml = '';
+    if (children.length) {
+      const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
+      const overdueCount = children.filter(function (c) { return c.next_action_date && c.next_action_date < todayStr; }).length;
+      const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
+      childSummaryHtml =
+        '<div class="ds-children-summary">' +
+          '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
+          overdueTag +
+          (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
+        '</div>';
+    }
+
+    const rowClass = 'ds-row ds-thread ds-row-' + (context || 'active') + (children.length ? ' ds-row-parent' : '');
     return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
+          childSummaryHtml +
         '</div>' +
         metaHtml +
       '</div>' +

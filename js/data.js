@@ -131,6 +131,7 @@ OAD.makeThread = function (overrides) {
     weeklyCommitment: null,
     effortLogged: 0,
     connections: [],
+    parent_uuid: null,
     evolution_log: [],
     ai_insights: []
   }, overrides);
@@ -310,7 +311,13 @@ OAD.parseImportFile = function (jsonString) {
     const parsed = JSON.parse(jsonString);
     const rows = Array.isArray(parsed) ? parsed : (parsed.threads || []);
     if (!Array.isArray(rows)) return { error: 'Invalid format: expected a threads array.' };
-    const results = { create: [], update: [], invalid: [] };
+    const deletedUuids = Array.isArray(parsed.deleted_uuids) ? parsed.deleted_uuids : [];
+    const results = { create: [], update: [], close: [], invalid: [] };
+    // Collect threads to close from deleted_uuids
+    deletedUuids.forEach(function (uuid) {
+      const existing = OAD.getThreadByUUID(uuid);
+      if (existing && existing.status !== 'closed') results.close.push(existing);
+    });
     rows.forEach(function (row) {
       if (!row.title || typeof row.title !== 'string') {
         results.invalid.push(row);
@@ -329,27 +336,58 @@ OAD.parseImportFile = function (jsonString) {
   }
 };
 
+// Fields synced on import (all fields Claude can see and update in the web UI)
+OAD._IMPORT_FIELDS = [
+  'status', 'priority', 'life_area',
+  'closing_condition', 'closing_condition_type', 'closing_condition_met',
+  'current_assumption', 'assumption_verified',
+  'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
+  'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
+  'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
+  'connections', 'parent_uuid'
+];
+
 OAD.applyImport = function (results, confirmedUpdates) {
-  var created = 0, updated = 0;
+  var created = 0, updated = 0, closed = 0;
+
+  // Close threads flagged in deleted_uuids
+  (results.close || []).forEach(function (existing) {
+    OAD.updateThread(existing.id, { status: 'closed', closing_condition_met: true });
+    OAD.addEvolution(existing.id, 'Closed via import sync.');
+    closed++;
+  });
 
   (results.create || []).forEach(function (row) {
     const t = OAD.makeThread({
-      title:             row.title,
-      status:            row.status            || 'open',
-      priority:          row.priority          || 'medium',
-      life_area:         row.life_area         || 'Other',
-      closing_condition: row.closing_condition || '',
-      next_action:       row.next_action       || '',
-      next_action_date:  row.next_action_date  || ''
+      uuid:                     row.uuid || OAD._generateUUID(),
+      title:                    row.title,
+      status:                   row.status                   || 'open',
+      priority:                 row.priority                 || 'medium',
+      life_area:                row.life_area                || 'Other',
+      parent_uuid:              row.parent_uuid              || null,
+      closing_condition:        row.closing_condition        || '',
+      closing_condition_type:   row.closing_condition_type   || 'outcome',
+      closing_condition_met:    row.closing_condition_met    || false,
+      current_assumption:       row.current_assumption       || '',
+      assumption_verified:      row.assumption_verified      || false,
+      next_action:              row.next_action              || '',
+      next_action_date:         row.next_action_date         || '',
+      next_action_channel:      row.next_action_channel      || '',
+      next_action_contact:      row.next_action_contact      || '',
+      contingency_trigger_date: row.contingency_trigger_date || '',
+      contingency_action:       row.contingency_action       || '',
+      contingency_escalation:   row.contingency_escalation   || '',
+      deadline:                 row.deadline                 || null,
+      effortEstimate:           row.effortEstimate           || null,
+      weeklyCommitment:         row.weeklyCommitment         || null,
+      effortLogged:             row.effortLogged             || 0,
+      connections:              row.connections              || []
     });
     const added = OAD.addThread(t);
-    // Append imported evolution log entries
     (row.evolution_log || []).forEach(function (e) {
-      if (e.date && e.note) {
-        added.evolution_log.push({ date: e.date, note: e.note });
-      }
+      if (e.date && e.note) added.evolution_log.push({ date: e.date, note: e.note });
     });
-    OAD.addEvolution(added.id, 'Imported from export file.');
+    OAD.addEvolution(added.id, 'Created via import sync.');
     created++;
   });
 
@@ -358,16 +396,11 @@ OAD.applyImport = function (results, confirmedUpdates) {
     const existing = OAD.getThreadByUUID(item.incoming.uuid) || item.existing;
     const row      = item.incoming;
     const patch    = {};
-    if (row.status            && row.status !== existing.status)
-      patch.status = row.status;
-    if (row.priority          && row.priority !== existing.priority)
-      patch.priority = row.priority;
-    if (row.closing_condition !== undefined && row.closing_condition !== existing.closing_condition)
-      patch.closing_condition = row.closing_condition;
-    if (row.next_action !== undefined && row.next_action !== existing.next_action)
-      patch.next_action = row.next_action;
-    if (row.next_action_date !== undefined && row.next_action_date !== existing.next_action_date)
-      patch.next_action_date = row.next_action_date;
+    OAD._IMPORT_FIELDS.forEach(function (field) {
+      if (row[field] !== undefined && JSON.stringify(row[field]) !== JSON.stringify(existing[field])) {
+        patch[field] = row[field];
+      }
+    });
     if (Object.keys(patch).length) OAD.updateThread(existing.id, patch);
     // Append only new evolution entries (dedupe by date+note)
     const existingKeys = new Set(
@@ -378,32 +411,48 @@ OAD.applyImport = function (results, confirmedUpdates) {
         existing.evolution_log.push({ date: e.date, note: e.note });
       }
     });
-    OAD.addEvolution(existing.id, 'Updated via import.');
+    OAD.addEvolution(existing.id, 'Updated via import sync.');
     updated++;
   });
 
   OAD.saveDB();
-  return { created: created, updated: updated };
+  return { created: created, updated: updated, closed: closed };
 };
 
 OAD.exportThreads = function () {
-  // Ensure UUIDs are assigned before building the export — backfills any threads
-  // that predate this field, then persists so they remain stable across sessions.
+  // Ensure UUIDs and parent_uuid are assigned before building the export.
   OAD._normalizeDB();
   OAD.saveDB();
 
   const threads = (OAD.DB.threads || []).map(function (t) {
     return {
-      uuid:              t.uuid,
-      title:             t.title,
-      status:            t.status,
-      priority:          t.priority,
-      life_area:         t.life_area,
-      pressure:          OAD.pressure(t),
-      closing_condition: t.closing_condition || '',
-      next_action:       t.next_action || '',
-      next_action_date:  t.next_action_date || '',
-      evolution_log:     (t.evolution_log || []).map(function (e) {
+      uuid:                     t.uuid,
+      parent_uuid:              t.parent_uuid || null,
+      title:                    t.title,
+      status:                   t.status,
+      priority:                 t.priority,
+      life_area:                t.life_area,
+      pressure:                 OAD.pressure(t),
+      closing_condition:        t.closing_condition        || '',
+      closing_condition_type:   t.closing_condition_type   || 'outcome',
+      closing_condition_met:    t.closing_condition_met    || false,
+      current_assumption:       t.current_assumption       || '',
+      assumption_verified:      t.assumption_verified      || false,
+      next_action:              t.next_action              || '',
+      next_action_date:         t.next_action_date         || '',
+      next_action_channel:      t.next_action_channel      || '',
+      next_action_contact:      t.next_action_contact      || '',
+      contingency_trigger_date: t.contingency_trigger_date || '',
+      contingency_action:       t.contingency_action       || '',
+      contingency_escalation:   t.contingency_escalation   || '',
+      deadline:                 t.deadline                 || null,
+      effortEstimate:           t.effortEstimate           || null,
+      weeklyCommitment:         t.weeklyCommitment         || null,
+      effortLogged:             t.effortLogged             || 0,
+      connections:              (t.connections || []).map(function (c) {
+        return { to_uuid: c.to_uuid || null, to_label: c.to_label || '', edge_type: c.edge_type };
+      }),
+      evolution_log:            (t.evolution_log || []).map(function (e) {
         return { date: e.date, note: e.note };
       })
     };
@@ -413,7 +462,7 @@ OAD.exportThreads = function () {
     exported_at:   new Date().toISOString(),
     exported_by:   OAD._userId || 'local',
     thread_count:  threads.length,
-    note:          'Moat-safe export: graph edges, assumption audit, and counsel history excluded.',
+    note:          'Full export: includes graph edges, assumptions, and deadline data. AI insights and persona excluded.',
     threads:       threads
   }, null, 2);
 };
@@ -481,9 +530,10 @@ OAD._normalizeDB = function () {
   OAD.DB.cadences = OAD.DB.cadences || [];
   OAD.DB.habits   = OAD.DB.habits   || [];
   OAD.DB.ideas    = OAD.DB.ideas    || [];
-  // Backfill UUIDs for any threads created before this field existed
+  // Backfill UUIDs and parent_uuid for threads created before these fields existed
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
+    if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
   });
 };
 

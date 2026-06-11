@@ -116,14 +116,16 @@ OAD.test('pressure: contingency adds more pressure when closer (quadratic curve)
 
 // ── Tests: exportThreads ─────────────────────────────────────────────
 
-OAD.test('exportThreads: includes uuid and required fields, excludes moat data', function () {
+OAD.test('exportThreads: includes full thread data, excludes ai_insights and persona', function () {
   const t = OAD.addThread(OAD.makeThread({
     title: 'Export subject',
     status: 'open', priority: 'high', life_area: 'Career',
     closing_condition: 'Offer letter signed',
     next_action: 'Send follow-up', next_action_date: '2026-07-01',
-    connections: [{ to_label: 'Secret graph edge', edge_type: 'blocks' }],
+    connections: [{ to_uuid: 'abc-123', to_label: 'Blocker thread', edge_type: 'blocks' }],
     current_assumption: 'They will reply', assumption_verified: false,
+    deadline: '2026-08-01', effortEstimate: 4, weeklyCommitment: 1,
+    parent_uuid: null,
     ai_insights: [{ observation: 'Secret counsel' }]
   }));
   OAD.addEvolution(t.id, 'Did a thing');
@@ -131,23 +133,76 @@ OAD.test('exportThreads: includes uuid and required fields, excludes moat data',
   const parsed = JSON.parse(OAD.exportThreads());
   const row = parsed.threads.find(function (x) { return x.uuid === t.uuid; });
 
-  OAD._assert(!!row,                            'thread present in export (matched by uuid)');
-  OAD._assert('uuid'              in row,       'uuid included');
-  OAD._assert('title'             in row,       'title included');
-  OAD._assert('status'            in row,       'status included');
-  OAD._assert('priority'          in row,       'priority included');
-  OAD._assert('life_area'         in row,       'life_area included');
-  OAD._assert('pressure'          in row,       'pressure included');
-  OAD._assert('closing_condition' in row,       'closing_condition included');
-  OAD._assert('next_action'       in row,       'next_action included');
-  OAD._assert('next_action_date'  in row,       'next_action_date included');
-  OAD._assert(row.evolution_log.length > 0,     'evolution_log included');
-  OAD._assert(!('connections'         in row),  'connections excluded — graph is moat');
-  OAD._assert(!('current_assumption'  in row),  'assumption excluded');
-  OAD._assert(!('assumption_verified' in row),  'assumption_verified excluded');
-  OAD._assert(!('ai_insights'         in row),  'ai_insights excluded');
-  OAD._assert('exported_at'   in parsed,        'export has timestamp');
-  OAD._assert('thread_count'  in parsed,        'export has thread_count');
+  OAD._assert(!!row,                                  'thread present in export (matched by uuid)');
+  OAD._assert('uuid'                     in row,      'uuid included');
+  OAD._assert('parent_uuid'              in row,      'parent_uuid included');
+  OAD._assert('title'                    in row,      'title included');
+  OAD._assert('status'                   in row,      'status included');
+  OAD._assert('priority'                 in row,      'priority included');
+  OAD._assert('life_area'                in row,      'life_area included');
+  OAD._assert('pressure'                 in row,      'pressure included');
+  OAD._assert('closing_condition'        in row,      'closing_condition included');
+  OAD._assert('current_assumption'       in row,      'current_assumption included');
+  OAD._assert('assumption_verified'      in row,      'assumption_verified included');
+  OAD._assert('next_action'              in row,      'next_action included');
+  OAD._assert('next_action_date'         in row,      'next_action_date included');
+  OAD._assert('deadline'                 in row,      'deadline included');
+  OAD._assert('effortEstimate'           in row,      'effortEstimate included');
+  OAD._assert('connections'              in row,      'connections included');
+  OAD._assert(row.connections.length > 0,            'connections array exported');
+  OAD._assertEqual(row.connections[0].to_uuid, 'abc-123', 'connection to_uuid preserved');
+  OAD._assert(row.evolution_log.length > 0,          'evolution_log included');
+  OAD._assert(!('ai_insights' in row),               'ai_insights excluded');
+  OAD._assert('exported_at'   in parsed,             'export has timestamp');
+  OAD._assert('thread_count'  in parsed,             'export has thread_count');
+});
+
+OAD.test('makeThread: parent_uuid defaults to null', function () {
+  const t = OAD.makeThread({ title: 'Child candidate' });
+  OAD._assert(Object.prototype.hasOwnProperty.call(t, 'parent_uuid'), 'parent_uuid field exists');
+  OAD._assertEqual(t.parent_uuid, null, 'parent_uuid defaults to null');
+});
+
+OAD.test('pressure: bleed-up uses to_uuid when present, ignores stale title', function () {
+  const blocked = OAD.addThread(OAD.makeThread({ title: 'Stall target', status: 'stalled', priority: 'low', connections: [] }));
+  // Edge stores UUID of blocked thread; to_label is intentionally wrong (stale title)
+  const blocker = OAD.makeThread({ status: 'open', priority: 'low', connections: [
+    { to_uuid: blocked.uuid, to_label: 'WRONG STALE TITLE', edge_type: 'blocks' }
+  ]});
+  const blockerNoConn = OAD.makeThread({ status: 'open', priority: 'low', connections: [] });
+  OAD._assert(OAD.pressure(blocker) > OAD.pressure(blockerNoConn), 'UUID-resolved bleed-up should add pressure even with wrong to_label');
+});
+
+OAD.test('parseImportFile: deleted_uuids populates close list', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'To be closed' }));
+  const json = JSON.stringify({ threads: [], deleted_uuids: [t.uuid] });
+  const results = OAD.parseImportFile(json);
+  OAD._assert(!results.error, 'no error');
+  OAD._assertEqual(results.close.length, 1, 'one thread queued for close');
+  OAD._assertEqual(results.close[0].id, t.id, 'correct thread identified');
+});
+
+OAD.test('applyImport: closes threads in deleted_uuids', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Close me via import', status: 'open' }));
+  OAD.applyImport({ create: [], update: [], close: [t] }, []);
+  OAD._assertEqual(OAD.getThread(t.id).status, 'closed', 'thread status set to closed');
+  OAD._assert(OAD.getThread(t.id).closing_condition_met, 'closing_condition_met set true');
+});
+
+OAD.test('applyImport: syncs connections and parent_uuid on update', function () {
+  const parent = OAD.addThread(OAD.makeThread({ title: 'Parent thread' }));
+  const child  = OAD.addThread(OAD.makeThread({ title: 'Child thread', parent_uuid: null }));
+  const newConn = [{ to_uuid: parent.uuid, to_label: 'Parent thread', edge_type: 'enables' }];
+  const updateItem = {
+    incoming: { uuid: child.uuid, title: child.title, status: 'open',
+      parent_uuid: parent.uuid, connections: newConn },
+    existing: child
+  };
+  OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
+  const updated = OAD.getThread(child.id);
+  OAD._assertEqual(updated.parent_uuid, parent.uuid, 'parent_uuid synced from import');
+  OAD._assertEqual(updated.connections.length, 1,    'connections synced from import');
+  OAD._assertEqual(updated.connections[0].to_uuid, parent.uuid, 'connection to_uuid correct');
 });
 
 // ── Tests: importThreads ─────────────────────────────────────────────

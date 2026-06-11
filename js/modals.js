@@ -287,6 +287,11 @@ OAD.openConnectionModal = function (id) {
   if (!t) return;
   const edgeOpts = OAD.EDGE_TYPES.map(e =>
     `<option value="${e}">${e}</option>`).join('');
+  // Datalist of existing thread titles for UUID resolution on save
+  const threadOpts = (OAD.DB.threads || [])
+    .filter(function (x) { return x.id !== id && x.status !== 'closed'; })
+    .map(function (x) { return `<option value="${OAD.esc(x.title)}">`; })
+    .join('');
   OAD.openModal(`
     <h2>Add Connection — ${OAD.esc(t.title)}</h2>
     <div class="field">
@@ -294,13 +299,16 @@ OAD.openConnectionModal = function (id) {
       <select id="f-edge-type">${edgeOpts}</select>
     </div>
     <div class="field">
-      <label>Connected Thread / Label</label>
-      <input id="f-edge-label" type="text" placeholder="Name of the related thread or item">
+      <label>Connected Thread</label>
+      <input id="f-edge-label" type="text" list="f-edge-thread-list"
+        placeholder="Type to search threads, or enter any label">
+      <datalist id="f-edge-thread-list">${threadOpts}</datalist>
     </div>
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveConnection(${id})">Add</button>
     </div>`);
+  setTimeout(() => document.getElementById('f-edge-label')?.focus(), 50);
 };
 
 OAD._saveConnection = function (id) {
@@ -308,9 +316,14 @@ OAD._saveConnection = function (id) {
   if (!t) return;
   const edge_type = document.getElementById('f-edge-type')?.value;
   const to_label  = document.getElementById('f-edge-label')?.value.trim();
-  if (!to_label) { alert('Enter a label.'); return; }
-  t.connections.push({ to_label, edge_type });
-  OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}`);
+  if (!to_label) { alert('Enter a thread name or label.'); return; }
+  // Resolve UUID if the label matches an existing thread title (case-insensitive)
+  const match = (OAD.DB.threads || []).find(function (x) {
+    return x.id !== id && x.title.toLowerCase() === to_label.toLowerCase();
+  });
+  const to_uuid = match ? match.uuid : null;
+  t.connections.push({ to_uuid, to_label, edge_type });
+  OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}${to_uuid ? '' : ' (external)'}`);
   OAD.closeModal();
   OAD.renderList();
   OAD.renderDetail(id);

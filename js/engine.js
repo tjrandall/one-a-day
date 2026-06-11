@@ -24,10 +24,17 @@ OAD.pressure = function (thread, _inBleedUp) {
     var blockingConns = (thread.connections || []).filter(function (c) { return c.edge_type === 'blocks'; });
     var bleedUp = 0;
     blockingConns.forEach(function (c) {
-      var label = (c.to_label || '').toLowerCase();
-      var blocked = (OAD.DB.threads || []).find(function (t) {
-        return t !== thread && t.title.toLowerCase() === label;
-      });
+      // UUID lookup first (stable); fall back to title match for legacy edges
+      var blocked = null;
+      if (c.to_uuid) {
+        blocked = (OAD.DB.threads || []).find(function (t) { return t.uuid === c.to_uuid; }) || null;
+      }
+      if (!blocked && c.to_label) {
+        var label = c.to_label.toLowerCase();
+        blocked = (OAD.DB.threads || []).find(function (t) {
+          return t !== thread && t.title.toLowerCase() === label;
+        });
+      }
       bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
     });
     score += Math.min(Math.round(bleedUp), 20);
