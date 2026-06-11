@@ -176,6 +176,92 @@ OAD.prevCadenceDue = function (recurrence) {
   return null;
 };
 
+// Returns bidirectional graph context for a thread.
+// blocks[]   — threads this thread is blocking (outbound blocks edges)
+// blockedBy[] — threads blocking this one (reverse lookup: other threads' blocks edges pointing here)
+// enables[], relates[] — other outbound edge types
+OAD.getGraphContext = function (threadId) {
+  var thread = OAD.getThread(threadId);
+  if (!thread) return { blocks: [], blockedBy: [], enables: [], relates: [] };
+  var threads = OAD.DB.threads || [];
+
+  function resolveEdge(c) {
+    var target = null;
+    if (c.to_uuid) target = threads.find(function (t) { return t.uuid === c.to_uuid; }) || null;
+    if (!target && c.to_label) {
+      var lbl = c.to_label.toLowerCase();
+      target = threads.find(function (t) { return t.id !== threadId && t.title.toLowerCase() === lbl; }) || null;
+    }
+    return { label: c.to_label || '', uuid: c.to_uuid || null, thread: target };
+  }
+
+  var conns = thread.connections || [];
+  return {
+    blocks:    conns.filter(function (c) { return c.edge_type === 'blocks';  }).map(resolveEdge),
+    enables:   conns.filter(function (c) { return c.edge_type === 'enables'; }).map(resolveEdge),
+    relates:   conns.filter(function (c) { return c.edge_type === 'relates'; }).map(resolveEdge),
+    blockedBy: threads.filter(function (t) {
+      if (t.id === threadId || t.status === 'closed') return false;
+      return (t.connections || []).some(function (c) {
+        if (c.edge_type !== 'blocks') return false;
+        return c.to_uuid ? c.to_uuid === thread.uuid
+          : (c.to_label || '').toLowerCase() === thread.title.toLowerCase();
+      });
+    })
+  };
+};
+
+// Returns life-area heat data: [{name, count, avgPressure, stalled}] sorted by avgPressure desc.
+OAD.getLifeAreaHeat = function () {
+  var map = {};
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.status === 'closed') return;
+    var a = t.life_area || 'Other';
+    if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
+    map[a].count++;
+    map[a].total += OAD.pressure(t);
+    if (t.status === 'stalled') map[a].stalled++;
+  });
+  return Object.keys(map).map(function (name) {
+    var d = map[name];
+    return { name: name, count: d.count, avgPressure: d.count ? Math.round(d.total / d.count) : 0, stalled: d.stalled };
+  }).sort(function (a, b) { return b.avgPressure - a.avgPressure; });
+};
+
+// Selects the single highest-priority actionable thread for the "Focus Now" card.
+// Prefers threads with a next action set; falls back to highest pressure overall.
+OAD.selectFocusThread = function () {
+  var candidates = (OAD.DB.threads || [])
+    .filter(function (t) { return t.status !== 'closed'; })
+    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
+    .sort(function (a, b) { return b._score - a._score; });
+  if (!candidates.length) return null;
+  var actionable = candidates.filter(function (t) { return t.next_action || t.next_action_date; });
+  return actionable.length ? actionable[0] : candidates[0];
+};
+
+// Builds a human-readable reason string explaining why a thread is the focus.
+OAD.focusReason = function (t) {
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var parts = [];
+  if (t.status === 'stalled')  parts.push('stalled');
+  if (t.status === 'waiting')  parts.push('waiting on response');
+  if (t.next_action_date && t.next_action_date < todayStr) {
+    var daysOver = Math.round((new Date(todayStr) - new Date(t.next_action_date + 'T00:00:00')) / 86400000);
+    parts.push(daysOver + 'd overdue');
+  } else if (t.next_action_date === todayStr) {
+    parts.push('due today');
+  }
+  if (!t.assumption_verified && t.current_assumption) parts.push('unverified assumption');
+  var ctx = OAD.getGraphContext(t.id);
+  if (ctx.blocks.length)     parts.push('blocking ' + ctx.blocks.length + ' thread' + (ctx.blocks.length !== 1 ? 's' : ''));
+  if (ctx.blockedBy.length)  parts.push('blocked by ' + ctx.blockedBy.length + ' thread' + (ctx.blockedBy.length !== 1 ? 's' : ''));
+  var ds = OAD.deadlineState(t);
+  if (ds && !ds.onTrack)     parts.push(ds.behindBy + ' session' + (ds.behindBy !== 1 ? 's' : '') + ' behind deadline');
+  else if (ds && ds.daysRemaining <= 7) parts.push('deadline in ' + ds.daysRemaining + 'd');
+  return parts.join(' · ') || t.priority + ' priority';
+};
+
 OAD.cadenceOverdue = function (cadence) {
   if (!cadence.next_due) return false;
   const today = new Date();

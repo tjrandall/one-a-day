@@ -109,13 +109,37 @@ OAD.renderDetail = function (id) {
   const contingencyClass = contingencyDays !== null && contingencyDays < 3 ? 'contingency-urgent'
     : contingencyDays !== null && contingencyDays < 7 ? 'contingency-warn' : '';
 
-  const connectionsHtml = (t.connections || []).length
-    ? `<div class="connection-list">${t.connections.map(c => `
-        <div class="connection-item">
-          <span class="edge-type ${OAD.esc(c.edge_type)}">${OAD.esc(c.edge_type)}</span>
-          <span>${OAD.esc(c.to_label)}</span>
-        </div>`).join('')}</div>`
-    : '<span class="text-muted text-sm">No connections</span>';
+  const gctx = OAD.getGraphContext(t.id);
+
+  function graphRow(icon, label, thread) {
+    const pressureHtml = thread && thread.status !== 'closed'
+      ? '<span class="graph-row-pressure ' + OAD.pressureClass(OAD.pressure(thread)) + '">' + OAD.pressure(thread) + '</span>'
+      : '';
+    const clickable = thread
+      ? ' role="button" onclick="OAD.selectThread(' + thread.id + ')" style="cursor:pointer"'
+      : '';
+    return '<div class="graph-row"' + clickable + '>' +
+      '<span class="graph-row-icon">' + icon + '</span>' +
+      '<span class="graph-row-label">' + OAD.esc(label) + '</span>' +
+      pressureHtml +
+    '</div>';
+  }
+
+  const blocksRows    = gctx.blocks.map(function (e)    { return graphRow('→', e.label, e.thread); });
+  const blockedByRows = gctx.blockedBy.map(function (t) { return graphRow('←', t.title, t); });
+  const enablesRows   = gctx.enables.map(function (e)   { return graphRow('↗', e.label, e.thread); });
+  const relatesRows   = gctx.relates.map(function (e)   { return graphRow('~', e.label, e.thread); });
+
+  const allRows = blockedByRows.concat(blocksRows).concat(enablesRows).concat(relatesRows);
+  const connectionsHtml = allRows.length
+    ? '<div class="graph-legend">' +
+        (blockedByRows.length  ? '<span class="graph-legend-item"><span class="graph-row-icon">←</span> blocked by</span>' : '') +
+        (blocksRows.length     ? '<span class="graph-legend-item"><span class="graph-row-icon">→</span> blocks</span>' : '') +
+        (enablesRows.length    ? '<span class="graph-legend-item"><span class="graph-row-icon">↗</span> enables</span>' : '') +
+        (relatesRows.length    ? '<span class="graph-legend-item"><span class="graph-row-icon">~</span> relates</span>'  : '') +
+      '</div>' +
+      '<div class="graph-list">' + allRows.join('') + '</div>'
+    : '<span class="text-muted text-sm">No connections — add one to wire this thread into the graph</span>';
 
   const deadlineHtml = (function () {
     if (!t.deadline) return '';
@@ -230,8 +254,8 @@ OAD.renderDetail = function (id) {
       ` : '<span class="text-muted text-sm">No contingency set</span>'}
     </div>
 
-    <div class="card">
-      <div class="card-title">Connections</div>
+    <div class="card graph-card">
+      <div class="card-title">Graph</div>
       ${connectionsHtml}
       <button class="ghost mt-8" style="font-size:12px;padding:5px 10px" onclick="OAD.openConnectionModal(${t.id})">+ Add Connection</button>
     </div>
@@ -779,12 +803,61 @@ OAD.renderDailyView = function () {
 
   const activeItems = undatedThreads.map(function (t) { return threadRow(t, 'active'); });
 
+  // ── Focus Now card ─────────────────────────────────────────────────
+  const focusThread = OAD.selectFocusThread();
+  var focusCardHtml = '';
+  if (focusThread) {
+    const fpc   = OAD.pressureClass(focusThread._score);
+    const freason = OAD.focusReason(focusThread);
+    const fctx  = OAD.getGraphContext(focusThread.id);
+    const blockedByHtml = fctx.blockedBy.length
+      ? '<div class="focus-blocked-by">Blocked by: ' +
+          fctx.blockedBy.map(function (b) { return OAD.esc(b.title); }).join(', ') +
+        '</div>'
+      : '';
+    focusCardHtml =
+      '<div class="focus-card" role="button" onclick="OAD.selectThread(' + focusThread.id + ')" ' +
+          'aria-label="Focus: ' + OAD.esc(focusThread.title) + '">' +
+        '<div class="focus-card-header">' +
+          '<span class="focus-label">FOCUS NOW</span>' +
+          '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
+        '</div>' +
+        '<div class="focus-title">' + OAD.esc(focusThread.title) + '</div>' +
+        '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
+        '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
+        (focusThread.next_action
+          ? '<div class="focus-next"><span class="focus-next-label">Next:</span> ' + OAD.esc(focusThread.next_action) + '</div>'
+          : '') +
+        blockedByHtml +
+      '</div>';
+  }
+
+  // ── Life-area heat map ──────────────────────────────────────────────
+  const areaHeat = OAD.getLifeAreaHeat();
+  var heatMapHtml = '';
+  if (areaHeat.length) {
+    heatMapHtml = '<div class="area-heat-map" role="list" aria-label="Life area heat">' +
+      areaHeat.map(function (a) {
+        const heat = a.avgPressure >= 60 ? 'hot' : a.avgPressure >= 30 ? 'warm' : 'cool';
+        const stalledTag = a.stalled ? '<span class="area-stalled">' + a.stalled + ' stalled</span>' : '';
+        return '<div class="area-chip area-chip-' + heat + '" role="listitem" ' +
+          'aria-label="' + OAD.esc(a.name) + ' ' + a.count + ' threads avg pressure ' + a.avgPressure + '">' +
+          '<span class="area-chip-name">' + OAD.esc(a.name) + '</span>' +
+          '<span class="area-chip-score">' + a.avgPressure + '</span>' +
+          stalledTag +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+
   panel.innerHTML =
     '<div class="ds-panel" role="main">' +
       '<header class="ds-header">' +
         '<h2>Daily Summary</h2>' +
         '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
       '</header>' +
+      focusCardHtml +
+      heatMapHtml +
       bucket('overdue', '⚠', 'Overdue', overdueItems) +
       bucket('today',   '▶', 'Today',   todayItems)   +
       bucket('week',    '○', 'This Week', weekItems)   +

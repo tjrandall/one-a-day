@@ -724,3 +724,88 @@ button.success:hover { opacity: .88; }
   font-size: 15px; font-weight: 600; color: var(--text-muted);
   border: 2px dashed var(--border); border-radius: 12px; margin-top: 8px;
 }
+
+/* ── Focus Now card ─────────────────────────────────────────────────── */
+.focus-card {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid var(--accent-dim);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-bottom: 16px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.focus-card:hover { border-color: var(--accent); background: #1e1e38; }
+
+.focus-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px;
+}
+.focus-label {
+  font-size: 10px; font-weight: 800; letter-spacing: .14em;
+  color: var(--accent); text-transform: uppercase;
+}
+.focus-pressure { font-size: 15px !important; padding: 4px 10px !important; }
+
+.focus-title {
+  font-size: 18px; font-weight: 700; color: var(--text);
+  line-height: 1.3; margin-bottom: 4px;
+}
+.focus-meta {
+  font-size: 12px; color: var(--text-muted); margin-bottom: 8px;
+  text-transform: uppercase; letter-spacing: .04em;
+}
+.focus-reason {
+  font-size: 12px; color: var(--text-muted); font-style: italic;
+  margin-bottom: 12px; padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.focus-next {
+  font-size: 14px; color: var(--text); font-weight: 500;
+}
+.focus-next-label {
+  font-size: 11px; font-weight: 700; color: var(--accent);
+  text-transform: uppercase; letter-spacing: .06em; margin-right: 4px;
+}
+.focus-blocked-by {
+  margin-top: 8px; font-size: 12px; color: var(--critical);
+}
+
+/* ── Life-area heat map ─────────────────────────────────────────────── */
+.area-heat-map {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 20px;
+}
+.area-chip {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 99px;
+  font-size: 11px; font-weight: 600; border: 1px solid transparent;
+  white-space: nowrap;
+}
+.area-chip-hot  { background: #ff4d6d18; border-color: #ff4d6d55; color: var(--critical); }
+.area-chip-warm { background: #ffd16618; border-color: #ffd16655; color: var(--medium); }
+.area-chip-cool { background: rgba(255,255,255,.04); border-color: var(--border); color: var(--text-muted); }
+.area-chip-name { }
+.area-chip-score { font-family: var(--mono); font-size: 10px; opacity: .8; }
+.area-stalled { font-size: 9px; font-weight: 700; background: #f7258520; color: var(--stalled);
+  padding: 1px 5px; border-radius: 99px; }
+
+/* ── Graph card in thread detail ────────────────────────────────────── */
+.graph-card { }
+.graph-legend {
+  display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.graph-legend-item { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 4px; }
+.graph-list { display: flex; flex-direction: column; gap: 6px; }
+.graph-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px; border-radius: 6px;
+  background: var(--surface2); font-size: 13px;
+  transition: background .12s;
+}
+.graph-row[role="button"]:hover { background: #2a2a42; }
+.graph-row-icon { font-size: 14px; color: var(--text-muted); flex-shrink: 0; width: 16px; text-align: center; }
+.graph-row-label { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-row-pressure { font-size: 11px; font-family: var(--mono); font-weight: 700;
+  padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
