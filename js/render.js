@@ -5,7 +5,7 @@ OAD._activeId = null;
 OAD.renderList = function () {
   const query   = (document.getElementById('search-input')?.value || '').toLowerCase();
   const threads = OAD.DB.threads
-    .filter(t => !query || t.title.toLowerCase().includes(query) || t.life_area.toLowerCase().includes(query))
+    .filter(t => !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query))
     .map(t => ({ ...t, _score: OAD.pressure(t) }))
     .sort((a, b) => b._score - a._score);
 

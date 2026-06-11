@@ -32,7 +32,7 @@ OAD.pressure = function (thread, _inBleedUp) {
       if (!blocked && c.to_label) {
         var label = c.to_label.toLowerCase();
         blocked = (OAD.DB.threads || []).find(function (t) {
-          return t !== thread && t.title.toLowerCase() === label;
+          return t !== thread && (t.title || '').toLowerCase() === label;
         });
       }
       bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
@@ -190,7 +190,7 @@ OAD.getGraphContext = function (threadId) {
     if (c.to_uuid) target = threads.find(function (t) { return t.uuid === c.to_uuid; }) || null;
     if (!target && c.to_label) {
       var lbl = c.to_label.toLowerCase();
-      target = threads.find(function (t) { return t.id !== threadId && t.title.toLowerCase() === lbl; }) || null;
+      target = threads.find(function (t) { return t.id !== threadId && (t.title || '').toLowerCase() === lbl; }) || null;
     }
     return { label: c.to_label || '', uuid: c.to_uuid || null, thread: target };
   }
@@ -205,7 +205,7 @@ OAD.getGraphContext = function (threadId) {
       return (t.connections || []).some(function (c) {
         if (c.edge_type !== 'blocks') return false;
         return c.to_uuid ? c.to_uuid === thread.uuid
-          : (c.to_label || '').toLowerCase() === thread.title.toLowerCase();
+          : (c.to_label || '').toLowerCase() === (thread.title || '').toLowerCase();
       });
     })
   };
