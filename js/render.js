@@ -850,6 +850,38 @@ OAD.renderDailyView = function () {
     '</div>';
   }
 
+  // ── This Week's Load ───────────────────────────────────────────────
+  // One line per day for the next 7 days: date + item count + text label.
+  // Text label (Clear / Busy / Heavy) is the primary signal — color is secondary.
+  const weekLoadHtml = (function () {
+    var rows = '';
+    for (var di = 0; di < 7; di++) {
+      var dayDt = new Date(todayDt);
+      dayDt.setDate(dayDt.getDate() + di);
+      var dayStr = dayDt.toISOString().slice(0, 10);
+      var threadCount  = active.filter(function (t) { return t.next_action_date === dayStr; }).length;
+      var cadenceCount = cads.filter(function (c)  { return c.next_due === dayStr; }).length;
+      var total = threadCount + cadenceCount;
+      var label    = total >= 3 ? 'Heavy' : total === 2 ? 'Busy' : 'Clear';
+      var labelCls = total >= 3 ? 'load-row-heavy' : total === 2 ? 'load-row-busy' : 'load-row-clear';
+      var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      rows +=
+        '<div class="load-row ' + labelCls + '" aria-label="' +
+            OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + label + '">' +
+          '<span class="load-day">'   + OAD.esc(dayLabel) + '</span>' +
+          '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
+          '<span class="load-label">' + OAD.esc(label) + '</span>' +
+        '</div>';
+    }
+    return '<section class="ds-week-load" aria-label="This week\'s load">' +
+      '<h3 class="ds-bucket-header">' +
+        '<span class="ds-bucket-icon" aria-hidden="true">▤</span>' +
+        '<span class="ds-bucket-label">This Week\'s Load</span>' +
+      '</h3>' +
+      rows +
+    '</section>';
+  }());
+
   panel.innerHTML =
     '<div class="ds-panel" role="main">' +
       '<header class="ds-header">' +
@@ -862,6 +894,7 @@ OAD.renderDailyView = function () {
       bucket('today',   '▶', 'Today',   todayItems)   +
       bucket('week',    '○', 'This Week', weekItems)   +
       bucket('active',  '◇', 'Active — no date set', activeItems) +
+      weekLoadHtml +
       (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length
         ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, nothing due today or this week.</div>'
         : '') +

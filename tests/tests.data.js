@@ -306,25 +306,7 @@ OAD._seedData = function () {
     ai_insights: []
   }));
 
-  OAD.addCadence(OAD.makeCadence({
-    title: 'Pay the Bills (1st)',
-    life_area: 'finances',
-    recurrence: 'monthly-1st',
-    last_completed: '2026-05-01',
-    next_due: '2026-06-01',
-    notes: 'Review all bills: credit cards, utilities, subscriptions',
-    consequences: 'Late fees, service disruption'
-  }));
-
-  OAD.addCadence(OAD.makeCadence({
-    title: 'Pay the Bills (15th)',
-    life_area: 'finances',
-    recurrence: 'monthly-15th',
-    last_completed: '2026-05-15',
-    next_due: '2026-06-15',
-    notes: 'Mid-month bill review and payments',
-    consequences: 'Late fees, service disruption'
-  }));
+  OAD._seedCadences();
 
   OAD.DB.persona.life_context.pressure_level = 'high';
   OAD.DB.persona.life_context.hard_deadline = '2026-11-30';
@@ -348,6 +330,38 @@ OAD._seedData = function () {
 
   OAD._seedHabits();
   OAD._seedIdeas();
+};
+
+OAD._seedCadences = function () {
+  OAD.addCadence(OAD.makeCadence({
+    title: 'Pay the Bills (1st)',
+    life_area: 'finances',
+    recurrence: 'monthly-1st',
+    last_completed: '2026-05-01',
+    next_due: '2026-06-01',
+    notes: 'Review all bills: credit cards, utilities, subscriptions',
+    consequences: 'Late fees, service disruption'
+  }));
+
+  OAD.addCadence(OAD.makeCadence({
+    title: 'Pay the Bills (15th)',
+    life_area: 'finances',
+    recurrence: 'monthly-15th',
+    last_completed: '2026-05-15',
+    next_due: '2026-06-15',
+    notes: 'Mid-month bill review and payments',
+    consequences: 'Late fees, service disruption'
+  }));
+
+  OAD.addCadence(OAD.makeCadence({
+    title: 'Monthly Bills Review',
+    life_area: 'Finance',
+    recurrence: 'monthly-15th',
+    last_completed: null,
+    next_due: '2026-06-15',
+    notes: 'Monthly bills review — all accounts and subscriptions',
+    consequences: 'Missed payments, late fees'
+  }));
 };
 
 OAD._seedHabits = function () {

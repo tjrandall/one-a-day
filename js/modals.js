@@ -599,7 +599,7 @@ OAD._previewImport = function (jsonString) {
 };
 
 OAD._diffImportItem = function (item) {
-  const fields = ['status', 'priority', 'closing_condition', 'next_action', 'next_action_date'];
+  const fields = ['title', 'status', 'priority', 'closing_condition', 'next_action', 'next_action_date'];
   const diffs = [];
   fields.forEach(function (f) {
     const incoming = item.incoming[f] != null ? String(item.incoming[f]) : '';

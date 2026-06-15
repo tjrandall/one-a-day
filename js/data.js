@@ -338,6 +338,7 @@ OAD.parseImportFile = function (jsonString) {
 
 // Fields synced on import (all fields Claude can see and update in the web UI)
 OAD._IMPORT_FIELDS = [
+  'title',
   'status', 'priority', 'life_area',
   'closing_condition', 'closing_condition_type', 'closing_condition_met',
   'current_assumption', 'assumption_verified',
@@ -535,6 +536,24 @@ OAD._normalizeDB = function () {
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
   });
+};
+
+// For threads where the closing condition IS the action (closing_condition_type === 'action'),
+// next_action_date is the effective deadline. Backfill deadline from next_action_date for open
+// action-type threads with no explicit deadline. Outcome-type threads are left alone — their
+// deadline requires explicit user input.
+OAD._migrateActionDeadlines = function () {
+  var changed = 0;
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.status !== 'closed' &&
+        t.deadline == null &&
+        t.closing_condition_type === 'action' &&
+        t.next_action_date) {
+      t.deadline = t.next_action_date;
+      changed++;
+    }
+  });
+  return changed;
 };
 
 // ── Persistence ───────────────────────────────────────────────────────

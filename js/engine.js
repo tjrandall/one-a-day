@@ -70,6 +70,13 @@ OAD.pressure = function (thread, _inBleedUp) {
     }
   }
 
+  // Day-load multiplier: +12 when this thread's date already carries > 150 pressure
+  // from peer threads. Only applied at the top level — passing _inBleedUp=true into
+  // getDayLoad's pressure() calls breaks the recursion at one hop.
+  if (!_inBleedUp && thread.next_action_date) {
+    if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
+  }
+
   return Math.min(score, 100);
 };
 
@@ -260,6 +267,16 @@ OAD.focusReason = function (t) {
   if (ds && !ds.onTrack)     parts.push(ds.behindBy + ' session' + (ds.behindBy !== 1 ? 's' : '') + ' behind deadline');
   else if (ds && ds.daysRemaining <= 7) parts.push('deadline in ' + ds.daysRemaining + 'd');
   return parts.join(' · ') || t.priority + ' priority';
+};
+
+// Returns the sum of pressure scores for all non-closed threads whose next_action_date
+// matches dateStr. Uses pressure(t, true) — the _inBleedUp flag prevents getDayLoad
+// from being called recursively, giving a stable base score for each peer thread.
+OAD.getDayLoad = function (dateStr) {
+  if (!dateStr) return 0;
+  return (OAD.DB.threads || [])
+    .filter(function (t) { return t.status !== 'closed' && t.next_action_date === dateStr; })
+    .reduce(function (sum, t) { return sum + OAD.pressure(t, true); }, 0);
 };
 
 OAD.cadenceOverdue = function (cadence) {

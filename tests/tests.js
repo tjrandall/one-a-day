@@ -825,6 +825,103 @@ OAD.test('suggestArea: VR&E → Legal', function () {
 
 }());
 
+// ── Tests: Import — title sync and no-UUID guard ─────────────────────
+
+OAD.test('applyImport: title field updates when title is in _IMPORT_FIELDS', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Original Title' }));
+  const updateItem = {
+    incoming: { uuid: t.uuid, title: 'Updated Title', status: 'open' },
+    existing: t
+  };
+  OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
+  OAD._assertEqual(OAD.getThread(t.id).title, 'Updated Title', 'title should be updated via import');
+});
+
+OAD.test('parseImportFile: same title without UUID goes to create — no title-based matching', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Title Collision Sentinel' }));
+  const json = JSON.stringify({ threads: [{ title: 'Title Collision Sentinel', status: 'waiting' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assertEqual(results.create.length,  1, 'same title but no UUID must go to create, never update');
+  OAD._assertEqual(results.update.length,  0, 'no UUID means no match possible — title alone is not a key');
+});
+
+// ── Tests: _migrateActionDeadlines ───────────────────────────────────
+
+OAD.test('_migrateActionDeadlines: sets deadline from next_action_date for action-type open threads only', function () {
+  const tAction = OAD.addThread(OAD.makeThread({
+    title: 'Action thread no deadline',
+    closing_condition_type: 'action',
+    deadline: null,
+    next_action_date: '2026-07-15',
+    status: 'open'
+  }));
+  const tOutcome = OAD.addThread(OAD.makeThread({
+    title: 'Outcome thread no deadline',
+    closing_condition_type: 'outcome',
+    deadline: null,
+    next_action_date: '2026-07-15',
+    status: 'open'
+  }));
+  const tAlreadySet = OAD.addThread(OAD.makeThread({
+    title: 'Action thread has deadline',
+    closing_condition_type: 'action',
+    deadline: '2026-08-01',
+    next_action_date: '2026-07-15',
+    status: 'open'
+  }));
+  const tClosed = OAD.addThread(OAD.makeThread({
+    title: 'Closed action thread',
+    closing_condition_type: 'action',
+    deadline: null,
+    next_action_date: '2026-07-15',
+    status: 'closed'
+  }));
+  const changed = OAD._migrateActionDeadlines();
+  OAD._assert(changed >= 1,                                         'at least one thread should be migrated');
+  OAD._assertEqual(OAD.getThread(tAction.id).deadline,    '2026-07-15', 'action thread: deadline set from next_action_date');
+  OAD._assertEqual(OAD.getThread(tOutcome.id).deadline,   null,         'outcome thread: deadline left null');
+  OAD._assertEqual(OAD.getThread(tAlreadySet.id).deadline,'2026-08-01', 'existing deadline: not overwritten');
+  OAD._assertEqual(OAD.getThread(tClosed.id).deadline,    null,         'closed thread: not migrated');
+});
+
+// ── Tests: getDayLoad + cross-load multiplier ─────────────────────────
+
+OAD.test('getDayLoad: sums pressure scores of threads due on a given date', function () {
+  const date = '2099-01-01';
+  OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  const load = OAD.getDayLoad(date);
+  OAD._assert(load > 150, 'day load of 3 stalled-critical threads should exceed 150 (got ' + load + ')');
+});
+
+OAD.test('pressure: load multiplier adds 12 when day load exceeds 150', function () {
+  const date = '2099-01-02';
+  // Three stalled critical threads: each scores 60 without load → day load = 180 > 150
+  const t1 = OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  OAD.addThread(OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: date, connections: [] }));
+  // Control: identical thread on an uncrowded date (not in DB so its date has no peers)
+  const tControl = OAD.makeThread({ status: 'stalled', priority: 'critical', next_action_date: '2099-03-01', connections: [] });
+  const loadedScore   = OAD.pressure(t1);
+  const unloadedScore = OAD.pressure(tControl);
+  OAD._assert(loadedScore > unloadedScore,
+    'thread on overloaded date (' + loadedScore + ') should exceed identical thread on uncrowded date (' + unloadedScore + ')');
+});
+
+// ── Tests: _seedCadences ──────────────────────────────────────────────
+
+OAD.test('_seedCadences: creates at least 3 cadences including Monthly Bills Review', function () {
+  const saved = OAD.DB.cadences.slice();
+  OAD.DB.cadences = [];
+  OAD._seedCadences();
+  OAD._assert(OAD.DB.cadences.length >= 3, 'at least 3 cadences should be seeded');
+  const mbr = OAD.DB.cadences.find(function (c) { return c.title === 'Monthly Bills Review'; });
+  OAD._assert(!!mbr,                          'Monthly Bills Review cadence should exist');
+  OAD._assertEqual(mbr.recurrence, 'monthly-15th', 'Monthly Bills Review recurrence should be monthly-15th');
+  OAD.DB.cadences = saved;
+});
+
 // ── Test Overlay ──────────────────────────────────────────────────────
 
 OAD._renderTestOverlay = function (results, summary) {
@@ -891,6 +988,7 @@ OAD._initApp = async function () {
     OAD._seedData();
     OAD.importCourseData();
   }
+  if (OAD._migrateActionDeadlines() > 0) OAD.saveDB();
   OAD._finishBoot();
 };
 
@@ -917,8 +1015,10 @@ OAD._bootAfterAuth = async function () {
     // This handles the case where habits/ideas were added to the app after the user
     // already had data in Supabase, so _seedData() was never run for those arrays.
     var needsSave = false;
-    if (!OAD.DB.habits.length)  { OAD._seedHabits(); needsSave = true; }
-    if (!OAD.DB.ideas.length)   { OAD._seedIdeas();  needsSave = true; }
+    if (!OAD.DB.habits.length)   { OAD._seedHabits();   needsSave = true; }
+    if (!OAD.DB.ideas.length)    { OAD._seedIdeas();    needsSave = true; }
+    if (!OAD.DB.cadences.length) { OAD._seedCadences(); needsSave = true; }
+    if (OAD._migrateActionDeadlines() > 0) needsSave = true;
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();

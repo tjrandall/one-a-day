@@ -37,7 +37,7 @@ one-a-day/
 │   ├── render.js           # All DOM rendering
 │   └── modals.js           # All modal functions, form handling, auth modals
 ├── tests/
-│   ├── tests.js            # Full test suite (69 tests) + boot functions
+│   ├── tests.js            # Full test suite (83 tests) + boot functions
 │   └── tests.data.js       # Seed data: threads, cadences, habits, ideas
 └── README.md
 
@@ -67,6 +67,7 @@ All code lives on window.OAD = {}. No modules, no bundler — plain vanilla JS t
 - `OAD._bootAfterAuth()` — called after sign-in/sign-up; loads cloud, migrates localStorage, seeds if empty
 - `OAD._finishBoot()` — renders list and selects first thread
 - `OAD._normalizeDB()` — ensures all arrays exist and backfills UUIDs on threads that predate the field
+- `OAD._migrateActionDeadlines()` — one-time migration: sets `deadline = next_action_date` for open action-type threads that have no deadline. Called by `_bootAfterAuth` and `_initApp` after cloud/localStorage load.
 
 ---
 
@@ -149,7 +150,11 @@ OAD.pressure(thread) returns 0-100:
 - deadline within 14 days and not on track: +20
 - deadline within 30 days and not on track: +10
 - behind by 2+ sessions: additional +15
+- **cross-load multiplier: +12 when `getDayLoad(thread.next_action_date) > 150`** — surface threads piling up on the same day
 - capped at 100
+
+## Cross-Load Awareness (engine.js)
+`OAD.getDayLoad(dateStr)` — sums `pressure(t, true)` for all non-closed threads whose `next_action_date === dateStr`. The `_inBleedUp=true` flag prevents recursive calls into `getDayLoad`. If the day's total load exceeds 150, each thread on that date gets +12 pressure. Implemented in `engine.js`; tested with a 3-thread stalled-critical fixture at date '2099-01-01'.
 
 ## API Layer (api.js)
 - OAD.genInsight(thread) — calls claude-sonnet-4-20250514, injects full persona context, returns JSON insight
@@ -163,6 +168,7 @@ OAD.pressure(thread) returns 0-100:
 - `OAD.renderCadencePanel()` — cadence view with overdue banners and mark-done actions
 - `OAD.renderHabitPanel()` — daily habit check-in panel; yes/no per habit, streak, reflection note, Change button
 - `OAD.renderIdeaPanel()` — idea incubation list; idea-of-the-week callout, grouped by type, promote-to-thread flow
+- `OAD.renderDailyView()` — default landing view with 5 sections: Overdue / Today / This Week / Active + **This Week's Load** (5th section). Load section shows 7 days: count of threads + cadences due, labeled Clear (0-1) / Busy (2) / Heavy (3+). ADA 508: text labels, border-left color is secondary, full aria-label on each row.
 - Zero API calls in this layer
 
 ---
@@ -179,6 +185,8 @@ Includes `exported_by: user_id` — ownership-stamped for future multi-user scop
 
 ### Import (`OAD.parseImportFile()` + `OAD.applyImport()`)
 Accepts the same JSON format. Matching is by **UUID only** — title is never used for matching and title uniqueness is never assumed.
+
+**`_IMPORT_FIELDS`** controls which fields sync on update. `title` is included — an import can rename a thread. The `_diffImportItem` preview shows title changes before the user confirms.
 
 - Row with UUID matching an existing thread → staged as update (shows field-by-field diff, requires per-item checkbox confirmation)
 - Row with unknown or absent UUID → create
@@ -243,7 +251,7 @@ Every cadence has:
 - last_completed (date), next_due (date), overdue (boolean)
 - notes, consequences
 
-2 seed cadences: Pay the Bills (1st) and Pay the Bills (15th).
+3 seed cadences: Pay the Bills (1st), Pay the Bills (15th), and Monthly Bills Review (monthly-15th). Seeding is done by `OAD._seedCadences()` in `tests/tests.data.js` — extracted from `_seedData()` so it can be called independently in the `_bootAfterAuth` guard block.
 
 UI behavior:
 - Cadences panel — click "Cadences" in the header nav
