@@ -150,7 +150,7 @@ Based on this, generate a proactive suggestion.`;
 
   let parsed;
   try {
-    const match = raw.match(/\\{[\\s\\S]*\\}/);
+    const match = raw.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match ? match[0] : raw);
   } catch (_) {
     throw new Error("Failed to parse proactive counsel response: " + raw);
