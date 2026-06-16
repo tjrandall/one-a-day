@@ -179,7 +179,9 @@ OAD.deadlineState = function (thread) {
   return { daysRemaining: daysRemaining, weeksRemaining: weeksRemaining, sessionsRemaining: sessionsRemaining, onTrack: onTrack, behindBy: behindBy };
 };
 
-OAD.nextCadenceDue = function (recurrence, fromDate) {
+OAD._DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
   const ref = fromDate ? new Date(fromDate + 'T00:00:00') : new Date();
   ref.setHours(0, 0, 0, 0);
   const y = ref.getFullYear();
@@ -196,10 +198,24 @@ OAD.nextCadenceDue = function (recurrence, fromDate) {
     next.setDate(next.getDate() + 7);
     return next.toISOString().slice(0, 10);
   }
+  if (recurrence === 'weekly-days') {
+    const days = (daysOfWeek || []).filter(function (d) { return d >= 0 && d <= 6; });
+    if (!days.length) {
+      const next = new Date(ref);
+      next.setDate(next.getDate() + 7);
+      return next.toISOString().slice(0, 10);
+    }
+    // Walk forward from the day after `ref` — next due is always strictly after fromDate.
+    for (let i = 1; i <= 7; i++) {
+      const candidate = new Date(ref);
+      candidate.setDate(candidate.getDate() + i);
+      if (days.indexOf(candidate.getDay()) !== -1) return candidate.toISOString().slice(0, 10);
+    }
+  }
   return null;
 };
 
-OAD.prevCadenceDue = function (recurrence) {
+OAD.prevCadenceDue = function (recurrence, daysOfWeek) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const y = today.getFullYear();
@@ -213,7 +229,26 @@ OAD.prevCadenceDue = function (recurrence) {
       : new Date(y, m - 1, 15).toISOString().slice(0, 10);
   }
   if (recurrence === 'monthly-last') return new Date(y, m, 0).toISOString().slice(0, 10);
+  if (recurrence === 'weekly-days') {
+    const days = (daysOfWeek || []).filter(function (dw) { return dw >= 0 && dw <= 6; });
+    if (!days.length) return null;
+    // Walk backward from today (inclusive) to find the most recent matching weekday.
+    for (let i = 0; i <= 6; i++) {
+      const candidate = new Date(today);
+      candidate.setDate(candidate.getDate() - i);
+      if (days.indexOf(candidate.getDay()) !== -1) return candidate.toISOString().slice(0, 10);
+    }
+  }
   return null;
+};
+
+// Human-readable recurrence label — expands weekly-days into the actual day names.
+OAD.formatRecurrence = function (c) {
+  if (c.recurrence === 'weekly-days' && (c.days_of_week || []).length) {
+    const sorted = c.days_of_week.slice().sort(function (a, b) { return a - b; });
+    return 'weekly-days (' + sorted.map(function (d) { return OAD._DAY_NAMES[d]; }).join(', ') + ')';
+  }
+  return c.recurrence;
 };
 
 // Returns bidirectional graph context for a thread.

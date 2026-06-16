@@ -373,6 +373,9 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.dow-picker { display: flex; flex-wrap: wrap; gap: 12px; }
+.dow-checkbox { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--text-muted); cursor: pointer; }
+.dow-checkbox input { accent-color: var(--accent); cursor: pointer; }
 
 /* ── Test Runner ── */
 #test-overlay {

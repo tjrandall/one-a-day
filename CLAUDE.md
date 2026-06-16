@@ -247,9 +247,12 @@ Cadences are date-anchored mandatory obligations that recur on a known schedule.
 
 Every cadence has:
 - id, title, life_area
-- recurrence — monthly-1st | monthly-15th | monthly-last | weekly | custom
+- recurrence — monthly-1st | monthly-15th | monthly-last | weekly | weekly-days | custom (`custom` is in the enum but has no `nextCadenceDue`/`prevCadenceDue` branch — unimplemented)
+- days_of_week[] — only used when recurrence is `weekly-days`; integers 0–6 matching `Date.getDay()` (0 = Sun). Backfilled to `[]` by `_normalizeDB()` for cadences that predate this field.
 - last_completed (date), next_due (date), overdue (boolean)
 - notes, consequences
+
+`OAD.nextCadenceDue(recurrence, fromDate, daysOfWeek)` and `OAD.prevCadenceDue(recurrence, daysOfWeek)` in `engine.js` compute the schedule. For `weekly-days`, next-due walks forward from the day *after* `fromDate` to the nearest matching weekday (so completing on a day that's itself in the list rolls to the following week, not the same day); prev-due walks backward from today inclusive. Both fall back to `null`/plain-weekly behavior if `days_of_week` is empty. `OAD.formatRecurrence(c)` expands `weekly-days` into a sorted day-name label (e.g. `weekly-days (Mon, Wed, Fri)`) for display; the cadence edit form exposes day checkboxes via `.cd-dow`.
 
 3 seed cadences: Pay the Bills (1st), Pay the Bills (15th), and Monthly Bills Review (monthly-15th). Seeding is done by `OAD._seedCadences()` in `tests/tests.data.js` — extracted from `_seedData()` so it can be called independently in the `_bootAfterAuth` guard block.
 

@@ -32,7 +32,7 @@ OAD.LIFE_AREAS = [
 ];
 
 OAD.RECURRENCES = [
-  'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'custom'
+  'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'weekly-days', 'custom'
 ];
 
 OAD.STATUSES   = ['open', 'waiting', 'stalled', 'closed'];
@@ -150,6 +150,7 @@ OAD.makeCadence = function (overrides) {
     title: '',
     life_area: 'finances',
     recurrence: 'monthly-1st',
+    days_of_week: [],
     last_completed: null,
     next_due: null,
     notes: '',
@@ -563,6 +564,10 @@ OAD._normalizeDB = function () {
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
+  });
+  // Backfill days_of_week for cadences created before weekly-days support existed
+  OAD.DB.cadences.forEach(function (c) {
+    if (!Array.isArray(c.days_of_week)) c.days_of_week = [];
   });
 };
 

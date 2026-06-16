@@ -922,6 +922,73 @@ OAD.test('_seedCadences: creates at least 3 cadences including Monthly Bills Rev
   OAD.DB.cadences = saved;
 });
 
+// ── Tests: weekly-days recurrence ─────────────────────────────────────
+
+OAD.test('nextCadenceDue: weekly-days finds the next matching weekday forward', function () {
+  // 2024-01-01 is a Monday (day 1); days_of_week targets Wednesday (3).
+  const due = OAD.nextCadenceDue('weekly-days', '2024-01-01', [3]);
+  OAD._assertEqual(due, '2024-01-03', 'next Wednesday after Monday should be 2 days out');
+});
+
+OAD.test('nextCadenceDue: weekly-days wraps to next week when fromDate itself matches', function () {
+  // fromDate is itself a Monday; next due must be strictly after fromDate, so it wraps to the following Monday.
+  const due = OAD.nextCadenceDue('weekly-days', '2024-01-01', [1]);
+  OAD._assertEqual(due, '2024-01-08', 'should wrap to next Monday, not return fromDate itself');
+});
+
+OAD.test('nextCadenceDue: weekly-days with no days configured falls back to +7 days', function () {
+  const due = OAD.nextCadenceDue('weekly-days', '2024-01-01', []);
+  OAD._assertEqual(due, '2024-01-08', 'empty days_of_week should behave like plain weekly');
+});
+
+OAD.test('prevCadenceDue: weekly-days returns today when today matches a configured day', function () {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10);
+  const prev = OAD.prevCadenceDue('weekly-days', [today.getDay()]);
+  OAD._assertEqual(prev, todayStr, 'today should count as the most recent matching day');
+});
+
+OAD.test('prevCadenceDue: weekly-days returns null when no days configured', function () {
+  OAD._assertEqual(OAD.prevCadenceDue('weekly-days', []), null, 'no days configured means no previous due date');
+});
+
+OAD.test('formatRecurrence: expands weekly-days into sorted day names', function () {
+  const c = { recurrence: 'weekly-days', days_of_week: [5, 1, 3] };
+  OAD._assertEqual(OAD.formatRecurrence(c), 'weekly-days (Mon, Wed, Fri)', 'days should display sorted, not insertion order');
+});
+
+OAD.test('formatRecurrence: other recurrence types pass through unchanged', function () {
+  const c = { recurrence: 'monthly-1st', days_of_week: [] };
+  OAD._assertEqual(OAD.formatRecurrence(c), 'monthly-1st', 'non weekly-days recurrence returned as-is');
+});
+
+OAD.test('makeCadence: defaults days_of_week to an empty array', function () {
+  const c = OAD.makeCadence({});
+  OAD._assert(Array.isArray(c.days_of_week) && c.days_of_week.length === 0, 'days_of_week should default to []');
+});
+
+OAD.test('markCadenceDone: passes cadence.days_of_week through to nextCadenceDue', function () {
+  const c = OAD.addCadence(OAD.makeCadence({ title: 'Wiring test cadence', recurrence: 'weekly-days', days_of_week: [2, 4] }));
+  const origNextDue = OAD.nextCadenceDue;
+  let capturedDays = null;
+  OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
+    capturedDays = daysOfWeek;
+    return origNextDue(recurrence, fromDate, daysOfWeek);
+  };
+  OAD.markCadenceDone(c.id);
+  OAD.nextCadenceDue = origNextDue;
+  OAD._assertEqual(JSON.stringify(capturedDays), JSON.stringify([2, 4]), 'days_of_week should be passed through to nextCadenceDue');
+  OAD.deleteCadence(c.id);
+});
+
+OAD.test('_normalizeDB: backfills days_of_week on cadences that predate the field', function () {
+  const saved = OAD.DB.cadences.slice();
+  OAD.DB.cadences = [{ id: 999999, title: 'Legacy cadence', recurrence: 'weekly' }];
+  OAD._normalizeDB();
+  OAD._assert(Array.isArray(OAD.DB.cadences[0].days_of_week), 'legacy cadence should get a days_of_week array backfilled');
+  OAD.DB.cadences = saved;
+});
+
 // ── Tests: Cycle and Critical Path ─────────────────────────────────────
 
 OAD.test('detectCycles: returns cycles', function () {

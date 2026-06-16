@@ -321,7 +321,7 @@ OAD.markCadenceDone = function (id) {
   const c = OAD.getCadence(id);
   if (!c) return;
   c.last_completed = new Date().toISOString().slice(0, 10);
-  c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed);
+  c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
   OAD.renderOverdueBanner();
   if (!OAD._activeId) OAD.renderCadencePanel();
 };
@@ -340,7 +340,7 @@ OAD.renderCadencePanel = function () {
   const items = cadences.length ? cadences.map(function (c) {
     const overdue        = OAD.cadenceOverdue(c);
     const dueToday       = !overdue && c.next_due === today;
-    const prevDue        = OAD.prevCadenceDue(c.recurrence);
+    const prevDue        = OAD.prevCadenceDue(c.recurrence, c.days_of_week);
     const doneThisPeriod = !overdue && !dueToday && c.last_completed && prevDue && c.last_completed >= prevDue;
     const itemClass      = overdue ? 'is-overdue' : dueToday ? 'is-due-today' : doneThisPeriod ? 'is-done' : '';
 
@@ -365,7 +365,7 @@ OAD.renderCadencePanel = function () {
     return '<div class="cadence-item ' + itemClass + '">' +
       '<div class="cadence-info">' +
         '<div class="cadence-title">' + OAD.esc(c.title) + '</div>' +
-        '<div class="cadence-meta">' + OAD.esc(c.recurrence) + ' · ' + OAD.esc(c.life_area) + '</div>' +
+        '<div class="cadence-meta">' + OAD.esc(OAD.formatRecurrence(c)) + ' · ' + OAD.esc(c.life_area) + '</div>' +
         (c.notes ? '<div class="cadence-notes">' + OAD.esc(c.notes) + '</div>' : '') +
         (c.consequences ? '<div class="cadence-consequences">If missed: ' + OAD.esc(c.consequences) + '</div>' : '') +
         dueDateHtml +
@@ -773,7 +773,7 @@ OAD.renderTodayView = function () {
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(c.recurrence) +
+          '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
@@ -1015,7 +1015,7 @@ OAD.renderDailyView = function () {
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(c.recurrence) +
+          '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
@@ -1306,7 +1306,7 @@ OAD.renderMatrixView = function () {
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(c.recurrence) +
+          '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +

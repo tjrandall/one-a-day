@@ -409,6 +409,10 @@ OAD._cadenceForm = function (c) {
   const areaOpts = OAD.LIFE_AREAS.map(function (a) {
     return '<option value="' + OAD.esc(a) + '" ' + (c.life_area === a ? 'selected' : '') + '>' + OAD.esc(a) + '</option>';
   }).join('');
+  const dowOpts = OAD._DAY_NAMES.map(function (name, i) {
+    const checked = (c.days_of_week || []).indexOf(i) !== -1 ? 'checked' : '';
+    return '<label class="dow-checkbox"><input type="checkbox" class="cd-dow" value="' + i + '" ' + checked + '> ' + name + '</label>';
+  }).join('');
   return `
     <div class="field">
       <label>Title <span style="color:var(--critical)">*</span></label>
@@ -423,6 +427,10 @@ OAD._cadenceForm = function (c) {
         <label>Life Area</label>
         <select id="cd-area">${areaOpts}</select>
       </div>
+    </div>
+    <div class="field">
+      <label>Days of Week <span class="text-muted text-sm">(used when Recurrence = weekly-days)</span></label>
+      <div class="dow-picker">${dowOpts}</div>
     </div>
     <div class="field-row">
       <div class="field">
@@ -447,9 +455,13 @@ OAD._cadenceForm = function (c) {
 OAD._readCadenceForm = function (base) {
   const title = document.getElementById('cd-title')?.value.trim();
   if (!title) { alert('Title is required.'); return null; }
+  const days_of_week = Array.from(document.querySelectorAll('.cd-dow:checked')).map(function (el) {
+    return parseInt(el.value, 10);
+  });
   return Object.assign({}, base, {
     title,
     recurrence:     document.getElementById('cd-recurrence')?.value     || 'monthly-1st',
+    days_of_week,
     life_area:      document.getElementById('cd-area')?.value           || 'Other',
     next_due:       document.getElementById('cd-next-due')?.value       || null,
     last_completed: document.getElementById('cd-last-completed')?.value || null,
