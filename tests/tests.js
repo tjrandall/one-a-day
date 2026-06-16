@@ -1154,7 +1154,7 @@ OAD._bootAfterAuth = async function () {
     if (!OAD.DB.ideas.length)    { OAD._seedIdeas();    needsSave = true; }
     if (!OAD.DB.cadences.length) { OAD._seedCadences(); needsSave = true; }
     if (OAD._migrateActionDeadlines() > 0) needsSave = true;
-    if (OAD._runJune16Dedup() > 0) needsSave = true;
+    OAD._runJune16DedupV2(); // V2 calls saveDB() internally; always persists its guard flag
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();

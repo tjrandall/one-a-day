@@ -600,169 +600,207 @@ OAD._migrateActionDeadlines = function () {
   return changed;
 };
 
-// One-time dedup + status update pass for the June 16, 2026 bad import.
-// A broken import (rows with no UUID) created duplicates for ~14 threads.
-// Guard: OAD.DB.persona._june16DedupDone prevents re-running.
-// Returns the number of threads deleted + updated.
-OAD._runJune16Dedup = function () {
-  if (OAD.DB.persona && OAD.DB.persona._june16DedupDone) return 0;
+// One-time dedup + status update pass — June 16, 2026 bad import.
+// V1 had two bugs: exact title matching (missed several threads) and the
+// guard flag was never saved to Supabase because the function returned 0.
+// V2 uses fragment-based contains matching, user-specified keep criteria
+// (by next_action_date or status), and calls saveDB() unconditionally so
+// the guard always persists.
+OAD._runJune16DedupV2 = function () {
+  if (OAD.DB.persona && OAD.DB.persona._june16DedupV2Done) return 0;
 
   var deleted = 0, updated = 0;
 
-  // ── Helpers ───────────────────────────────────────────────────────────
-  // Return all threads with an exact title match, sorted oldest → newest (by id).
-  function allByTitle(title) {
+  // ── Helpers ─────────────────────────────────────────────────────────────
+  // Find non-closed threads whose title contains ALL fragments, oldest→newest.
+  function find(fragments) {
     return (OAD.DB.threads || [])
-      .filter(function (t) { return t.title === title; })
+      .filter(function (t) {
+        return t.status !== 'closed' &&
+          fragments.every(function (f) { return t.title && t.title.indexOf(f) !== -1; });
+      })
       .sort(function (a, b) { return a.id - b.id; });
   }
-  // Return only non-closed threads with exact title match, oldest → newest.
-  function openByTitle(title) {
-    return allByTitle(title).filter(function (t) { return t.status !== 'closed'; });
+  // Same but includes closed threads.
+  function findAll(fragments) {
+    return (OAD.DB.threads || [])
+      .filter(function (t) {
+        return fragments.every(function (f) { return t.title && t.title.indexOf(f) !== -1; });
+      })
+      .sort(function (a, b) { return a.id - b.id; });
   }
-  // Hard-delete threads by id list.
-  function deleteIds(ids) {
-    OAD.DB.threads = (OAD.DB.threads || []).filter(function (t) {
-      return ids.indexOf(t.id) === -1;
-    });
+  function hardDelete(ids) {
+    OAD.DB.threads = (OAD.DB.threads || [])
+      .filter(function (t) { return ids.indexOf(t.id) === -1; });
     deleted += ids.length;
   }
-  // Close a thread and add an evolution note.
-  function closeThread(thread, note) {
-    OAD.updateThread(thread.id, { status: 'closed', closing_condition_met: true });
-    OAD.addEvolution(thread.id, note);
+  function closeThread(t, note) {
+    OAD.updateThread(t.id, { status: 'closed', closing_condition_met: true });
+    if (note) OAD.addEvolution(t.id, note);
     updated++;
   }
-  // Update fields and add an evolution note.
-  function updateThread(thread, fields, note) {
-    OAD.updateThread(thread.id, fields);
-    if (note) OAD.addEvolution(thread.id, note);
+  function updateThread(t, fields, note) {
+    OAD.updateThread(t.id, fields);
+    if (note) OAD.addEvolution(t.id, note);
     updated++;
   }
+  // Among `matches`, pick keeper by preferred next_action_date, then by
+  // preferred status, then fall back to the most recently created (highest id).
+  function pickKeeper(matches, prefDate, prefStatus) {
+    return matches.find(function (t) { return t.next_action_date === prefDate; }) ||
+           matches.find(function (t) { return t.status === prefStatus; }) ||
+           matches[matches.length - 1];
+  }
+  // Keep one thread from `matches`, hard-delete the others.
+  function dedupeKeep(matches, keeper) {
+    if (!keeper || matches.length <= 1) return;
+    hardDelete(matches.filter(function (t) { return t.id !== keeper.id; })
+                      .map(function (t) { return t.id; }));
+  }
 
-  // ── Tonight's bad import: keep OLDEST open thread, delete newer duplicates ──
+  // ── Tonight's bad import clusters ───────────────────────────────────────
 
-  var keepOldestTitles = [
-    'Weekly Job Application Cadence — 3/Week Unemployment Compliance',
-    'Plymouth 18 Remington Ln — Price Drop',
-    'IRS IT Specialist GS-2210-14 — Hyannis',
-    'USA Hire Assessment',
-  ];
-  keepOldestTitles.forEach(function (title) {
-    var dupes = openByTitle(title);
-    if (dupes.length > 1) {
-      deleteIds(dupes.slice(1).map(function (t) { return t.id; }));
-    }
-  });
-
-  // M/W/F — keep oldest open, delete newer, then close it (moved to Cadence)
+  // SDVOSB Consulting Track: keep the one with next_action_date 2026-06-19
   (function () {
-    var title = 'M/W/F Job Board Sweep — Master Company List';
-    var dupes = openByTitle(title);
-    if (dupes.length > 1) deleteIds(dupes.slice(1).map(function (t) { return t.id; }));
-    var t = openByTitle(title)[0] || allByTitle(title)[0];
-    if (t && t.status !== 'closed') {
-      closeThread(t, 'Moved to Cadence — weekly-days Mon/Wed/Fri.');
+    var m = find(['SDVOSB', 'Consulting Track']);
+    var keeper = pickKeeper(m, '2026-06-19', 'open');
+    dedupeKeep(m, keeper);
+  }());
+
+  // IRS IT Specialist: keep [waiting] one, hard-delete the [open] old draft
+  (function () {
+    var m = find(['IRS IT Specialist', 'Hyannis']);
+    var keeper = pickKeeper(m, '2026-06-17', 'waiting');
+    dedupeKeep(m, keeper);
+  }());
+
+  // USA Hire Assessment (full title includes IRS thread name):
+  // keep the one dated 2026-06-17
+  (function () {
+    var m = find(['USA Hire Assessment']);
+    var keeper = pickKeeper(m, '2026-06-17', 'waiting');
+    dedupeKeep(m, keeper);
+  }());
+
+  // VR&E Equipment: keep 2026-06-17; update with follow-up note
+  (function () {
+    var m = find(['VR&E Equipment', 'Amanda']);
+    var keeper = pickKeeper(m, '2026-06-17', 'open');
+    dedupeKeep(m, keeper);
+    if (keeper) {
+      var t = (OAD.DB.threads || []).find(function (x) { return x.id === keeper.id; });
+      if (t) updateThread(t, { next_action_date: '2026-06-17' },
+        'Call Northboro 508-393-1774 June 17 morning if no tracking received.');
     }
   }());
 
-  // VR&E Equipment — keep oldest open, delete newer, then update
+  // Weekly Job Application Cadence: keep 2026-06-17
   (function () {
-    var title = 'VR&E Equipment (Amanda)';
-    var dupes = openByTitle(title);
-    if (dupes.length > 1) deleteIds(dupes.slice(1).map(function (t) { return t.id; }));
-    var t = openByTitle(title)[0];
-    if (t) {
-      updateThread(t,
-        { next_action_date: '2026-06-17' },
-        'Call Northboro 508-393-1774 June 17 morning if no tracking received.'
-      );
+    var m = find(['Weekly Job Application Cadence']);
+    var keeper = pickKeeper(m, '2026-06-17', 'open');
+    dedupeKeep(m, keeper);
+  }());
+
+  // CSS NOAA: keep the one dated 2026-07-13 and add completion note
+  (function () {
+    var m = find(['CSS NOAA']);
+    var keeper = pickKeeper(m, '2026-07-13', 'open');
+    dedupeKeep(m, keeper);
+    if (keeper) {
+      var t = (OAD.DB.threads || []).find(function (x) { return x.id === keeper.id; });
+      if (t) updateThread(t, {},
+        'Additional information form completed June 16 ✅. Contingent on contract award. Monitor.');
     }
   }());
 
-  // CSS NOAA — keep oldest open, delete newer, then add note
+  // M/W/F Board Sweep — Job Search: close it (moved to weekly-days cadence)
   (function () {
-    var title = 'CSS NOAA Coastal Management Specialist';
-    var dupes = openByTitle(title);
-    if (dupes.length > 1) deleteIds(dupes.slice(1).map(function (t) { return t.id; }));
-    var t = openByTitle(title)[0];
-    if (t) {
-      updateThread(t, {},
-        'Additional information form completed June 16 ✅. Contingent on contract award. Monitor.'
-      );
-    }
+    find(['M/W/F']).forEach(function (t) {
+      closeThread(t, 'Closed — recurring board sweep moved to weekly-days cadence.');
+    });
   }());
 
-  // SAM.gov — CLOSE the OLD open thread; the newer closed one from tonight's import is correct.
+  // SAM.gov: close any remaining open ones with resolution note
   (function () {
-    var title = 'SAM.gov Legal Business Name Correction';
-    var openThreads = openByTitle(title);
-    openThreads.forEach(function (t) {
+    find(['SAM.gov', 'Legal Business Name']).forEach(function (t) {
       closeThread(t,
-        'RESOLVED — SAM.gov ACTIVE June 16, 2026. CAGE 21CK0. UEI H1X6FZB1YFZ2. Renewal June 3, 2027. No further action needed.'
-      );
+        'RESOLVED — SAM.gov ACTIVE June 16, 2026. CAGE 21CK0. UEI H1X6FZB1YFZ2. Renewal June 3, 2027. No further action needed.');
     });
   }());
 
-  // IRS IT Specialist — update to waiting + USA Hire note
+  // SDVOSB Consulting Track status update (SAM active note)
   (function () {
-    var title = 'IRS IT Specialist GS-2210-14 — Hyannis';
-    var t = openByTitle(title)[0];
-    if (t) {
-      updateThread(t,
-        { status: 'waiting' },
-        'SUBMITTED June 11. USA Hire: practice tests done June 16 (Reasoning/Judgment/Reading/Interaction). Take real assessment June 17. HARD DEADLINE June 19 11:59pm ET.'
-      );
+    var matches = find(['SDVOSB', 'Consulting Track']);
+    if (matches.length === 1) {
+      updateThread(matches[0], { status: 'open', next_action_date: '2026-06-19' },
+        'SAM active ✅ CAGE 21CK0 ✅ CoGS in hand ✅. SBA VetCert started June 16 — blocked on SAM sync delay. Retry Thursday June 19. APEX kickoff June 25.');
     }
   }());
 
-  // SDVOSB Consulting Track — status update
+  // ── Pre-existing duplicate clusters ─────────────────────────────────────
+
+  // Jackie (Financial Advisor) — Action Items: keep 1 open, delete others
   (function () {
-    var matches = (OAD.DB.threads || []).filter(function (t) {
-      return t.title && t.title.indexOf('SDVOSB') !== -1 && t.title.indexOf('Consulting Track') !== -1 && t.status !== 'closed';
+    var m = find(['Jackie']);
+    if (m.length > 1) {
+      var keeper = m[m.length - 1]; // newest open
+      dedupeKeep(m, keeper);
+    }
+  }());
+
+  // Plymouth Price Drop cluster: keep newest open "Price Drop" (not the $841K thread)
+  // and also keep "Price Drop to $841K" as a separate legitimate thread.
+  (function () {
+    var cluster = findAll(['Plymouth', 'Price Drop'])
+      .filter(function (t) { return t.title && t.title.indexOf('841K') === -1; });
+    var open = cluster.filter(function (t) { return t.status !== 'closed'; });
+    var closed = cluster.filter(function (t) { return t.status === 'closed'; });
+    // Keep newest open; delete older open duplicates
+    if (open.length > 1) {
+      hardDelete(open.slice(0, open.length - 1).map(function (t) { return t.id; }));
+    }
+    // Keep only the newest closed copy; delete older closed duplicates
+    if (closed.length > 1) {
+      hardDelete(closed.slice(0, closed.length - 1).map(function (t) { return t.id; }));
+    }
+  }());
+
+  // Orpheus Ocean — Cold Outreach to Jake Russell: keep [waiting] next: 2026-06-22
+  (function () {
+    var m = find(['Orpheus Ocean']);
+    var keeper = pickKeeper(m, '2026-06-22', 'waiting');
+    dedupeKeep(m, keeper);
+  }());
+
+  // Northeastern GIS cluster: keep [open] GIS Graduate Certificate AND
+  // [waiting] Northeastern GIS Deferral Resolution; close everything else.
+  (function () {
+    // Collect all threads in this cluster (open only — closed ones stay closed)
+    var seen = {};
+    var cluster = find(['Northeastern']).concat(find(['GIS Graduate Certificate']))
+      .filter(function (t) {
+        if (seen[t.id]) return false;
+        seen[t.id] = true;
+        return true;
+      });
+
+    var keepIds = cluster
+      .filter(function (t) {
+        return (t.title && (t.title.indexOf('Deferral') !== -1 ||
+                            t.title.indexOf('Certificate') !== -1));
+      })
+      .map(function (t) { return t.id; });
+
+    cluster.forEach(function (t) {
+      if (keepIds.indexOf(t.id) === -1) {
+        closeThread(t, 'Closed — duplicate, June 16 2026 dedup pass.');
+      }
     });
-    if (matches.length) {
-      updateThread(matches[0],
-        { status: 'open', next_action_date: '2026-06-19' },
-        'SAM active ✅ CAGE 21CK0 ✅ CoGS in hand ✅. SBA VetCert started June 16 — blocked on SAM sync delay. Retry Thursday June 19. APEX kickoff June 25.'
-      );
-    }
   }());
 
-  // ── Pre-existing duplicate clusters: keep most-recent open, delete the rest ──
-
-  var dedupeByNewest = [
-    'Jackie',                // partial — matches any thread title containing "Jackie"
-    'Northeastern GIS',
-    'Orpheus Ocean',
-  ];
-  dedupeByNewest.forEach(function (fragment) {
-    // Group all threads whose titles contain this fragment, open ones only
-    var matches = (OAD.DB.threads || [])
-      .filter(function (t) { return t.title && t.title.indexOf(fragment) !== -1 && t.status !== 'closed'; })
-      .sort(function (a, b) { return b.id - a.id; }); // newest first
-    if (matches.length > 1) {
-      // Keep newest (highest id), delete the rest
-      deleteIds(matches.slice(1).map(function (t) { return t.id; }));
-    }
-  });
-
-  // Plymouth Price Drop — already partially handled above (keepOldest), but pre-existing
-  // cluster may have many closed copies too. Delete all closed duplicates, keep one open.
-  (function () {
-    var fragment = 'Plymouth';
-    var all = (OAD.DB.threads || [])
-      .filter(function (t) { return t.title && t.title.indexOf(fragment) !== -1 && t.title.indexOf('Price Drop') !== -1; })
-      .sort(function (a, b) { return b.id - a.id; });
-    var open = all.filter(function (t) { return t.status !== 'closed'; });
-    var closed = all.filter(function (t) { return t.status === 'closed'; });
-    // Keep newest open (already done above), and keep only the newest closed copy
-    if (open.length > 1) deleteIds(open.slice(1).map(function (t) { return t.id; }));
-    if (closed.length > 1) deleteIds(closed.slice(1).map(function (t) { return t.id; }));
-  }());
-
-  // Mark done and save
-  if (OAD.DB.persona) OAD.DB.persona._june16DedupDone = true;
+  // ── Guard: set flag and ALWAYS save so it persists across reloads ────────
+  if (OAD.DB.persona) OAD.DB.persona._june16DedupV2Done = true;
+  OAD.saveDB(); // writes localStorage + triggers async cloud save
   return deleted + updated;
 };
 OAD._DB_PERSIST = false; // set true by _initApp after tests pass; keeps test suite writes out of localStorage
