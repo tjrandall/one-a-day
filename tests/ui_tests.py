@@ -126,10 +126,51 @@ def test_cadence_recurrence_edit_round_trip(page):
                "formatRecurrence label correct")
 
 
+def test_mark_cadence_done_advances_next_due(page):
+    """
+    markCadenceDone should set last_completed to today and advance next_due
+    to the next occurrence per the cadence's recurrence rule.
+
+    Uses a temporary weekly-days cadence targeting Wednesdays so the expected
+    next_due weekday is deterministic regardless of when the test runs.
+    """
+    print("\ntest_mark_cadence_done_advances_next_due")
+    result = page.evaluate("""() => {
+        const c = OAD.addCadence(OAD.makeCadence({
+            title: '__ui_test_mark_done__',
+            recurrence: 'weekly-days',
+            days_of_week: [3]   // Wednesday
+        }));
+
+        OAD.markCadenceDone(c.id);
+
+        const after = OAD.getCadence(c.id);
+        const lastCompleted = after.last_completed;
+        const nextDue = after.next_due;
+        const nextDueDay = nextDue
+            ? new Date(nextDue + 'T00:00:00').getDay()
+            : null;
+
+        OAD.deleteCadence(c.id);
+
+        return { lastCompleted, nextDue, nextDueDay };
+    }""")
+
+    _assert(result["lastCompleted"] is not None,
+            "last_completed set to a date string")
+    _assert(result["nextDue"] is not None,
+            "next_due is not null after marking done")
+    _assert(result["nextDue"] > result["lastCompleted"],
+            f"next_due ({result['nextDue']}) is after last_completed ({result['lastCompleted']})")
+    _assert_eq(result["nextDueDay"], 3,
+               "next_due lands on a Wednesday (days_of_week: [3])")
+
+
 # ── Harness ────────────────────────────────────────────────────────────────────
 
 def run_tests():
-    tests = [test_raptor_gate, test_cadence_recurrence_edit_round_trip]
+    tests = [test_raptor_gate, test_cadence_recurrence_edit_round_trip,
+             test_mark_cadence_done_advances_next_due]
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
