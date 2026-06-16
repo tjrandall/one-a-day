@@ -38,6 +38,13 @@ OAD.pressure = function (thread, _inBleedUp) {
       bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
     });
     score += Math.min(Math.round(bleedUp), 20);
+
+    // Cycle Penalty: +25 if this node is part of a cycle
+    var cycles = OAD.detectCycles();
+    var inCycle = cycles.some(function(cycle) { return cycle.indexOf(thread.id) !== -1; });
+    if (inCycle) {
+      score += 25;
+    }
   }
 
   // Contingency proximity — quadratic over 14-day window.
@@ -78,6 +85,32 @@ OAD.pressure = function (thread, _inBleedUp) {
   }
 
   return Math.min(score, 100);
+};
+
+OAD.getEisenhowerQuadrant = function (thread) {
+  const isImportant = thread.priority === 'critical' || thread.priority === 'high';
+  let isUrgent = false;
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (thread.next_action_date && thread.next_action_date <= todayStr) {
+    isUrgent = true;
+  }
+
+  if (!isUrgent && thread.deadline) {
+    const ds = OAD.deadlineState(thread);
+    if (ds && (!ds.onTrack || ds.daysRemaining <= 7)) {
+      isUrgent = true;
+    }
+  }
+
+  if (!isUrgent && OAD.pressure(thread) >= 60) {
+    isUrgent = true;
+  }
+
+  if (isImportant && isUrgent) return 'Q1';
+  if (isImportant && !isUrgent) return 'Q2';
+  if (!isImportant && isUrgent) return 'Q3';
+  return 'Q4';
 };
 
 OAD.suggestArea = function (title) {
@@ -285,4 +318,114 @@ OAD.cadenceOverdue = function (cadence) {
   today.setHours(0, 0, 0, 0);
   const due = new Date(cadence.next_due + 'T00:00:00');
   return due < today;
+};
+
+OAD._cyclesCache = null;
+OAD._cyclesCacheTime = 0;
+
+OAD.detectCycles = function (force) {
+  var now = Date.now();
+  if (!force && OAD._cyclesCache && (now - OAD._cyclesCacheTime < 100)) {
+    return OAD._cyclesCache;
+  }
+
+  var threads = OAD.DB.threads || [];
+  var openThreads = threads.filter(function(t) { return t.status !== 'closed'; });
+  var cycles = [];
+  var visited = new Set();
+  var stack = new Set();
+  var path = [];
+
+  function resolveTarget(c, sourceThread) {
+    if (c.to_uuid) return openThreads.find(function(t) { return t.uuid === c.to_uuid; }) || null;
+    if (c.to_label) {
+      var lbl = c.to_label.toLowerCase();
+      return openThreads.find(function(t) { return t.id !== sourceThread.id && (t.title || '').toLowerCase() === lbl; }) || null;
+    }
+    return null;
+  }
+
+  function dfs(node) {
+    if (stack.has(node.id)) {
+      var cycleStart = path.indexOf(node.id);
+      if (cycleStart !== -1) cycles.push(path.slice(cycleStart));
+      return;
+    }
+    if (visited.has(node.id)) return;
+
+    visited.add(node.id);
+    stack.add(node.id);
+    path.push(node.id);
+
+    var blocking = (node.connections || []).filter(function(c) { return c.edge_type === 'blocks'; });
+    blocking.forEach(function(c) {
+      var target = resolveTarget(c, node);
+      if (target) dfs(target);
+    });
+
+    path.pop();
+    stack.delete(node.id);
+  }
+
+  openThreads.forEach(function(t) {
+    if (!visited.has(t.id)) dfs(t);
+  });
+
+  var uniqueCycles = [];
+  var seenSignatures = new Set();
+  cycles.forEach(function(cycle) {
+    var sorted = cycle.slice().sort().join(',');
+    if (!seenSignatures.has(sorted)) {
+      seenSignatures.add(sorted);
+      uniqueCycles.push(cycle);
+    }
+  });
+
+  OAD._cyclesCache = uniqueCycles;
+  OAD._cyclesCacheTime = now;
+  return uniqueCycles;
+};
+
+OAD.calculateCriticalPath = function (threadId, visited) {
+  visited = visited || new Set();
+  var thread = OAD.getThread(threadId);
+  if (!thread || thread.status === 'closed') return { weight: 0, path: [] };
+  
+  if (visited.has(threadId)) return { weight: 0, path: [] };
+  visited.add(threadId);
+
+  var threads = OAD.DB.threads || [];
+  
+  function resolveTarget(c, sourceThread) {
+    if (c.to_uuid) return threads.find(function(t) { return t.uuid === c.to_uuid && t.status !== 'closed'; }) || null;
+    if (c.to_label) {
+      var lbl = c.to_label.toLowerCase();
+      return threads.find(function(t) { return t.id !== sourceThread.id && (t.title || '').toLowerCase() === lbl && t.status !== 'closed'; }) || null;
+    }
+    return null;
+  }
+
+  var blocking = (thread.connections || []).filter(function(c) { return c.edge_type === 'blocks'; });
+  var targets = [];
+  blocking.forEach(function(c) {
+    var t = resolveTarget(c, thread);
+    if (t) targets.push(t);
+  });
+
+  var weight = OAD.pressure(thread, true);
+  var maxPathWeight = 0;
+  var maxPath = [];
+
+  targets.forEach(function(t) {
+    var sub = OAD.calculateCriticalPath(t.id, new Set(visited));
+    if (sub.weight > maxPathWeight) {
+      maxPathWeight = sub.weight;
+      maxPath = sub.path;
+    }
+  });
+
+  return { 
+    weight: weight + maxPathWeight, 
+    path: [threadId].concat(maxPath) 
+  };
 };
