@@ -184,7 +184,7 @@ Moat-safe flat JSON. Includes per thread: uuid, title, status, priority, life_ar
 Includes `exported_by: user_id` — ownership-stamped for future multi-user scoping.
 
 ### Import (`OAD.parseImportFile()` + `OAD.applyImport()`)
-Accepts the same JSON format. Matching is by **UUID only** — title is never used for matching and title uniqueness is never assumed.
+Accepts the same JSON format. Matching priority: **(1) UUID** — `row.uuid` finds existing thread → update; **(2) title fallback** — `row.uuid` absent/null AND exactly one non-closed thread shares the title → update (prevents duplicates from AI-generated patches and older export formats that omit UUIDs); **(3) create** — neither matched. Title fallback is deliberately conservative: if two open threads share the same title, the row falls through to create rather than risk updating the wrong one.
 
 **`_IMPORT_FIELDS`** controls which fields sync on update. `title` is included — an import can rename a thread. The `_diffImportItem` preview shows title changes before the user confirms.
 

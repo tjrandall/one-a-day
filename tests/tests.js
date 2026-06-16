@@ -837,12 +837,22 @@ OAD.test('applyImport: title field updates when title is in _IMPORT_FIELDS', fun
   OAD._assertEqual(OAD.getThread(t.id).title, 'Updated Title', 'title should be updated via import');
 });
 
-OAD.test('parseImportFile: same title without UUID goes to create — no title-based matching', function () {
-  const t = OAD.addThread(OAD.makeThread({ title: 'Title Collision Sentinel' }));
-  const json = JSON.stringify({ threads: [{ title: 'Title Collision Sentinel', status: 'waiting' }] });
+OAD.test('parseImportFile: no-UUID row with unique title match goes to update (title fallback)', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Title Fallback Sentinel' }));
+  const json = JSON.stringify({ threads: [{ title: 'Title Fallback Sentinel', status: 'waiting' }] });
   const results = OAD.parseImportFile(json);
-  OAD._assertEqual(results.create.length,  1, 'same title but no UUID must go to create, never update');
-  OAD._assertEqual(results.update.length,  0, 'no UUID means no match possible — title alone is not a key');
+  OAD._assertEqual(results.update.length, 1, 'unique title match without UUID should go to update');
+  OAD._assertEqual(results.create.length, 0, 'should not create a duplicate when title uniquely matches');
+  OAD._assertEqual(results.update[0].existing.id, t.id, 'update target should be the existing thread');
+});
+
+OAD.test('parseImportFile: no-UUID row with ambiguous title (2 matches) still goes to create', function () {
+  OAD.addThread(OAD.makeThread({ title: 'Ambiguous Sentinel' }));
+  OAD.addThread(OAD.makeThread({ title: 'Ambiguous Sentinel' }));
+  const json = JSON.stringify({ threads: [{ title: 'Ambiguous Sentinel', status: 'waiting' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assertEqual(results.create.length, 1, 'ambiguous title (2 open matches) must fall through to create');
+  OAD._assertEqual(results.update.length, 0, 'should not update when title is ambiguous');
 });
 
 // ── Tests: _migrateActionDeadlines ───────────────────────────────────
@@ -1144,6 +1154,7 @@ OAD._bootAfterAuth = async function () {
     if (!OAD.DB.ideas.length)    { OAD._seedIdeas();    needsSave = true; }
     if (!OAD.DB.cadences.length) { OAD._seedCadences(); needsSave = true; }
     if (OAD._migrateActionDeadlines() > 0) needsSave = true;
+    if (OAD._runJune16Dedup() > 0) needsSave = true;
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();
