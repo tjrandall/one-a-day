@@ -825,6 +825,64 @@ OAD.test('suggestArea: VR&E → Legal', function () {
 
 }());
 
+// ── Tests: Cycle and Critical Path ─────────────────────────────────────
+
+OAD.test('detectCycles: returns cycles', function () {
+  const savedThreads = OAD.DB.threads.slice();
+  OAD.DB.threads = [];
+  const t1 = OAD.addThread(OAD.makeThread({ title: 'A', status: 'open' }));
+  const t2 = OAD.addThread(OAD.makeThread({ title: 'B', status: 'open' }));
+  t1.connections = [{ to_uuid: t2.uuid, edge_type: 'blocks' }];
+  t2.connections = [{ to_uuid: t1.uuid, edge_type: 'blocks' }];
+  const cycles = OAD.detectCycles(true);
+  OAD._assertEqual(cycles.length, 1, 'should find 1 cycle');
+  OAD._assert(cycles[0].indexOf(t1.id) !== -1 && cycles[0].indexOf(t2.id) !== -1, 'cycle should include A and B');
+  OAD.DB.threads = savedThreads;
+});
+
+OAD.test('calculateCriticalPath: finds longest blocking path', function () {
+  const savedThreads = OAD.DB.threads.slice();
+  OAD.DB.threads = [];
+  const t1 = OAD.addThread(OAD.makeThread({ title: 'A', status: 'open', priority: 'medium' }));
+  const t2 = OAD.addThread(OAD.makeThread({ title: 'B', status: 'open', priority: 'medium' }));
+  const t3 = OAD.addThread(OAD.makeThread({ title: 'C', status: 'open', priority: 'critical' }));
+  t1.connections = [{ to_uuid: t2.uuid, edge_type: 'blocks' }];
+  t2.connections = [{ to_uuid: t3.uuid, edge_type: 'blocks' }];
+  const pathData = OAD.calculateCriticalPath(t1.id);
+  OAD._assert(pathData.path.length === 3, 'path should have length 3');
+  OAD._assertEqual(pathData.path[2], t3.id, 'path ends at C');
+  OAD.DB.threads = savedThreads;
+});
+
+OAD.test('getEisenhowerQuadrant: correctly maps high priority + overdue to Q1', function () {
+  const t = OAD.makeThread({ title: 'A', status: 'open', priority: 'high', next_action_date: '2000-01-01' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(t), 'Q1', 'High priority and overdue should be Q1');
+  const t2 = OAD.makeThread({ title: 'B', status: 'open', priority: 'medium', next_action_date: '2099-01-01' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(t2), 'Q4', 'Medium priority and not urgent should be Q4');
+});
+
+OAD.test('proposals: accepting a proposal creates an active thread', function () {
+  const savedProposals = (OAD.DB.proposals || []).slice();
+  const savedThreads = (OAD.DB.threads || []).slice();
+  OAD.DB.proposals = [{ uuid: 'test-uuid', title: 'Prop A', life_area: 'Other', closing_condition: 'Done', rationale: 'Testing' }];
+  OAD.DB.threads = [];
+  const t = OAD.acceptProposal('test-uuid');
+  OAD._assert(t, 'should return thread');
+  OAD._assertEqual(OAD.DB.proposals.length, 0, 'proposal should be removed');
+  OAD._assertEqual(OAD.DB.threads.length, 1, 'thread should be added');
+  OAD._assertEqual(t.title, 'Prop A', 'title matches');
+  OAD.DB.proposals = savedProposals;
+  OAD.DB.threads = savedThreads;
+});
+
+OAD.test('proposals: rejecting a proposal removes it from the queue', function () {
+  const savedProposals = (OAD.DB.proposals || []).slice();
+  OAD.DB.proposals = [{ uuid: 'test-uuid2', title: 'Prop B' }];
+  OAD.rejectProposal('test-uuid2');
+  OAD._assertEqual(OAD.DB.proposals.length, 0, 'proposal should be removed');
+  OAD.DB.proposals = savedProposals;
+});
+
 // ── Test Overlay ──────────────────────────────────────────────────────
 
 OAD._renderTestOverlay = function (results, summary) {
@@ -926,6 +984,8 @@ OAD._bootAfterAuth = async function () {
 
 // Called once data is loaded and ready — renders the daily summary as the default landing view.
 OAD._finishBoot = function () {
+  const theme = (OAD.DB.persona && OAD.DB.persona.theme) || 'dark';
+  document.body.setAttribute('data-theme', theme);
   OAD.renderDailyView();
 };
 

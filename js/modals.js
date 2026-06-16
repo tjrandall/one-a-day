@@ -644,6 +644,7 @@ OAD._downloadExport = function () {
 OAD.openSettingsModal = function () {
   OAD.loadApiKey();
   const count = (OAD.DB.threads || []).length;
+  const theme = (OAD.DB.persona && OAD.DB.persona.theme) || 'dark';
   const signOutBtn = OAD._userId
     ? `<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
          <button class="ghost" style="width:100%;color:var(--text-muted)" onclick="OAD.closeModal();OAD.openSignOutModal()">Sign Out</button>
@@ -651,6 +652,13 @@ OAD.openSettingsModal = function () {
     : '';
   OAD.openModal(`
     <h2>Settings</h2>
+    <div class="field">
+      <label>Theme</label>
+      <select id="f-theme">
+        <option value="dark" ${theme === 'dark' ? 'selected' : ''}>Dark (Default)</option>
+        <option value="light" ${theme === 'light' ? 'selected' : ''}>Light (Gravity Default)</option>
+      </select>
+    </div>
     <div class="field">
       <label>Anthropic API Key</label>
       <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
@@ -677,6 +685,14 @@ OAD.openSettingsModal = function () {
 OAD._saveSettings = function () {
   const key = document.getElementById('f-api-key')?.value.trim() || '';
   OAD.setApiKey(key);
+  
+  const theme = document.getElementById('f-theme')?.value || 'dark';
+  if (OAD.DB.persona) {
+    OAD.DB.persona.theme = theme;
+    OAD.saveDB();
+  }
+  document.body.setAttribute('data-theme', theme);
+  
   OAD.closeModal();
 };
 

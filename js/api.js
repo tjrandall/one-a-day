@@ -113,3 +113,56 @@ Goal: move this forward toward the closing condition: ${thread.closing_condition
 
   return await OAD._claudeCall([{ role: 'user', content: userMsg }], systemPrompt);
 };
+
+OAD.genProactiveCounsel = async function () {
+  const persona = OAD.DB.persona;
+  
+  const heat = typeof OAD.getLifeAreaHeat === 'function' ? OAD.getLifeAreaHeat() : [];
+  const stalledThreads = (OAD.DB.threads || [])
+    .filter(function(t) { return t.status === 'stalled'; })
+    .map(function(t) { return { title: t.title, area: t.life_area }; })
+    .slice(0, 5);
+  
+  const systemPrompt = `You are the proactive counsel engine for One-A-Day.
+Your job is to look at the user's life areas and stalled threads, and suggest exactly ONE new thread (proposal) they haven't thought of, or a connection they are missing.
+Use patterns from people in similar situations.
+Tone: honest, warm, not preachy.
+
+User persona context:
+- Assumption tendencies: ${JSON.stringify(persona.assumption_tendencies)}
+- What is working: ${JSON.stringify(persona.what_is_working)}
+- What is not working: ${JSON.stringify(persona.what_is_not_working)}
+
+Respond ONLY with valid JSON in this exact shape:
+{
+  "title": "Proposed thread title",
+  "life_area": "Matching life area",
+  "closing_condition": "What real-world outcome closes this?",
+  "rationale": "Why are you suggesting this? What blind spot does it cover?"
+}
+No markdown, no explanation outside the JSON object.`;
+
+  const userMsg = `Current Life Area Heat: ${JSON.stringify(heat)}
+Top Stalled Threads: ${JSON.stringify(stalledThreads)}
+Based on this, generate a proactive suggestion.`;
+
+  const raw = await OAD._claudeCall([{ role: 'user', content: userMsg }], systemPrompt);
+
+  let parsed;
+  try {
+    const match = raw.match(/\\{[\\s\\S]*\\}/);
+    parsed = JSON.parse(match ? match[0] : raw);
+  } catch (_) {
+    throw new Error("Failed to parse proactive counsel response: " + raw);
+  }
+  
+  persona.last_proactive_scan = new Date().toISOString().slice(0, 10);
+  parsed.uuid = OAD._generateUUID();
+  parsed.date = persona.last_proactive_scan;
+  
+  OAD.DB.proposals = OAD.DB.proposals || [];
+  OAD.DB.proposals.push(parsed);
+  OAD.saveDB();
+  
+  return parsed;
+};

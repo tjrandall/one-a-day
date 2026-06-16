@@ -5,8 +5,10 @@ OAD.DB = {
   cadences: [],
   habits: [],
   ideas: [],
+  proposals: [],
 
   persona: {
+    last_proactive_scan: null,
     assumption_tendencies: [],
     counsel_history: [],
     what_is_working: [],
@@ -450,7 +452,7 @@ OAD.exportThreads = function () {
       weeklyCommitment:         t.weeklyCommitment         || null,
       effortLogged:             t.effortLogged             || 0,
       connections:              (t.connections || []).map(function (c) {
-        return { to_uuid: c.to_uuid || null, to_label: c.to_label || '', edge_type: c.edge_type };
+        return { to_uuid: c.to_uuid || null, to_label: c.to_label || '', edge_type: c.edge_type, is_suggested: c.is_suggested || false };
       }),
       evolution_log:            (t.evolution_log || []).map(function (e) {
         return { date: e.date, note: e.note };
@@ -514,6 +516,31 @@ OAD.deleteIdea = function (id) {
   OAD.saveDB();
   return true;
 };
+OAD.getProposal = function (uuid) {
+  return OAD.DB.proposals.find(function (p) { return p.uuid === uuid; }) || null;
+};
+
+OAD.acceptProposal = function (uuid) {
+  const p = OAD.getProposal(uuid);
+  if (!p) return null;
+  OAD.DB.proposals = OAD.DB.proposals.filter(function (x) { return x.uuid !== uuid; });
+  const thread = OAD.addThread(OAD.makeThread({
+    title: p.title,
+    life_area: p.life_area,
+    closing_condition: p.closing_condition,
+    priority: 'medium',
+    status: 'open'
+  }));
+  OAD.addEvolution(thread.id, 'Created from AI Proposal: ' + p.rationale);
+  OAD.saveDB();
+  return thread;
+};
+
+OAD.rejectProposal = function (uuid) {
+  OAD.DB.proposals = OAD.DB.proposals.filter(function (x) { return x.uuid !== uuid; });
+  OAD.saveDB();
+};
+
 
 // Returns the same idea all week, cycling through the list week-over-week.
 OAD.ideaOfTheWeek = function () {
@@ -530,6 +557,7 @@ OAD._normalizeDB = function () {
   OAD.DB.cadences = OAD.DB.cadences || [];
   OAD.DB.habits   = OAD.DB.habits   || [];
   OAD.DB.ideas    = OAD.DB.ideas    || [];
+  OAD.DB.proposals = OAD.DB.proposals || [];
   // Backfill UUIDs and parent_uuid for threads created before these fields existed
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
