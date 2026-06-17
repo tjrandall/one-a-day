@@ -17,6 +17,7 @@
     <div class="header-actions">
       <button class="ghost" onclick="OAD.renderTodayView()">Today</button>
       <button onclick="OAD.renderMatrixView()" style="background:var(--accent)">Matrix</button>
+      <button class="ghost" id="nav-graph-btn" onclick="OAD.renderGraphView()">Graph</button>
       <button class="ghost" onclick="OAD.renderIdeaPanel()">Ideas</button>
       <button class="ghost" onclick="OAD.renderHabitPanel()">Habits</button>
       <button class="ghost" onclick="OAD.renderCadencePanel()">Cadences</button>
@@ -45,6 +46,7 @@
 
 <!-- Layer order: supabase → supabase-client → data → engine → api → render → modals → seed → tests → boot -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <script src="js/supabase-client.js"></script>
 <script src="js/data.js"></script>
 <script src="js/engine.js"></script>

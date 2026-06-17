@@ -998,7 +998,6 @@ OAD.test('_normalizeDB: backfills days_of_week on cadences that predate the fiel
   OAD._assert(Array.isArray(OAD.DB.cadences[0].days_of_week), 'legacy cadence should get a days_of_week array backfilled');
   OAD.DB.cadences = saved;
 });
-
 // ── Tests: Cycle and Critical Path ─────────────────────────────────────
 
 OAD.test('detectCycles: returns cycles', function () {
@@ -1167,6 +1166,40 @@ OAD._finishBoot = function () {
   document.body.setAttribute('data-theme', theme);
   OAD.renderDailyView();
 };
+
+// ── Tests: render.js Graph Data Extraction ───────────────────────────
+
+OAD.test('graph: getGraphDataForArea filters by area and gathers neighbors', function () {
+  const originalThreads = OAD.DB.threads;
+  
+  const t1 = { id: 101, uuid: 'u1', title: 'Finance Task 1', life_area: 'Finance', status: 'open', connections: [{ to_uuid: 'u2', edge_type: 'blocks' }] };
+  const t2 = { id: 102, uuid: 'u2', title: 'Career Task 2', life_area: 'Career', status: 'open', connections: [] };
+  const t3 = { id: 103, uuid: 'u3', title: 'Health Task 3', life_area: 'Health', status: 'open', connections: [] };
+  const t4 = { id: 104, uuid: 'u4', title: 'Closed Finance Task', life_area: 'Finance', status: 'closed', connections: [] };
+  
+  OAD.DB.threads = [t1, t2, t3, t4];
+  
+  try {
+    const allResult = OAD.getGraphDataForArea('All Areas');
+    OAD._assertEqual(allResult.nodes.length, 3, 'All open threads should be included');
+    OAD._assertEqual(allResult.edges.length, 1, 'Connection should be returned as edge');
+    OAD._assertEqual(allResult.edges[0].source, 'u1');
+    OAD._assertEqual(allResult.edges[0].target, 'u2');
+    
+    const financeResult = OAD.getGraphDataForArea('Finance');
+    OAD._assertEqual(financeResult.nodes.length, 2, 'Should include target Finance and neighbor Career');
+    
+    const nodeUuids = financeResult.nodes.map(function(n) { return n.uuid; });
+    OAD._assert(nodeUuids.indexOf('u1') !== -1, 'Should contain u1');
+    OAD._assert(nodeUuids.indexOf('u2') !== -1, 'Should contain u2');
+    OAD._assert(nodeUuids.indexOf('u3') === -1, 'Should not contain u3');
+    OAD._assert(nodeUuids.indexOf('u4') === -1, 'Should not contain closed u4');
+    
+    OAD._assertEqual(financeResult.edges.length, 1, 'Should contain edge between u1 and u2');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
 
 OAD.boot = function () {
   const savedThreads  = OAD.DB.threads.slice();
