@@ -91,6 +91,30 @@ OAD.selectThread = function (id) {
   OAD.renderDetail(id);
 };
 
+OAD.refreshActiveView = function () {
+  OAD.renderList();
+
+  if (OAD._lastView === 'Graph') {
+    OAD.renderGraphView();
+  } else if (OAD._lastView === 'Matrix') {
+    OAD.renderMatrixView();
+  } else if (OAD._lastView === 'Daily') {
+    OAD.renderDailyView();
+  } else if (OAD._lastView === 'Today') {
+    OAD.renderTodayView();
+  } else if (OAD._lastView === 'List') {
+    OAD.filterListTab();
+  } else if (OAD._lastView === 'Ideas') {
+    OAD.renderIdeaPanel();
+  } else if (OAD._lastView === 'Habits') {
+    OAD.renderHabitPanel();
+  } else if (OAD._lastView === 'Cadences') {
+    OAD.renderCadencePanel();
+  } else if (OAD._lastView === 'Proposals') {
+    OAD.renderProposalsPanel();
+  }
+};
+
 OAD.renderDetail = function (id) {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
@@ -108,6 +132,7 @@ OAD.renderDetail = function (id) {
     else if (OAD._lastView === 'Matrix') label = 'Back to Matrix';
     else if (OAD._lastView === 'Daily') label = 'Back to Daily Summary';
     else if (OAD._lastView === 'Today') label = 'Back to Today';
+    else if (OAD._lastView === 'List') label = 'Back to List';
     else if (OAD._lastView === 'Ideas') label = 'Back to Ideas';
     else if (OAD._lastView === 'Habits') label = 'Back to Habits';
     else if (OAD._lastView === 'Cadences') label = 'Back to Cadences';
@@ -118,6 +143,7 @@ OAD.renderDetail = function (id) {
     else if (OAD._lastView === 'Matrix') backFn = 'OAD.renderMatrixView()';
     else if (OAD._lastView === 'Daily') backFn = 'OAD.renderDailyView()';
     else if (OAD._lastView === 'Today') backFn = 'OAD.renderTodayView()';
+    else if (OAD._lastView === 'List') backFn = 'OAD.renderListView()';
     else if (OAD._lastView === 'Ideas') backFn = 'OAD.renderIdeaPanel()';
     else if (OAD._lastView === 'Habits') backFn = 'OAD.renderHabitPanel()';
     else if (OAD._lastView === 'Cadences') backFn = 'OAD.renderCadencePanel()';
@@ -754,6 +780,9 @@ OAD.renderTodayView = function () {
     return daysSince(h) >= 6;
   });
 
+  const cycles = OAD.detectCycles();
+  const cycleThreadIds = new Set(cycles.flat());
+
   function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
@@ -762,6 +791,11 @@ OAD.renderTodayView = function () {
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">TODAY</span>';
+
+    const inCycle = cycleThreadIds.has(t.id);
+    const cycleBadge = inCycle 
+      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      : '';
     
     const daysOver = isOverdue
       ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
@@ -791,7 +825,7 @@ OAD.renderTodayView = function () {
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
+          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + cycleBadge + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
           childSummaryHtml +
         '</div>' +
@@ -915,233 +949,7 @@ OAD.renderTodayView = function () {
     '</div>';
 };
 
-OAD.renderDailyView = function () {
-  OAD._activeId = null;
-  OAD.renderList();
 
-  const panel = document.getElementById('detail-content');
-  if (!panel) return;
-
-  const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
-  const todayStr = todayDt.toISOString().slice(0, 10);
-  const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-
-  // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed'; })
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
-
-  const activeByUUID = {};
-  active.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-  const childrenByParentUUID = {};
-  active.forEach(function (t) {
-    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-      if (!childrenByParentUUID[t.parent_uuid]) childrenByParentUUID[t.parent_uuid] = [];
-      childrenByParentUUID[t.parent_uuid].push(t);
-    }
-  });
-  const suppressedUUIDs = new Set();
-  Object.keys(childrenByParentUUID).forEach(function (puuid) {
-    childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
-  });
-
-  const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
-
-  const q1Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
-  const q2Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q2');
-  const q3Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q3');
-  const q4Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
-
-  // ── Cadences ───────────────────────────────────────────────────────
-  const cads = OAD.DB.cadences || [];
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
-  
-  const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr; });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str; });
-
-  // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
-  function daysSince(h) {
-    if (!h.last_checked_in) return 999;
-    return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
-  }
-  const overdueHabits = activeHabits.filter(function (h) { return daysSince(h) >= 3; });
-  const dailyFreqs    = ['daily', 'every workday', 'every-other-day'];
-  const todayHabits   = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.last_checked_in === todayStr) return false;
-    return dailyFreqs.indexOf(h.frequency) !== -1;
-  });
-  const weekHabits = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.frequency !== 'weekly') return false;
-    return daysSince(h) >= 6;
-  });
-
-  function threadRow(t, context) {
-    const pc = OAD.pressureClass(t._score);
-    var badge = '';
-    const isOverdue = t.next_action_date && t.next_action_date < todayStr;
-    const isToday = t.next_action_date === todayStr;
-    
-    if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
-    else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">TODAY</span>';
-    
-    const daysOver = isOverdue
-      ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
-      : null;
-    const metaHtml = daysOver !== null
-      ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
-      : (t.next_action_date > todayStr
-          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
-          : '');
-
-    const children = childrenByParentUUID[t.uuid] || [];
-    var childSummaryHtml = '';
-    if (children.length) {
-      const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(function (c) { return c.next_action_date && c.next_action_date < todayStr; }).length;
-      const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
-      childSummaryHtml =
-        '<div class="ds-children-summary">' +
-          '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
-          overdueTag +
-          (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
-        '</div>';
-    }
-
-    const rowClass = 'ds-row ds-thread ds-row-' + context + (children.length ? ' ds-row-parent' : '');
-    return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
-      '<div class="ds-row-main">' +
-        '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
-        '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
-          (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
-          childSummaryHtml +
-        '</div>' +
-        metaHtml +
-      '</div>' +
-    '</div>';
-  }
-
-  function cadenceRow(c) {
-    const isOverdue = OAD.cadenceOverdue(c);
-    const badge = isOverdue ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
-    const rowClass = 'ds-row ds-cadence ds-row-' + (isOverdue ? 'overdue' : 'today');
-    return '<div class="' + rowClass + '">' +
-      '<div class="ds-row-main">' +
-        '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
-        '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
-            (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
-        '</div>' +
-        '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
-          'aria-label="Mark ' + OAD.esc(c.title) + ' done" ' +
-          'onclick="event.stopPropagation();OAD._dailyMarkCadenceDone(' + c.id + ')">Mark Done</button>' +
-      '</div>' +
-    '</div>';
-  }
-
-  function habitRow(h) {
-    const ds = daysSince(h);
-    const subText = ds >= 3
-      ? (ds >= 999 ? 'Never checked in' : 'Last checked in ' + ds + ' days ago')
-      : h.frequency;
-    const badge = ds >= 3 ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
-    const streakHtml = h.current_streak > 0 ? '<span class="ds-streak" aria-label="Streak ' + h.current_streak + ' days"> 🔥 ' + h.current_streak + '</span>' : '';
-    const rowClass = 'ds-row ds-habit ds-row-' + (ds >= 3 ? 'overdue' : 'today');
-    return '<div class="' + rowClass + '" id="ds-habit-' + h.id + '">' +
-      '<div class="ds-row-main">' +
-        '<span class="ds-type-tag ds-type-habit" aria-label="Habit">✦ habit</span>' +
-        '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(h.title) + streakHtml + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(subText) + '</div>' +
-        '</div>' +
-        '<div class="ds-habit-btns">' +
-          '<input class="ds-note-input" id="ds-note-' + h.id + '" type="text" ' +
-            'aria-label="Reflection note for ' + OAD.esc(h.title) + '" ' +
-            'placeholder="Note…" maxlength="120" onclick="event.stopPropagation()">' +
-          '<button class="habit-yes" style="font-size:12px;padding:4px 12px" ' +
-            'aria-label="Yes, completed ' + OAD.esc(h.title) + '" ' +
-            'onclick="event.stopPropagation();OAD._dailyCheckIn(' + h.id + ', true)">✓ Yes</button>' +
-          '<button class="habit-no" style="font-size:12px;padding:4px 12px" ' +
-            'aria-label="No, did not complete ' + OAD.esc(h.title) + '" ' +
-            'onclick="event.stopPropagation();OAD._dailyCheckIn(' + h.id + ', false)">✗ No</button>' +
-        '</div>' +
-      '</div>' +
-    '</div>';
-  }
-
-  function bucket(id, icon, label, items) {
-    if (!items.length) return '';
-    return '<section class="ds-bucket ds-bucket-' + id + '" aria-label="' + label + '">' +
-      '<h3 class="ds-bucket-header">' +
-        '<span class="ds-bucket-icon" aria-hidden="true">' + icon + '</span>' +
-        '<span class="ds-bucket-label">' + label + '</span>' +
-        '<span class="ds-bucket-count" aria-label="' + items.length + ' items">' + items.length + '</span>' +
-      '</h3>' +
-      items.join('') +
-    '</section>';
-  }
-
-  const q1Items = q1Threads.map(t => threadRow(t, 'q1'));
-  const q2Items = q2Threads.map(t => threadRow(t, 'q2'));
-  const q3Items = q3Threads.map(t => threadRow(t, 'q3'));
-  const q4Items = q4Threads.map(t => threadRow(t, 'q4'));
-
-  const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
-  const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
-  
-  const bottomBucketsHtml = bucket('q1', '🔥', 'Do First (Q1)', q1Items) +
-                            bucket('q2', '📅', 'Schedule (Q2)', q2Items) +
-                            bucket('q3', '🗣️', 'Delegate (Q3)', q3Items) +
-                            bucket('q4', '🗑️', 'Eliminate (Q4)', q4Items) +
-                            bucket('habits', '✦', 'Active Habits', habitItems) +
-                            bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems);
-
-  const focusThread = OAD.selectFocusThread();
-  var focusCardHtml = '';
-  if (focusThread) {
-    const fpc   = OAD.pressureClass(focusThread._score);
-    const freason = OAD.focusReason(focusThread);
-    const fctx  = OAD.getGraphContext(focusThread.id);
-    const blockedByHtml = fctx.blockedBy.length
-      ? '<div class="focus-blocked-by">Blocked by: ' +
-          fctx.blockedBy.map(function (b) { return OAD.esc(b.title); }).join(', ') +
-        '</div>'
-      : '';
-    focusCardHtml =
-      '<div class="focus-card" role="button" onclick="OAD.selectThread(' + focusThread.id + ')" ' +
-          'aria-label="Focus: ' + OAD.esc(focusThread.title) + '">' +
-        '<div class="focus-card-header">' +
-          '<span class="focus-label">FOCUS NOW</span>' +
-          '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
-        '</div>' +
-        '<div class="focus-title">' + OAD.esc(focusThread.title) + '</div>' +
-        '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
-        '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
-        (focusThread.next_action
-          ? '<div class="focus-next"><span class="focus-next-label">Next:</span> ' + OAD.esc(focusThread.next_action) + '</div>'
-          : '') +
-        blockedByHtml +
-      '</div>';
-  }
-
-  panel.innerHTML =
-    '<div class="ds-panel" role="main" style="max-width: 900px;">' +
-      '<header class="ds-header">' +
-        '<h2>Today</h2>' +
-        '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
-      '</header>' +
-      focusCardHtml +
-      bottomBucketsHtml +
-    '</div>';
-};
 
 OAD.renderDailyView = function () {
   OAD._lastView = 'Daily';
@@ -1179,16 +987,20 @@ OAD.renderDailyView = function () {
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
-  // Eisenhower Matrix Categorization
-  const q1Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
-  const q2Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q2');
-  const q3Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q3');
-  const q4Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
+  // Filter threads into the standard buckets
+  const overdueThreads = filteredActive.filter(t => t.next_action_date && t.next_action_date < todayStr);
+  const todayThreads   = filteredActive.filter(t => t.next_action_date === todayStr);
+  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  const in7Str = in7Dt.toISOString().slice(0, 10);
+  const weekThreads    = filteredActive.filter(t => t.next_action_date > todayStr && t.next_action_date <= in7Str);
+  const activeThreads  = filteredActive.filter(t => !t.next_action_date);
+
+  // Cycle detection
+  const cycles = OAD.detectCycles();
+  const cycleThreadIds = new Set(cycles.flat());
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.DB.cadences || [];
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr; });
@@ -1224,6 +1036,11 @@ OAD.renderDailyView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
     
+    const inCycle = cycleThreadIds.has(t.id);
+    const cycleBadge = inCycle 
+      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      : '';
+
     const daysOver = isOverdue
       ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
       : null;
@@ -1252,7 +1069,7 @@ OAD.renderDailyView = function () {
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
+          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + cycleBadge + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
           childSummaryHtml +
         '</div>' +
@@ -1318,37 +1135,17 @@ OAD.renderDailyView = function () {
         '<span class="ds-bucket-label">' + label + '</span>' +
         '<span class="ds-bucket-count" aria-label="' + items.length + ' items">' + items.length + '</span>' +
       '</h3>' +
-      items.join('') +
+      '<div class="ds-bucket-body">' + items.join('') + '</div>' +
     '</section>';
   }
 
-  const q1Items = q1Threads.map(t => threadRow(t, 'q1'));
-  const q2Items = q2Threads.map(t => threadRow(t, 'q2'));
-  const q3Items = q3Threads.map(t => threadRow(t, 'q3'));
-  const q4Items = q4Threads.map(t => threadRow(t, 'q4'));
-
-  function quadrantHtml(id, label, items, desc) {
-    return '<div class="matrix-quadrant matrix-' + id + '">' +
-      '<div class="matrix-q-header">' +
-        '<div class="matrix-q-title">' + label + ' <span class="matrix-q-count">' + items.length + '</span></div>' +
-        '<div class="matrix-q-desc">' + desc + '</div>' +
-      '</div>' +
-      '<div class="matrix-q-body">' + (items.length ? items.join('') : '<div class="text-muted text-sm" style="padding: 10px;">None</div>') + '</div>' +
-    '</div>';
-  }
-
-  const matrixHtml = '<div class="eisenhower-matrix">' +
-    quadrantHtml('q1', 'Do First', q1Items, 'Urgent & Important') +
-    quadrantHtml('q2', 'Schedule', q2Items, 'Important, Not Urgent') +
-    quadrantHtml('q3', 'Delegate / Assess', q3Items, 'Urgent, Not Important') +
-    quadrantHtml('q4', 'Eliminate / Ignore', q4Items, 'Not Urgent, Not Important') +
-  '</div>';
+  const overdueItems = overdueThreads.map(t => threadRow(t, 'overdue'));
+  const todayItems   = todayThreads.map(t => threadRow(t, 'today'));
+  const weekItems    = weekThreads.map(t => threadRow(t, 'week'));
+  const activeItems  = activeThreads.map(t => threadRow(t, 'active'));
 
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
   const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
-  
-  const bottomBucketsHtml = bucket('habits', '✦', 'Active Habits', habitItems) +
-                            bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems);
 
   // ── Focus Now card ─────────────────────────────────────────────────
   const focusThread = OAD.selectFocusThread();
@@ -1358,7 +1155,7 @@ OAD.renderDailyView = function () {
     const freason = OAD.focusReason(focusThread);
     const fctx  = OAD.getGraphContext(focusThread.id);
     const blockedByHtml = fctx.blockedBy.length
-      ? '<div class="focus-blocked-by">Blocked by: ' +
+      ? '<div class="focus-blocked-by"><span class="block-tag">Blocked by:</span> ' +
           fctx.blockedBy.map(function (b) { return OAD.esc(b.title); }).join(', ') +
         '</div>'
       : '';
@@ -1383,23 +1180,26 @@ OAD.renderDailyView = function () {
   const areaHeat = OAD.getLifeAreaHeat();
   var heatMapHtml = '';
   if (areaHeat.length) {
-    heatMapHtml = '<div class="area-heat-map" role="list" aria-label="Life area heat">' +
-      areaHeat.map(function (a) {
-        const heat = a.avgPressure >= 60 ? 'hot' : a.avgPressure >= 30 ? 'warm' : 'cool';
-        const stalledTag = a.stalled ? '<span class="area-stalled">' + a.stalled + ' stalled</span>' : '';
-        return '<div class="area-chip area-chip-' + heat + '" role="listitem" ' +
-          'aria-label="' + OAD.esc(a.name) + ' ' + a.count + ' threads avg pressure ' + a.avgPressure + '">' +
-          '<span class="area-chip-name">' + OAD.esc(a.name) + '</span>' +
-          '<span class="area-chip-score">' + a.avgPressure + '</span>' +
-          stalledTag +
-        '</div>';
-      }).join('') +
-    '</div>';
+    heatMapHtml = '<section class="ds-area-heat-section" aria-label="Life Area Status">' +
+      '<h3 class="ds-bucket-header"><span class="ds-bucket-icon" aria-hidden="true">🗂</span><span class="ds-bucket-label">Life Areas Heat</span></h3>' +
+      '<div class="area-heat-map" role="list" aria-label="Life area heat">' +
+        areaHeat.map(function (a) {
+          const heat = a.avgPressure >= 60 ? 'hot' : a.avgPressure >= 30 ? 'warm' : 'cool';
+          const stalledTag = a.stalled ? '<span class="area-stalled">' + a.stalled + ' stalled</span>' : '';
+          return '<div class="area-chip area-chip-' + heat + '" role="listitem" ' +
+            'aria-label="' + OAD.esc(a.name) + ' ' + a.count + ' threads avg pressure ' + a.avgPressure + '">' +
+            '<span class="area-chip-name">' + OAD.esc(a.name) + '</span>' +
+            '<div class="area-chip-stats">' +
+              '<span class="area-chip-score">' + a.avgPressure + '</span>' +
+              stalledTag +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</div>' +
+    '</section>';
   }
 
   // ── This Week's Load ───────────────────────────────────────────────
-  // One line per day for the next 7 days: date + item count + text label.
-  // Text label (Clear / Busy / Heavy) is the primary signal — color is secondary.
   const weekLoadHtml = (function () {
     var rows = '';
     for (var di = 0; di < 7; di++) {
@@ -1412,12 +1212,19 @@ OAD.renderDailyView = function () {
       var label    = total >= 3 ? 'Heavy' : total === 2 ? 'Busy' : 'Clear';
       var labelCls = total >= 3 ? 'load-row-heavy' : total === 2 ? 'load-row-busy' : 'load-row-clear';
       var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      
+      const pct = Math.min((total / 4) * 100, 100);
       rows +=
         '<div class="load-row ' + labelCls + '" aria-label="' +
             OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + label + '">' +
-          '<span class="load-day">'   + OAD.esc(dayLabel) + '</span>' +
-          '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
-          '<span class="load-label">' + OAD.esc(label) + '</span>' +
+          '<div class="load-row-details">' +
+            '<span class="load-day">'   + OAD.esc(dayLabel) + '</span>' +
+            '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
+            '<span class="load-label">' + OAD.esc(label) + '</span>' +
+          '</div>' +
+          '<div class="load-progress-bar">' +
+            '<div class="load-progress-fill" style="width: ' + pct + '%"></div>' +
+          '</div>' +
         '</div>';
     }
     return '<section class="ds-week-load" aria-label="This week\'s load">' +
@@ -1425,28 +1232,81 @@ OAD.renderDailyView = function () {
         '<span class="ds-bucket-icon" aria-hidden="true">▤</span>' +
         '<span class="ds-bucket-label">This Week\'s Load</span>' +
       '</h3>' +
-      rows +
+      '<div class="ds-week-load-body">' + rows + '</div>' +
     '</section>';
   }());
 
+  // ── Salutation & Metrics calculation ──────────────────────────────
+  const hours = new Date().getHours();
+  const salutation = hours < 12 ? 'Good morning' : hours < 18 ? 'Good afternoon' : 'Good evening';
+  const persona = OAD.DB.persona;
+  const userName = (persona && persona.name) || 'Chief';
+  
+  const scores = active.map(t => t._score);
+  const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+  const avgCls = OAD.pressureClass(avgPressure);
+  const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
+  const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
+    ? OAD.formatDate(persona.life_context.hard_deadline) 
+    : '—';
+
+  // ── Render HTML to panel ──────────────────────────────────────────
   panel.innerHTML =
-    '<div class="ds-panel" role="main">' +
-      '<header class="ds-header">' +
-        '<h2>Daily Summary</h2>' +
-        '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
+    '<div class="ds-dashboard" role="main">' +
+      '<header class="ds-hero">' +
+        '<div class="ds-greeting-info">' +
+          '<h1>' + salutation + ', <span class="ds-username">' + OAD.esc(userName) + '</span></h1>' +
+          '<p class="ds-subtitle">' + OAD.esc(dateLabel) + '</p>' +
+        '</div>' +
+        '<div class="ds-quick-actions">' +
+          '<button class="success" onclick="OAD.openNewThreadModal()">+ New Task</button>' +
+        '</div>' +
       '</header>' +
-      focusCardHtml +
-      heatMapHtml +
-      bucket('overdue', '⚠', 'Overdue', overdueItems) +
-      bucket('today',   '▶', 'Today',   todayItems)   +
-      bucket('week',    '○', 'This Week', weekItems)   +
-      bucket('active',  '◇', 'Active — no date set', activeItems) +
-      weekLoadHtml +
-      (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length
-        ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, nothing due today or this week.</div>'
-        : '') +
+
+      '<div class="ds-metrics-grid">' +
+        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
+          '<div class="ds-metric-title">Active Tasks</div>' +
+          '<div class="ds-metric-value">' + active.length + '</div>' +
+          '<div class="ds-metric-desc">In progress</div>' +
+        '</div>' +
+        '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
+          '<div class="ds-metric-title">Stalled Tasks</div>' +
+          '<div class="ds-metric-value stalled">' + active.filter(t => t.status === 'stalled').length + '</div>' +
+          '<div class="ds-metric-desc">Need attention</div>' +
+        '</div>' +
+        '<div class="ds-metric-card">' +
+          '<div class="ds-metric-title">Avg Pressure</div>' +
+          '<div class="ds-metric-value ' + avgCls + '">' + avgPressure + '</div>' +
+          '<div class="ds-metric-desc">Level: ' + OAD.esc(pressureLevel) + '</div>' +
+        '</div>' +
+        '<div class="ds-metric-card">' +
+          '<div class="ds-metric-title">Hard Deadline</div>' +
+          '<div class="ds-metric-value deadline">' + OAD.esc(hardDeadlineStr) + '</div>' +
+          '<div class="ds-metric-desc">Target milestone</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="ds-main-grid">' +
+        '<div class="ds-col-left">' +
+          focusCardHtml +
+          heatMapHtml +
+          weekLoadHtml +
+        '</div>' +
+        '<div class="ds-col-right">' +
+          bucket('overdue', '⚠', 'Overdue Tasks', overdueItems) +
+          bucket('today',   '▶', 'Due Today',   todayItems)   +
+          bucket('habits',  '✦', 'Active Habits', habitItems)   +
+          bucket('cadences','📅', 'Upcoming Cadences', cadenceItems) +
+          bucket('week',    '○', 'This Week', weekItems)   +
+          bucket('active',  '◇', 'Active — no date set', activeItems) +
+          (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length && !habitItems.length && !cadenceItems.length
+            ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, due today, or active.</div>'
+            : '') +
+        '</div>' +
+      '</div>' +
     '</div>';
 };
+
 
 
 OAD.renderMatrixView = function () {
@@ -1521,6 +1381,9 @@ OAD.renderMatrixView = function () {
 
   // ── Row renderers ──
 
+  const cycles = OAD.detectCycles();
+  const cycleThreadIds = new Set(cycles.flat());
+
   function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
@@ -1529,6 +1392,11 @@ OAD.renderMatrixView = function () {
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
+
+    const inCycle = cycleThreadIds.has(t.id);
+    const cycleBadge = inCycle 
+      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      : '';
     
     const daysOver = isOverdue
       ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
@@ -1558,7 +1426,7 @@ OAD.renderMatrixView = function () {
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + '</div>' +
+          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + cycleBadge + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
           childSummaryHtml +
         '</div>' +
@@ -1935,11 +1803,27 @@ OAD._updateGraph = function () {
     'other': '#8888aa'
   };
   
+  var cycles = OAD.detectCycles();
+  var cycleThreadIds = new Set(cycles.flat());
+  var cycleEdgesSet = new Set();
+  cycles.forEach(function (cycle) {
+    for (var i = 0; i < cycle.length; i++) {
+      var sourceId = cycle[i];
+      var targetId = cycle[(i + 1) % cycle.length];
+      cycleEdgesSet.add(sourceId + '->' + targetId);
+    }
+  });
+
   data.nodes.forEach(function (t) {
     var areaLower = (t.life_area || 'other').toLowerCase();
     var color = areaColors[areaLower] || areaColors['other'];
     var pressure = OAD.pressure(t);
     var size = 20 + Math.round(pressure * 0.25); // 20px to 45px
+    
+    var nodeClasses = [];
+    if (cycleThreadIds.has(t.id)) {
+      nodeClasses.push('cycle-node');
+    }
     
     cyElements.push({
       group: 'nodes',
@@ -1949,11 +1833,26 @@ OAD._updateGraph = function () {
         color: color,
         size: size,
         threadId: t.id
-      }
+      },
+      classes: nodeClasses.join(' ')
     });
   });
   
   data.edges.forEach(function (e) {
+    var sourceThread = OAD.getThreadByUUID(e.source);
+    var targetThread = OAD.getThreadByUUID(e.target);
+    var isCycleEdge = false;
+    if (sourceThread && targetThread) {
+      if (cycleEdgesSet.has(sourceThread.id + '->' + targetThread.id)) {
+        isCycleEdge = true;
+      }
+    }
+
+    var edgeClasses = ['edge-' + e.type];
+    if (isCycleEdge) {
+      edgeClasses.push('cycle-edge');
+    }
+
     cyElements.push({
       group: 'edges',
       data: {
@@ -1962,7 +1861,7 @@ OAD._updateGraph = function () {
         target: e.target,
         type: e.type
       },
-      classes: 'edge-' + e.type
+      classes: edgeClasses.join(' ')
     });
   });
   
@@ -2064,6 +1963,22 @@ OAD._drawCytoscape = function (elements, layoutName) {
         selector: '.highlighted',
         style: {
           'opacity': 1.0
+        }
+      },
+      {
+        selector: 'node.cycle-node',
+        style: {
+          'border-width': '5px',
+          'border-color': '#ff4d6d',
+          'border-style': 'double'
+        }
+      },
+      {
+        selector: 'edge.cycle-edge',
+        style: {
+          'line-color': '#ff4d6d',
+          'target-arrow-color': '#ff4d6d',
+          'width': 4
         }
       },
       {
@@ -2196,4 +2111,144 @@ OAD._renderGraphFallback = function (data) {
         (cardsHtml || '<div class="detail-empty">No threads found for this filter.</div>') +
       '</div>' +
     '</div>';
+};
+
+OAD.renderListView = function () {
+  OAD._lastView = 'List';
+  OAD.highlightNav('renderListView');
+  
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  if (OAD._activeListSearch === undefined) OAD._activeListSearch = '';
+  if (OAD._activeListStatus === undefined) OAD._activeListStatus = 'all';
+
+  const threads = OAD.DB.threads;
+  const openCount = threads.filter(t => t.status !== 'closed').length;
+  const stalledCount = threads.filter(t => t.status === 'stalled').length;
+  const scores = threads.map(t => OAD.pressure(t));
+  const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
+  const avgCls = avgPressure >= 60 ? 'pressure-high' : avgPressure >= 30 ? 'pressure-mid' : 'pressure-low';
+  const persona = OAD.DB.persona;
+  const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
+    ? OAD.formatDate(persona.life_context.hard_deadline) 
+    : '—';
+  const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
+
+  const statusOptions = ['all', 'open', 'stalled', 'waiting', 'closed'].map(s => {
+    const label = s === 'all' ? 'All States' : s.charAt(0).toUpperCase() + s.slice(1);
+    const selected = s === OAD._activeListStatus ? 'selected' : '';
+    return `<option value="${s}" ${selected}>${label}</option>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div class="list-tab-container">
+      <div class="list-tab-header">
+        <h2>All Tasks</h2>
+        <div id="list-tab-persona-bar" class="persona-bar" style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px 16px; margin:0; width:100%; box-sizing:border-box;">
+          <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${openCount}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalledCount}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Avg Pressure</span><span class="val ${avgCls}">${avgPressure}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(pressureLevel)}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(hardDeadlineStr)}</span></div>
+          <div style="margin-left:auto">
+            <button class="ghost" style="font-size:12px;padding:5px 10px" onclick="OAD.openPersonaModal()">Edit Persona</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="list-tab-toolbar">
+        <input type="text" id="list-tab-search" placeholder="Search tasks by title or life area…" value="${OAD.esc(OAD._activeListSearch)}" oninput="OAD.filterListTab()">
+        <select id="list-tab-status" onchange="OAD.filterListTab()">
+          ${statusOptions}
+        </select>
+        <button onclick="OAD.openNewThreadModal()">+ New Thread</button>
+      </div>
+
+      <div id="list-tab-threads" class="list-tab-grid"></div>
+    </div>
+  `;
+
+  OAD.filterListTab();
+};
+
+OAD.filterListTab = function () {
+  const searchInput = document.getElementById('list-tab-search');
+  const statusSelect = document.getElementById('list-tab-status');
+  
+  if (searchInput) OAD._activeListSearch = searchInput.value;
+  if (statusSelect) OAD._activeListStatus = statusSelect.value;
+
+  const query = (OAD._activeListSearch || '').toLowerCase();
+  const statusFilter = OAD._activeListStatus || 'all';
+
+  const cycles = OAD.detectCycles();
+  const cycleThreadIds = new Set(cycles.flat());
+
+  const threads = OAD.DB.threads
+    .filter(t => {
+      const matchesSearch = !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query);
+      const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
+      return matchesSearch && matchesStatus;
+    })
+    .map(t => ({ ...t, _score: OAD.pressure(t) }))
+    .sort((a, b) => b._score - a._score);
+
+  const container = document.getElementById('list-tab-threads');
+  if (!container) return;
+
+  if (!threads.length) {
+    container.innerHTML = '<div class="detail-empty" style="grid-column:1/-1; padding:48px; text-align:center;">No tasks found matching current filters.</div>';
+    return;
+  }
+
+  container.innerHTML = threads.map(t => {
+    const pc = OAD.pressureClass(t._score);
+    const ds = t.deadline ? OAD.deadlineState(t) : null;
+    const atRisk = ds && !ds.onTrack;
+    
+    let deadlineLineHtml = '';
+    if (ds) {
+      const days = ds.daysRemaining;
+      const timeText = days <= 0 ? 'Past deadline'
+        : ds.weeksRemaining > 0
+          ? ds.weeksRemaining + 'w remaining'
+          : days + 'd remaining';
+      const sessText = ds.sessionsRemaining != null
+        ? ' · ' + ds.sessionsRemaining + ' session' + (ds.sessionsRemaining !== 1 ? 's' : '') + ' left'
+        : '';
+      const riskText = atRisk
+        ? ' <span class="deadline-behind">⚑ ' + ds.behindBy + ' behind</span>'
+        : '';
+      deadlineLineHtml = '<div class="deadline-line">' +
+        '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
+        riskText +
+        '</div>';
+    }
+
+    const inCycle = cycleThreadIds.has(t.id);
+    const cycleBadge = inCycle 
+      ? '<span class="cycle-warning-badge" title="Circular Dependency Cycle: this thread blocks itself circularity">🔄 Cycle</span>' 
+      : '';
+
+    return `
+      <div class="list-tab-card" onclick="OAD.selectThread(${t.id})">
+        <div class="list-tab-card-header">
+          <div class="list-tab-card-title">${OAD.esc(t.title)}</div>
+          <div class="pressure-badge ${pc}">${t._score}</div>
+        </div>
+        <div class="list-tab-card-meta">
+          <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
+          <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
+          <span>${OAD.esc(t.life_area)}</span>
+          ${cycleBadge}
+        </div>
+        ${deadlineLineHtml ? `<div style="margin-top: 4px;">${deadlineLineHtml}</div>` : ''}
+        <div class="list-tab-card-footer">
+          <span>Next: ${t.next_action ? OAD.esc(t.next_action) : '<span class="text-muted">None</span>'}</span>
+          <span>${t.next_action_date ? OAD.esc(OAD.formatDate(t.next_action_date)) : ''}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
 };

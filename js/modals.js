@@ -193,7 +193,7 @@ OAD._savePromotedThread = function () {
   const thread = OAD.addThread(data);
   OAD.addEvolution(thread.id, 'Thread promoted from idea incubation.');
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.selectThread(thread.id);
 };
 
@@ -214,7 +214,7 @@ OAD._saveNewThread = function () {
   const thread = OAD.addThread(data);
   OAD.addEvolution(thread.id, 'Thread created.');
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.selectThread(thread.id);
 };
 
@@ -244,7 +244,7 @@ OAD._saveEditThread = function (id) {
   if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
   if (notes.length) OAD.addEvolution(id, notes.join('; '));
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.renderDetail(id);
 };
 
@@ -253,7 +253,7 @@ OAD._deleteThread = function (id) {
   OAD.deleteThread(id);
   OAD._activeId = null;
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   const panel = document.getElementById('detail-content');
   if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
 };
@@ -325,7 +325,7 @@ OAD._saveConnection = function (id) {
   t.connections.push({ to_uuid, to_label, edge_type });
   OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}${to_uuid ? '' : ' (external)'}`);
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.renderDetail(id);
 };
 
@@ -636,7 +636,7 @@ OAD._confirmImport = function () {
   const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates);
   OAD._pendingImport = null;
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   alert('Import complete: ' + result.created + ' created, ' + result.updated + ' updated.');
 };
 
@@ -928,7 +928,7 @@ OAD._cawSave = function () {
 
   OAD._caw = null;
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.renderDetail(caw.id);
 };
 
@@ -955,7 +955,7 @@ OAD._cawSaveClose = function () {
 
   OAD._caw = null;
   OAD.closeModal();
-  OAD.renderList();
+  OAD.refreshActiveView();
   OAD.renderDetail(caw.id);
 };
 

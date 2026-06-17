@@ -1201,6 +1201,112 @@ OAD.test('graph: getGraphDataForArea filters by area and gathers neighbors', fun
   }
 });
 
+OAD.test('cycle: detectCycles identifies circular dependencies', function () {
+  const originalThreads = OAD.DB.threads;
+  
+  // Create a 3-node cycle: A blocks B, B blocks C, C blocks A
+  const tA = { id: 201, uuid: 'uA', title: 'Task A', status: 'open', connections: [{ to_uuid: 'uB', edge_type: 'blocks' }] };
+  const tB = { id: 202, uuid: 'uB', title: 'Task B', status: 'open', connections: [{ to_uuid: 'uC', edge_type: 'blocks' }] };
+  const tC = { id: 203, uuid: 'uC', title: 'Task C', status: 'open', connections: [{ to_uuid: 'uA', edge_type: 'blocks' }] };
+  
+  OAD.DB.threads = [tA, tB, tC];
+  
+  try {
+    const cycles = OAD.detectCycles(true); // force recalculation
+    OAD._assertEqual(cycles.length, 1, 'Should find exactly 1 cycle');
+    OAD._assertEqual(cycles[0].length, 3, 'Cycle should consist of 3 nodes');
+    OAD._assert(cycles[0].indexOf(201) !== -1, 'Cycle should contain Task A');
+    OAD._assert(cycles[0].indexOf(202) !== -1, 'Cycle should contain Task B');
+    OAD._assert(cycles[0].indexOf(203) !== -1, 'Cycle should contain Task C');
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.detectCycles(true); // reset cache
+  }
+});
+
+OAD.test('list: filter caching preserves search and status states', function () {
+  const originalSearch = OAD._activeListSearch;
+  const originalStatus = OAD._activeListStatus;
+  
+  try {
+    OAD._activeListSearch = 'test-query';
+    OAD._activeListStatus = 'stalled';
+    
+    // Call renderListView (mocked panel setup)
+    const mockPanel = document.createElement('div');
+    mockPanel.id = 'detail-content';
+    document.body.appendChild(mockPanel);
+    
+    OAD.renderListView();
+    
+    OAD._assertEqual(OAD._activeListSearch, 'test-query', 'Search query should be retained');
+    OAD._assertEqual(OAD._activeListStatus, 'stalled', 'Status filter should be retained');
+    
+    document.body.removeChild(mockPanel);
+  } finally {
+    OAD._activeListSearch = originalSearch;
+    OAD._activeListStatus = originalStatus;
+  }
+});
+
+OAD.test('daily summary rendering validates correct elements and no exceptions', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalHabits  = OAD.DB.habits;
+  const originalCadences = OAD.DB.cadences;
+  const originalPersona = OAD.DB.persona;
+
+  const panel = document.getElementById('detail-content');
+  const originalHTML = panel ? panel.innerHTML : '';
+
+  try {
+    // Set up minimal mock DB
+    OAD.DB.threads = [
+      { id: 1, uuid: 't1', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', next_action_date: '2026-06-15' },
+      { id: 2, uuid: 't2', title: 'Task B', status: 'stalled', life_area: 'Personal', priority: 'medium', parent_uuid: 't1' }
+    ];
+    OAD.DB.habits = [
+      { id: 1, title: 'Drink water', phase: 'building', frequency: 'daily', last_checked_in: '2026-06-16', current_streak: 5 }
+    ];
+    OAD.DB.cadences = [
+      { id: 1, title: 'Weekly sync', next_due: '2026-06-17', recurrence: 'weekly' }
+    ];
+    OAD.DB.persona = {
+      name: 'Test Chief',
+      life_context: {
+        pressure_level: 'low',
+        hard_deadline: '2026-12-31'
+      }
+    };
+
+    // Render daily summary
+    OAD.renderDailyView();
+
+    // Verify it injected structural elements
+    OAD._assert(panel !== null, 'Panel should exist');
+    const dashboard = panel.querySelector('.ds-dashboard');
+    OAD._assert(dashboard !== null, 'Should render .ds-dashboard container');
+
+    const metricsGrid = panel.querySelector('.ds-metrics-grid');
+    OAD._assert(metricsGrid !== null, 'Should render .ds-metrics-grid');
+
+    const usernameSpan = panel.querySelector('.ds-username');
+    OAD._assert(usernameSpan !== null, 'Should render .ds-username');
+    OAD._assertEqual(usernameSpan.textContent, 'Test Chief', 'Username should match the mock persona');
+
+    const focusCard = panel.querySelector('.focus-card');
+    OAD._assert(focusCard !== null, 'Should select a focus card');
+
+  } finally {
+    if (panel) {
+      panel.innerHTML = originalHTML;
+    }
+    OAD.DB.threads = originalThreads;
+    OAD.DB.habits = originalHabits;
+    OAD.DB.cadences = originalCadences;
+    OAD.DB.persona = originalPersona;
+  }
+});
+
 OAD.boot = function () {
   const savedThreads  = OAD.DB.threads.slice();
   const savedPersona  = JSON.parse(JSON.stringify(OAD.DB.persona));
