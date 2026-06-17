@@ -101,6 +101,29 @@ OAD.renderDetail = function (id) {
     return;
   }
 
+  var backBtnHtml = '';
+  if (OAD._lastView) {
+    var label = 'Back';
+    if (OAD._lastView === 'Graph') label = 'Back to Graph';
+    else if (OAD._lastView === 'Daily') label = 'Back to Matrix';
+    else if (OAD._lastView === 'Today') label = 'Back to Today';
+    else if (OAD._lastView === 'Ideas') label = 'Back to Ideas';
+    else if (OAD._lastView === 'Habits') label = 'Back to Habits';
+    else if (OAD._lastView === 'Cadences') label = 'Back to Cadences';
+    else if (OAD._lastView === 'Proposals') label = 'Back to Proposals';
+    
+    var backFn = '';
+    if (OAD._lastView === 'Graph') backFn = 'OAD.renderGraphView()';
+    else if (OAD._lastView === 'Daily') backFn = 'OAD.renderDailyView()';
+    else if (OAD._lastView === 'Today') backFn = 'OAD.renderTodayView()';
+    else if (OAD._lastView === 'Ideas') backFn = 'OAD.renderIdeaPanel()';
+    else if (OAD._lastView === 'Habits') backFn = 'OAD.renderHabitPanel()';
+    else if (OAD._lastView === 'Cadences') backFn = 'OAD.renderCadencePanel()';
+    else if (OAD._lastView === 'Proposals') backFn = 'OAD.renderProposalsPanel()';
+    
+    backBtnHtml = `<button class="ghost" onclick="${backFn}" style="margin-right:auto;display:flex;align-items:center;gap:6px">← ${label}</button>`;
+  }
+
   const score   = OAD.pressure(t);
   const pc      = OAD.pressureClass(score);
   const lastInsight = (t.ai_insights || []).slice(-1)[0] || null;
@@ -201,6 +224,7 @@ OAD.renderDetail = function (id) {
         </div>
       </div>
       <div class="detail-actions">
+        ${backBtnHtml}
         <button class="success" onclick="OAD.openCompleteActionModal(${t.id})">Complete Action</button>
         <button class="secondary" onclick="OAD.openEditModal(${t.id})">Edit</button>
         <button class="ghost" onclick="OAD.openLogModal(${t.id})">+ Log</button>
@@ -327,6 +351,8 @@ OAD.markCadenceDone = function (id) {
 };
 
 OAD.renderCadencePanel = function () {
+  OAD._lastView = 'Cadences';
+  OAD.highlightNav('renderCadencePanel');
   OAD._activeId = null;
   OAD.renderList();
   OAD.renderOverdueBanner();
@@ -397,6 +423,8 @@ OAD._adjustCadenceDue = function (id, dateValue) {
 // ── Idea panel ───────────────────────────────────────────────────────
 
 OAD.renderIdeaPanel = function () {
+  OAD._lastView = 'Ideas';
+  OAD.highlightNav('renderIdeaPanel');
   OAD._activeId = null;
   OAD.renderList();
 
@@ -478,6 +506,8 @@ OAD._deleteIdeaConfirm = function (id) {
 // ── Proposals panel ──────────────────────────────────────────────────
 
 OAD.renderProposalsPanel = function () {
+  OAD._lastView = 'Proposals';
+  OAD.highlightNav('renderProposalsPanel');
   OAD._activeId = null;
   OAD.renderList();
 
@@ -530,6 +560,8 @@ OAD._rejectProposal = function(uuid) {
 OAD._habitShowButtons = new Set(); // habits whose "Change" was clicked
 
 OAD.renderHabitPanel = function () {
+  OAD._lastView = 'Habits';
+  OAD.highlightNav('renderHabitPanel');
   OAD._activeId = null;
   OAD.renderList();
 
@@ -652,6 +684,8 @@ OAD.draftEmailModal = async function (id) {
 
 
 OAD.renderTodayView = function () {
+  OAD._lastView = 'Today';
+  OAD.highlightNav('renderTodayView');
   OAD._activeId = null;
   OAD.renderList();
 
@@ -880,6 +914,8 @@ OAD.renderTodayView = function () {
 };
 
 OAD.renderDailyView = function () {
+  OAD._lastView = 'Daily';
+  OAD.highlightNav('renderDailyView');
   OAD._activeId = null;
   OAD.renderList();
 
@@ -1136,4 +1172,492 @@ OAD._dailyCheckIn = function (id, done) {
   const note = document.getElementById('ds-note-' + id)?.value.trim() || '';
   OAD.checkInHabit(id, done, note);
   OAD.renderDailyView();
+};
+
+// ── Graph Visualizer Implementation ───────────────────────────────────
+
+OAD.highlightNav = function (actionName) {
+  var btns = document.querySelectorAll('.header-actions button');
+  btns.forEach(function (btn) {
+    var onclickStr = btn.getAttribute('onclick') || '';
+    if (onclickStr.indexOf(actionName) !== -1) {
+      btn.style.background = 'var(--accent)';
+      btn.style.color = '#fff';
+      btn.classList.remove('ghost');
+    } else {
+      btn.style.background = '';
+      btn.style.color = '';
+      btn.classList.add('ghost');
+    }
+  });
+};
+
+OAD.getGraphDataForArea = function (areaFilter) {
+  var threads = (OAD.DB.threads || []).filter(function (t) { return t.status !== 'closed'; });
+  
+  if (!areaFilter || areaFilter === 'All Areas') {
+    var nodes = threads;
+    var edges = [];
+    var edgeSet = new Set();
+    
+    nodes.forEach(function (t) {
+      var conns = t.connections || [];
+      conns.forEach(function (c) {
+        var target = null;
+        if (c.to_uuid) {
+          target = threads.find(function (x) { return x.uuid === c.to_uuid; });
+        }
+        if (!target && c.to_label) {
+          var lbl = c.to_label.toLowerCase();
+          target = threads.find(function (x) { return x.id !== t.id && (x.title || '').toLowerCase() === lbl; });
+        }
+        
+        if (target) {
+          var key = t.uuid + '->' + target.uuid + ':' + c.edge_type;
+          if (!edgeSet.has(key)) {
+            edgeSet.add(key);
+            edges.push({
+              source: t.uuid,
+              target: target.uuid,
+              type: c.edge_type,
+              is_suggested: !!c.is_suggested
+            });
+          }
+        }
+      });
+    });
+    
+    return { nodes: nodes, edges: edges };
+  }
+  
+  var lowerFilter = areaFilter.toLowerCase();
+  var targetNodes = threads.filter(function (t) {
+    return (t.life_area || '').toLowerCase() === lowerFilter;
+  });
+  
+  var targetUuids = new Set(targetNodes.map(function (t) { return t.uuid; }));
+  var neighborNodes = [];
+  var neighborUuids = new Set();
+  
+  function connectsToTarget(t) {
+    var conns = t.connections || [];
+    for (var i = 0; i < conns.length; i++) {
+      var c = conns[i];
+      if (c.to_uuid && targetUuids.has(c.to_uuid)) return true;
+      if (c.to_label) {
+        var lbl = c.to_label.toLowerCase();
+        var match = targetNodes.find(function (tn) { return (tn.title || '').toLowerCase() === lbl; });
+        if (match) return true;
+      }
+    }
+    return false;
+  }
+  
+  function targetConnectsTo(t) {
+    for (var i = 0; i < targetNodes.length; i++) {
+      var tn = targetNodes[i];
+      var conns = tn.connections || [];
+      for (var j = 0; j < conns.length; j++) {
+        var c = conns[j];
+        if (c.to_uuid && c.to_uuid === t.uuid) return true;
+        if (c.to_label && (t.title || '').toLowerCase() === c.to_label.toLowerCase()) return true;
+      }
+    }
+    return false;
+  }
+  
+  threads.forEach(function (t) {
+    if ((t.life_area || '').toLowerCase() === lowerFilter) return;
+    
+    if (connectsToTarget(t) || targetConnectsTo(t)) {
+      neighborNodes.push(t);
+      neighborUuids.add(t.uuid);
+    }
+  });
+  
+  var allNodes = targetNodes.concat(neighborNodes);
+  var edges = [];
+  var edgeSet = new Set();
+  
+  allNodes.forEach(function (t) {
+    var conns = t.connections || [];
+    conns.forEach(function (c) {
+      var target = null;
+      if (c.to_uuid) {
+        target = allNodes.find(function (x) { return x.uuid === c.to_uuid; });
+      }
+      if (!target && c.to_label) {
+        var lbl = c.to_label.toLowerCase();
+        target = allNodes.find(function (x) { return x.id !== t.id && (x.title || '').toLowerCase() === lbl; });
+      }
+      
+      if (target) {
+        var key = t.uuid + '->' + target.uuid + ':' + c.edge_type;
+        if (!edgeSet.has(key)) {
+          edgeSet.add(key);
+          edges.push({
+            source: t.uuid,
+            target: target.uuid,
+            type: c.edge_type,
+            is_suggested: !!c.is_suggested
+          });
+        }
+      }
+    });
+  });
+  
+  return { nodes: allNodes, edges: edges };
+};
+
+OAD.renderGraphView = function () {
+  OAD._lastView = 'Graph';
+  OAD.highlightNav('renderGraphView');
+  OAD._activeId = null;
+  OAD.renderList();
+  
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+  
+  var activeArea = OAD._activeGraphArea || 'All Areas';
+  var activeLayout = OAD._activeGraphLayout || 'cose';
+  
+  var areas = ["All Areas", "Career", "Finance", "Health", "Relationships", "Education", "Housing", "Legal", "Personal Growth"];
+  var areaOptionsHtml = areas.map(function (a) {
+    var sel = a === activeArea ? ' selected' : '';
+    return '<option value="' + a + '"' + sel + '>' + a + '</option>';
+  }).join('');
+  
+  var layouts = [
+    { value: 'cose', label: 'Force-Directed' },
+    { value: 'concentric', label: 'Concentric' },
+    { value: 'circle', label: 'Circle' },
+    { value: 'grid', label: 'Grid' }
+  ];
+  var layoutOptionsHtml = layouts.map(function (l) {
+    var sel = l.value === activeLayout ? ' selected' : '';
+    return '<option value="' + l.value + '"' + sel + '>' + l.label + '</option>';
+  }).join('');
+  
+  panel.innerHTML =
+    '<div class="graph-panel">' +
+      '<div class="graph-panel-header">' +
+        '<h2>Life Graph</h2>' +
+      '</div>' +
+      '<p class="text-muted text-sm graph-subtitle">A visual map of active threads and cross-area dependencies. High-pressure nodes are larger.</p>' +
+      
+      '<div class="graph-controls">' +
+        '<div class="control-group">' +
+          '<label for="graph-area-select">Area: </label>' +
+          '<select id="graph-area-select" onchange="OAD._updateGraph()">' +
+            areaOptionsHtml +
+          '</select>' +
+        '</div>' +
+        '<div class="control-group">' +
+          '<label for="graph-layout-select">Layout: </label>' +
+          '<select id="graph-layout-select" onchange="OAD._updateGraph()">' +
+            layoutOptionsHtml +
+          '</select>' +
+        '</div>' +
+      '</div>' +
+      
+      '<div class="graph-viewport-container">' +
+        '<div id="graph-viewport"></div>' +
+      '</div>' +
+    '</div>';
+    
+  OAD._updateGraph();
+};
+
+OAD._updateGraph = function () {
+  var areaSelect = document.getElementById('graph-area-select');
+  var layoutSelect = document.getElementById('graph-layout-select');
+  if (!areaSelect || !layoutSelect) return;
+  
+  var area = areaSelect.value;
+  var layout = layoutSelect.value;
+  
+  OAD._activeGraphArea = area;
+  OAD._activeGraphLayout = layout;
+  
+  var data = OAD.getGraphDataForArea(area);
+  
+  if (!window.cytoscape) {
+    OAD._renderGraphFallback(data);
+    return;
+  }
+  
+  var cyElements = [];
+  var areaColors = {
+    'career': '#4fc3f7',
+    'health': '#ff8a80',
+    'finance': '#81c784',
+    'relationships': '#ffd54f',
+    'education': '#ba68c8',
+    'housing': '#ffb74d',
+    'legal': '#90a4ae',
+    'personal growth': '#a1887f',
+    'other': '#8888aa'
+  };
+  
+  data.nodes.forEach(function (t) {
+    var areaLower = (t.life_area || 'other').toLowerCase();
+    var color = areaColors[areaLower] || areaColors['other'];
+    var pressure = OAD.pressure(t);
+    var size = 20 + Math.round(pressure * 0.25); // 20px to 45px
+    
+    cyElements.push({
+      group: 'nodes',
+      data: {
+        id: t.uuid,
+        label: t.title + ' (' + pressure + ')',
+        color: color,
+        size: size,
+        threadId: t.id
+      }
+    });
+  });
+  
+  data.edges.forEach(function (e) {
+    cyElements.push({
+      group: 'edges',
+      data: {
+        id: e.source + '-' + e.target + '-' + e.type,
+        source: e.source,
+        target: e.target,
+        type: e.type
+      },
+      classes: 'edge-' + e.type
+    });
+  });
+  
+  OAD._drawCytoscape(cyElements, layout);
+};
+
+OAD._cyInstance = null;
+
+OAD._drawCytoscape = function (elements, layoutName) {
+  var container = document.getElementById('graph-viewport');
+  if (!container) return;
+  
+  if (OAD._cyInstance) {
+    OAD._cyInstance.destroy();
+    OAD._cyInstance = null;
+  }
+  
+  var theme = document.body.getAttribute('data-theme') || document.documentElement.getAttribute('data-theme') || 'dark';
+  var labelColor = theme === 'light' ? '#212529' : '#e8e8f0';
+  var nodeBgColor = theme === 'light' ? '#ffffff' : '#16161e';
+  var edgeColor = theme === 'light' ? '#cccccc' : '#444455';
+  
+  OAD._cyInstance = window.cytoscape({
+    container: container,
+    elements: elements,
+    maxZoom: 1.2, // Prevents massive labels/nodes on small graphs
+    minZoom: 0.15,
+    wheelSensitivity: 0.15,
+    style: [
+      {
+        selector: 'node',
+        style: {
+          'label': 'data(label)',
+          'color': labelColor,
+          'font-size': '11px',
+          'font-weight': '600',
+          'font-family': 'Inter, system-ui, sans-serif',
+          'text-valign': 'bottom',
+          'text-halign': 'center',
+          'text-margin-y': '8px',
+          'background-color': nodeBgColor,
+          'border-width': '3px',
+          'border-color': 'data(color)',
+          'width': 'data(size)',
+          'height': 'data(size)',
+          'text-wrap': 'wrap',
+          'text-max-width': '130px',
+          'text-outline-color': nodeBgColor,
+          'text-outline-width': '2.5px',
+          'text-outline-opacity': 1.0
+        }
+      },
+      {
+        selector: 'node:selected',
+        style: {
+          'border-width': '4.5px',
+          'border-color': '#6c63ff',
+          'background-color': theme === 'light' ? '#ebf0fb' : '#1e1e38',
+          'text-outline-color': theme === 'light' ? '#ebf0fb' : '#1e1e38'
+        }
+      },
+      {
+        selector: 'edge',
+        style: {
+          'width': 2,
+          'line-color': edgeColor,
+          'target-arrow-color': edgeColor,
+          'target-arrow-shape': 'triangle',
+          'curve-style': 'bezier',
+          'arrow-scale': 1.15
+        }
+      },
+      {
+        selector: 'edge.edge-blocks',
+        style: {
+          'line-color': '#f38ba8',
+          'target-arrow-color': '#f38ba8',
+          'width': 3
+        }
+      },
+      {
+        selector: 'edge.edge-enables',
+        style: {
+          'line-color': '#a6e3a1',
+          'target-arrow-color': '#a6e3a1',
+          'width': 2.5
+        }
+      },
+      {
+        selector: 'edge.edge-relates',
+        style: {
+          'line-color': '#6c63ff',
+          'target-arrow-color': '#6c63ff',
+          'line-style': 'dashed',
+          'width': 2
+        }
+      },
+      {
+        selector: '.highlighted',
+        style: {
+          'opacity': 1.0
+        }
+      },
+      {
+        selector: '.dimmed',
+        style: {
+          'opacity': 0.18
+        }
+      }
+    ],
+    layout: (function() {
+      var cfg = {
+        name: layoutName,
+        animate: true,
+        animationDuration: 500,
+        fit: true,
+        padding: 80,
+        spacingFactor: 2.2 // Spreads nodes out significantly to prevent label overlaps
+      };
+      if (layoutName === 'cose') {
+        cfg.nodeRepulsion = function() { return 120000; };
+        cfg.idealEdgeLength = function() { return 150; };
+        cfg.nodeOverlap = 50;
+        cfg.refresh = 20;
+        cfg.randomize = true;
+      }
+      return cfg;
+    })()
+  });
+  
+  var cy = OAD._cyInstance;
+  
+  cy.on('tap', 'node', function (evt) {
+    var node = evt.target;
+    var threadId = node.data('threadId');
+    
+    var neighborhood = node.closedNeighborhood();
+    cy.elements().addClass('dimmed').removeClass('highlighted');
+    neighborhood.addClass('highlighted').removeClass('dimmed');
+    
+    OAD.selectThread(threadId);
+  });
+  
+  cy.on('tap', function (evt) {
+    if (evt.target === cy) {
+      cy.elements().removeClass('dimmed').removeClass('highlighted');
+    }
+  });
+  
+  cy.on('dbltap', 'node', function (evt) {
+    var node = evt.target;
+    var threadId = node.data('threadId');
+    OAD.openEditThreadModal(threadId);
+  });
+};
+
+OAD._renderGraphFallback = function (data) {
+  var viewportContainer = document.querySelector('.graph-viewport-container');
+  if (!viewportContainer) return;
+  
+  var warningHtml = 
+    '<div class="graph-fallback-warning">' +
+      '<strong>Offline Fallback Mode:</strong> Could not load the interactive visual graph library (Cytoscape.js). Exposing connections in list form below.' +
+    '</div>';
+  
+  var cardsHtml = data.nodes.map(function (t) {
+    var conns = t.connections || [];
+    var threads = OAD.DB.threads || [];
+    
+    var blocks = [];
+    var enables = [];
+    var relates = [];
+    
+    conns.forEach(function (c) {
+      var target = null;
+      if (c.to_uuid) target = threads.find(function (x) { return x.uuid === c.to_uuid; });
+      if (!target && c.to_label) {
+        var lbl = c.to_label.toLowerCase();
+        target = threads.find(function (x) { return x.id !== t.id && (x.title || '').toLowerCase() === lbl; });
+      }
+      
+      if (target) {
+        var link = '<a href="#" onclick="OAD.selectThread(' + target.id + '); return false;">' + OAD.esc(target.title) + '</a>';
+        if (c.edge_type === 'blocks') blocks.push(link);
+        else if (c.edge_type === 'enables') enables.push(link);
+        else relates.push(link);
+      }
+    });
+    
+    var blockedBy = [];
+    threads.forEach(function (ot) {
+      if (ot.id === t.id || ot.status === 'closed') return;
+      var oconns = ot.connections || [];
+      oconns.forEach(function (oc) {
+        if (oc.edge_type !== 'blocks') return;
+        var isTarget = oc.to_uuid ? oc.to_uuid === t.uuid : (oc.to_label || '').toLowerCase() === (t.title || '').toLowerCase();
+        if (isTarget) {
+          blockedBy.push('<a href="#" onclick="OAD.selectThread(' + ot.id + '); return false;">' + OAD.esc(ot.title) + '</a>');
+        }
+      });
+    });
+    
+    var blocksHtml = blocks.length ? '<div><strong>Blocks:</strong> ' + blocks.join(', ') + '</div>' : '';
+    var blockedByHtml = blockedBy.length ? '<div><strong>Blocked By:</strong> ' + blockedBy.join(', ') + '</div>' : '';
+    var enablesHtml = enables.length ? '<div><strong>Enables:</strong> ' + enables.join(', ') + '</div>' : '';
+    var relatesHtml = relates.length ? '<div><strong>Relates:</strong> ' + relates.join(', ') + '</div>' : '';
+    
+    var pressure = OAD.pressure(t);
+    var pClass = OAD.pressureClass(pressure);
+    
+    return '<div class="graph-fallback-card" onclick="OAD.selectThread(' + t.id + ')">' +
+      '<div class="graph-fallback-title">' + OAD.esc(t.title) + '</div>' +
+      '<div class="thread-item-meta" style="margin-bottom: 8px;">' +
+        '<span class="pill ' + t.priority + '">' + t.priority + '</span>' +
+        '<span class="pressure-badge ' + pClass + '">' + pressure + ' score</span>' +
+        '<span class="pill ' + t.status + '">' + t.status + '</span>' +
+      '</div>' +
+      '<div class="graph-fallback-list text-sm">' +
+        blocksHtml +
+        blockedByHtml +
+        enablesHtml +
+        relatesHtml +
+      '</div>' +
+    '</div>';
+  }).join('');
+  
+  viewportContainer.innerHTML = 
+    '<div class="graph-fallback-container">' +
+      warningHtml +
+      '<div class="graph-fallback-grid">' +
+        (cardsHtml || '<div class="detail-empty">No threads found for this filter.</div>') +
+      '</div>' +
+    '</div>';
 };

@@ -900,3 +900,128 @@ button.success:hover { opacity: .88; }
 .graph-row-label { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-row-pressure { font-size: 11px; font-family: var(--mono); font-weight: 700;
   padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
+
+/* ── Graph Visualization Panel ───────────────────────────────────────── */
+.graph-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.graph-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.graph-panel-header h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.graph-subtitle {
+  margin-bottom: 20px;
+  font-style: italic;
+}
+
+.graph-controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+  background: var(--surface);
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.graph-controls label {
+  display: inline-block;
+  margin-bottom: 0;
+  margin-right: 4px;
+}
+
+.graph-controls .control-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-controls select {
+  width: auto;
+  min-width: 160px;
+}
+
+.graph-viewport-container {
+  flex: 1;
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  min-height: 450px;
+  overflow: hidden;
+}
+
+#graph-viewport {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+
+/* Fallback/Offline Style */
+.graph-fallback-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.graph-fallback-warning {
+  padding: 12px 16px;
+  background: #ff4d6d14;
+  border: 1px dashed var(--critical);
+  border-radius: var(--radius);
+  color: var(--critical);
+  font-size: 13px;
+}
+
+.graph-fallback-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.graph-fallback-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+
+.graph-fallback-card:hover {
+  border-color: var(--accent);
+}
+
+.graph-fallback-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--accent);
+}
+
+.graph-fallback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
