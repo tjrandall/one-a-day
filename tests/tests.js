@@ -1154,7 +1154,8 @@ OAD._bootAfterAuth = async function () {
     if (!OAD.DB.ideas.length)    { OAD._seedIdeas();    needsSave = true; }
     if (!OAD.DB.cadences.length) { OAD._seedCadences(); needsSave = true; }
     if (OAD._migrateActionDeadlines() > 0) needsSave = true;
-    OAD._runJune16DedupV2(); // V2 calls saveDB() internally; always persists its guard flag
+    OAD._runJune16DedupV2();   // calls saveDB() internally; always persists its guard flag
+    OAD._runJune16PatchV1();  // targeted title/status fixes; calls saveDB() internally
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();

@@ -803,6 +803,40 @@ OAD._runJune16DedupV2 = function () {
   OAD.saveDB(); // writes localStorage + triggers async cloud save
   return deleted + updated;
 };
+
+// Two targeted fixes applied after the June 16 dedup pass.
+OAD._runJune16PatchV1 = function () {
+  if (OAD.DB.persona && OAD.DB.persona._june16PatchV1Done) return;
+
+  // 1. IRS thread: clean up title, set to waiting, add real next action.
+  var irsThread = (OAD.DB.threads || []).find(function (t) {
+    return t.title && t.title.indexOf('IRS IT Specialist') !== -1 &&
+           t.title.indexOf('APPLICATION STARTED') !== -1;
+  });
+  if (irsThread) {
+    OAD.updateThread(irsThread.id, {
+      title:            'IRS IT Specialist GS-2210-14 — Hyannis MA',
+      status:           'waiting',
+      next_action:      'Take USA Hire assessment June 17. Hard deadline June 19 11:59pm ET. Application submitted June 11. Separate USA Hire Assessment thread tracks the assessment itself.',
+      next_action_date: '2026-06-17'
+    });
+    OAD.addEvolution(irsThread.id, 'Title cleaned up June 16 (removed draft bracket). Status → waiting. Application submitted June 11.');
+  }
+
+  // 2. SBA VetCert SDVOSB Application: close — rolled into SDVOSB Consulting Track.
+  var vetcertThread = (OAD.DB.threads || []).find(function (t) {
+    return t.title && t.title.indexOf('SBA VetCert SDVOSB Application') !== -1 &&
+           t.status !== 'closed';
+  });
+  if (vetcertThread) {
+    OAD.updateThread(vetcertThread.id, { status: 'closed', closing_condition_met: true });
+    OAD.addEvolution(vetcertThread.id, 'Rolled up into SDVOSB Consulting Track — APEX Accelerator + SBA VetCert thread. See that thread for all VetCert status.');
+  }
+
+  if (OAD.DB.persona) OAD.DB.persona._june16PatchV1Done = true;
+  OAD.saveDB();
+};
+
 OAD._DB_PERSIST = false; // set true by _initApp after tests pass; keeps test suite writes out of localStorage
 OAD._userId     = null;  // set on successful Supabase sign-in
 
