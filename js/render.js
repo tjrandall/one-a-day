@@ -121,7 +121,7 @@ OAD.renderDetail = function (id) {
 
   const t = OAD.getThread(id);
   if (!t) {
-    panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+    panel.innerHTML = '<div class="detail-empty">' + OAD.esc(OAD.t('selectThreadToView')) + '</div>';
     return;
   }
 
@@ -163,6 +163,7 @@ OAD.renderDetail = function (id) {
   const gctx = OAD.getGraphContext(t.id);
 
   function graphRow(icon, label, thread) {
+    const displayLabel = thread ? thread.title : label;
     const pressureHtml = thread && thread.status !== 'closed'
       ? '<span class="graph-row-pressure ' + OAD.pressureClass(OAD.pressure(thread)) + '">' + OAD.pressure(thread) + '</span>'
       : '';
@@ -171,7 +172,7 @@ OAD.renderDetail = function (id) {
       : '';
     return '<div class="graph-row"' + clickable + '>' +
       '<span class="graph-row-icon">' + icon + '</span>' +
-      '<span class="graph-row-label">' + OAD.esc(label) + '</span>' +
+      '<span class="graph-row-label">' + OAD.esc(displayLabel) + '</span>' +
       pressureHtml +
     '</div>';
   }
@@ -253,15 +254,15 @@ OAD.renderDetail = function (id) {
       </div>
       <div class="detail-actions">
         ${backBtnHtml}
-        <button class="success" onclick="OAD.openCompleteActionModal(${t.id})">Complete Action</button>
-        <button class="secondary" onclick="OAD.openEditModal(${t.id})">Edit</button>
-        <button class="ghost" onclick="OAD.openLogModal(${t.id})">+ Log</button>
-        <button onclick="OAD.generateInsight(${t.id})" id="insight-btn-${t.id}">Insight</button>
+        <button class="success" onclick="OAD.openCompleteActionModal(${t.id})">${OAD.esc(OAD.t('completeAction'))}</button>
+        <button class="secondary" onclick="OAD.openEditModal(${t.id})">${OAD.esc(OAD.t('edit'))}</button>
+        <button class="ghost" onclick="OAD.openLogModal(${t.id})">${OAD.esc(OAD.t('plusLog'))}</button>
+        <button onclick="OAD.generateInsight(${t.id})" id="insight-btn-${t.id}">${OAD.esc(OAD.t('insight'))}</button>
       </div>
     </div>
 
     <div class="card next-action-card">
-      <div class="card-title">Next Action</div>
+      <div class="card-title">${OAD.esc(OAD.t('nextAction'))}</div>
       <div class="next-action-text">${OAD.esc(t.next_action) || '<span class="text-muted">Not set</span>'}</div>
       <div class="next-action-meta">
         ${t.next_action_date    ? `<span>By ${OAD.formatDate(t.next_action_date)}</span>` : ''}
@@ -277,13 +278,13 @@ OAD.renderDetail = function (id) {
 
     <div class="card insight-card">
       <div class="insight-header">
-        <div class="card-title" style="margin:0">AI Insight</div>
+        <div class="card-title" style="margin:0">${OAD.esc(OAD.t('aiInsight'))}</div>
       </div>
       <div id="insight-body-${t.id}">${insightHtml}</div>
     </div>
 
     <div class="card">
-      <div class="card-title">Closing Condition</div>
+      <div class="card-title">${OAD.esc(OAD.t('closingCondition'))}</div>
       <div class="${t.closing_condition_met ? 'closing-met' : 'closing-unmet'}">
         ${t.closing_condition_met ? '✓ Met — ' : '○ '}${OAD.esc(t.closing_condition) || '<span class="text-muted">Not defined</span>'}
       </div>
@@ -291,14 +292,14 @@ OAD.renderDetail = function (id) {
     </div>
 
     <div class="card">
-      <div class="card-title">Current Assumption</div>
+      <div class="card-title">${OAD.esc(OAD.t('currentAssumption'))}</div>
       <div class="${t.assumption_verified ? 'assumption-verified' : 'assumption-unverified'}">
         ${t.assumption_verified ? '✓ Verified — ' : '⚠ Unverified — '}${OAD.esc(t.current_assumption) || '<span class="text-muted">None stated</span>'}
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Contingency</div>
+      <div class="card-title">${OAD.esc(OAD.t('contingency'))}</div>
       ${t.contingency_trigger_date ? `
         <div class="${contingencyClass}">Trigger: ${OAD.formatDate(t.contingency_trigger_date)}${contingencyDays !== null ? ` (${contingencyDays}d)` : ''}</div>
         <div class="text-sm mt-8">${OAD.esc(t.contingency_action) || '—'}</div>
@@ -307,19 +308,19 @@ OAD.renderDetail = function (id) {
     </div>
 
     <div class="card graph-card">
-      <div class="card-title">Graph</div>
+      <div class="card-title">${OAD.esc(OAD.t('graph'))}</div>
       ${connectionsHtml}
       <button class="ghost mt-8" style="font-size:12px;padding:5px 10px" onclick="OAD.openConnectionModal(${t.id})">+ Add Connection</button>
     </div>
 
     <div class="card">
-      <div class="card-title">Evolution Log</div>
+      <div class="card-title">${OAD.esc(OAD.t('evolutionLog'))}</div>
       ${evoHtml}
     </div>
 
     ${t.status !== 'closed' ? `
     <button class="complete-cta" onclick="OAD.openCompleteActionModal(${t.id})">
-      ✓ Complete Action
+      ✓ ${OAD.esc(OAD.t('completeAction'))}
     </button>` : ''}`;
 };
 
@@ -374,6 +375,7 @@ OAD.markCadenceDone = function (id) {
   if (!c) return;
   c.last_completed = new Date().toISOString().slice(0, 10);
   c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
+  OAD.saveDB();
   OAD.renderOverdueBanner();
   if (!OAD._activeId) OAD.renderCadencePanel();
 };
@@ -758,8 +760,8 @@ OAD.renderTodayView = function () {
   const in7Str = in7Dt.toISOString().slice(0, 10);
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr; });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str; });
+  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -794,7 +796,7 @@ OAD.renderTodayView = function () {
 
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
-      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
     
     const daysOver = isOverdue
@@ -1003,8 +1005,8 @@ OAD.renderDailyView = function () {
   const cads = OAD.DB.cadences || [];
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr; });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str; });
+  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1038,7 +1040,7 @@ OAD.renderDailyView = function () {
     
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
-      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
 
     const daysOver = isOverdue
@@ -1087,7 +1089,7 @@ OAD.renderDailyView = function () {
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(c.title) + badge + '</div>' +
-          '<div class="ds-row-sub">' + OAD.esc(c.recurrence) +
+          '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
@@ -1146,6 +1148,53 @@ OAD.renderDailyView = function () {
 
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
   const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
+
+  // ── The One Annoying Thing (TOAT) ──────────────────────────────────
+  const toatThread = OAD.getDailyToat();
+  var toatWidgetHtml = '';
+  if (toatThread) {
+    const tpc = OAD.pressureClass(OAD.pressure(toatThread));
+    const openThreads = (OAD.DB.threads || []).filter(t => t.status !== 'closed');
+    const frictionThreads = openThreads.filter(t => t.status === 'stalled' || t.status === 'waiting');
+    frictionThreads.sort((a, b) => a.id - b.id);
+    openThreads.sort((a, b) => a.id - b.id);
+
+    let explanation = '';
+    if (toatThread.status === 'stalled') {
+      const stalledThreads = openThreads.filter(t => t.status === 'stalled');
+      stalledThreads.sort((a, b) => a.id - b.id);
+      const idx = stalledThreads.findIndex(t => t.id === toatThread.id) + 1;
+      explanation = 'Selected because it is <strong>STALLED</strong> and is the oldest of ' + stalledThreads.length + ' such tasks (Rank ' + idx + '/' + stalledThreads.length + ' by creation age).';
+    } else {
+      const overdueThreads = openThreads.filter(t => t.next_action_date && t.next_action_date < todayStr);
+      overdueThreads.sort((a, b) => a.id - b.id);
+      const idx = overdueThreads.findIndex(t => t.id === toatThread.id) + 1;
+      explanation = 'Selected because it is <strong>OVERDUE</strong> and is the oldest of ' + overdueThreads.length + ' such tasks (Rank ' + idx + '/' + overdueThreads.length + ' by creation age).';
+    }
+
+    toatWidgetHtml =
+      '<div class="toat-widget" style="margin-bottom:20px;padding:16px;background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:12px;display:flex;flex-direction:column;gap:8px" role="region" aria-label="The One Annoying Thing">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between">' +
+          '<span style="font-size:11px;font-weight:700;color:orange;letter-spacing:1px;text-transform:uppercase">⚠️ THE ONE ANNOYING THING (TOAT)</span>' +
+          '<span class="pressure-badge ' + tpc + '" style="font-size:11px;padding:2px 6px">' + OAD.pressure(toatThread) + '</span>' +
+        '</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text-main)">' + OAD.esc(toatThread.title) + '</div>' +
+        '<div style="font-size:12px;color:var(--text-muted);line-height:1.4">' + explanation + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:4px">' +
+          '<button class="success btn-sm" style="font-size:11px;padding:4px 10px" onclick="OAD.selectThread(' + toatThread.id + ')">View Details</button>' +
+          '<button class="secondary btn-sm" style="font-size:11px;padding:4px 10px" onclick="OAD.openCompleteActionModal(' + toatThread.id + ')">Resolve Friction</button>' +
+        '</div>' +
+      '</div>';
+  } else {
+    toatWidgetHtml =
+      '<div class="toat-widget toat-clean" style="margin-bottom:20px;padding:16px;background:rgba(46,204,113,0.06);border:1px solid rgba(46,204,113,0.2);border-radius:12px;display:flex;align-items:center;gap:12px" role="region" aria-label="No Annoying Things">' +
+        '<span style="font-size:20px" aria-hidden="true">🎉</span>' +
+        '<div>' +
+          '<div style="font-size:14px;font-weight:600;color:var(--text-main)">' + OAD.t('no_toats_title', 'No TOATs to see here') + '</div>' +
+          '<div style="font-size:11px;color:var(--text-muted)">' + OAD.t('no_toats_desc', 'All tasks are on track. Focus Now!') + '</div>' +
+        '</div>' +
+      '</div>';
+  }
 
   // ── Focus Now card ─────────────────────────────────────────────────
   const focusThread = OAD.selectFocusThread();
@@ -1238,9 +1287,10 @@ OAD.renderDailyView = function () {
 
   // ── Salutation & Metrics calculation ──────────────────────────────
   const hours = new Date().getHours();
-  const salutation = hours < 12 ? 'Good morning' : hours < 18 ? 'Good afternoon' : 'Good evening';
+  const salutationKey = hours < 12 ? 'goodMorning' : hours < 18 ? 'goodAfternoon' : 'goodEvening';
+  const salutation = OAD.t(salutationKey);
   const persona = OAD.DB.persona;
-  const userName = (persona && persona.name) || 'Chief';
+  const userName = OAD.Config.userGreetingTitle || (persona && persona.name) || 'Chief';
   
   const scores = active.map(t => t._score);
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
@@ -1288,6 +1338,7 @@ OAD.renderDailyView = function () {
 
       '<div class="ds-main-grid">' +
         '<div class="ds-col-left">' +
+          toatWidgetHtml +
           focusCardHtml +
           heatMapHtml +
           weekLoadHtml +
@@ -1357,8 +1408,8 @@ OAD.renderMatrixView = function () {
   const in7Str = in7Dt.toISOString().slice(0, 10);
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr; });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str; });
+  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1395,7 +1446,7 @@ OAD.renderMatrixView = function () {
 
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
-      ? '<span class="cycle-warning-badge" style="margin-left: 6px;">🔄 Cycle</span>' 
+      ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
     
     const daysOver = isOverdue
@@ -1569,13 +1620,13 @@ OAD.renderMatrixView = function () {
 
 OAD._dailyMarkCadenceDone = function (id) {
   OAD.markCadenceDone(id);
-  OAD.renderDailyView();
+  OAD.refreshActiveView();
 };
 
 OAD._dailyCheckIn = function (id, done) {
   const note = document.getElementById('ds-note-' + id)?.value.trim() || '';
   OAD.checkInHabit(id, done, note);
-  OAD.renderDailyView();
+  OAD.refreshActiveView();
 };
 
 // ── Graph Visualizer Implementation ───────────────────────────────────
@@ -1594,6 +1645,20 @@ OAD.highlightNav = function (actionName) {
       btn.classList.add('ghost');
     }
   });
+};
+
+OAD.goBackToLastView = function () {
+  const lv = OAD._lastView;
+  if (lv === 'Graph') OAD.renderGraphView();
+  else if (lv === 'Matrix') OAD.renderMatrixView();
+  else if (lv === 'Daily') OAD.renderDailyView();
+  else if (lv === 'Today') OAD.renderTodayView();
+  else if (lv === 'List') OAD.renderListView();
+  else if (lv === 'Ideas') OAD.renderIdeaPanel();
+  else if (lv === 'Habits') OAD.renderHabitPanel();
+  else if (lv === 'Cadences') OAD.renderCadencePanel();
+  else if (lv === 'Proposals') OAD.renderProposalsPanel();
+  else OAD.renderDailyView();
 };
 
 OAD.getGraphDataForArea = function (areaFilter) {
@@ -1617,13 +1682,23 @@ OAD.getGraphDataForArea = function (areaFilter) {
         }
         
         if (target) {
-          var key = t.uuid + '->' + target.uuid + ':' + c.edge_type;
+          var edgeSource = t.uuid;
+          var edgeTarget = target.uuid;
+          var edgeType = c.edge_type;
+          
+          if (edgeType === 'blocked_by') {
+            edgeSource = target.uuid;
+            edgeTarget = t.uuid;
+            edgeType = 'blocks';
+          }
+          
+          var key = edgeSource + '->' + edgeTarget + ':' + edgeType;
           if (!edgeSet.has(key)) {
             edgeSet.add(key);
             edges.push({
-              source: t.uuid,
-              target: target.uuid,
-              type: c.edge_type,
+              source: edgeSource,
+              target: edgeTarget,
+              type: edgeType,
               is_suggested: !!c.is_suggested
             });
           }
@@ -1696,13 +1771,23 @@ OAD.getGraphDataForArea = function (areaFilter) {
       }
       
       if (target) {
-        var key = t.uuid + '->' + target.uuid + ':' + c.edge_type;
+        var edgeSource = t.uuid;
+        var edgeTarget = target.uuid;
+        var edgeType = c.edge_type;
+        
+        if (edgeType === 'blocked_by') {
+          edgeSource = target.uuid;
+          edgeTarget = t.uuid;
+          edgeType = 'blocks';
+        }
+        
+        var key = edgeSource + '->' + edgeTarget + ':' + edgeType;
         if (!edgeSet.has(key)) {
           edgeSet.add(key);
           edges.push({
-            source: t.uuid,
-            target: target.uuid,
-            type: c.edge_type,
+            source: edgeSource,
+            target: edgeTarget,
+            type: edgeType,
             is_suggested: !!c.is_suggested
           });
         }
@@ -2030,7 +2115,7 @@ OAD._drawCytoscape = function (elements, layoutName) {
   cy.on('dbltap', 'node', function (evt) {
     var node = evt.target;
     var threadId = node.data('threadId');
-    OAD.openEditThreadModal(threadId);
+    OAD.openEditModal(threadId);
   });
 };
 
@@ -2048,34 +2133,38 @@ OAD._renderGraphFallback = function (data) {
     var threads = OAD.DB.threads || [];
     
     var blocks = [];
+    var blockedBy = [];
     var enables = [];
     var relates = [];
     
     conns.forEach(function (c) {
       var target = null;
       if (c.to_uuid) target = threads.find(function (x) { return x.uuid === c.to_uuid; });
-      if (!target && c.to_label) {
-        var lbl = c.to_label.toLowerCase();
-        target = threads.find(function (x) { return x.id !== t.id && (x.title || '').toLowerCase() === lbl; });
-      }
-      
       if (target) {
         var link = '<a href="#" onclick="OAD.selectThread(' + target.id + '); return false;">' + OAD.esc(target.title) + '</a>';
-        if (c.edge_type === 'blocks') blocks.push(link);
-        else if (c.edge_type === 'enables') enables.push(link);
-        else relates.push(link);
+        if (c.edge_type === 'blocks') {
+          if (blocks.indexOf(link) === -1) blocks.push(link);
+        } else if (c.edge_type === 'blocked_by') {
+          if (blockedBy.indexOf(link) === -1) blockedBy.push(link);
+        } else if (c.edge_type === 'enables') {
+          if (enables.indexOf(link) === -1) enables.push(link);
+        } else if (c.edge_type === 'relates') {
+          if (relates.indexOf(link) === -1) relates.push(link);
+        }
       }
     });
     
-    var blockedBy = [];
     threads.forEach(function (ot) {
       if (ot.id === t.id || ot.status === 'closed') return;
       var oconns = ot.connections || [];
       oconns.forEach(function (oc) {
-        if (oc.edge_type !== 'blocks') return;
-        var isTarget = oc.to_uuid ? oc.to_uuid === t.uuid : (oc.to_label || '').toLowerCase() === (t.title || '').toLowerCase();
-        if (isTarget) {
-          blockedBy.push('<a href="#" onclick="OAD.selectThread(' + ot.id + '); return false;">' + OAD.esc(ot.title) + '</a>');
+        if (oc.to_uuid === t.uuid) {
+          var link = '<a href="#" onclick="OAD.selectThread(' + ot.id + '); return false;">' + OAD.esc(ot.title) + '</a>';
+          if (oc.edge_type === 'blocks') {
+            if (blockedBy.indexOf(link) === -1) blockedBy.push(link);
+          } else if (oc.edge_type === 'blocked_by') {
+            if (blocks.indexOf(link) === -1) blocks.push(link);
+          }
         }
       });
     });
@@ -2228,7 +2317,7 @@ OAD.filterListTab = function () {
 
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
-      ? '<span class="cycle-warning-badge" title="Circular Dependency Cycle: this thread blocks itself circularity">🔄 Cycle</span>' 
+      ? `<span class="cycle-warning-badge" style="cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
 
     return `
