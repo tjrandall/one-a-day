@@ -15,15 +15,16 @@
   <header>
     <h1>One-A-Day</h1>
     <div class="header-actions">
-      <button class="ghost" onclick="OAD.renderListView()">List</button>
-      <button class="ghost" onclick="OAD.renderTodayView()">Today</button>
-      <button class="ghost" onclick="OAD.renderMatrixView()">Matrix</button>
-      <button class="ghost" id="nav-graph-btn" onclick="OAD.renderGraphView()">Graph</button>
-      <button class="ghost" onclick="OAD.renderIdeaPanel()">Ideas</button>
-      <button class="ghost" onclick="OAD.renderHabitPanel()">Habits</button>
-      <button class="ghost" onclick="OAD.renderCadencePanel()">Cadences</button>
-      <button class="ghost" onclick="OAD.renderProposalsPanel()">Proposals</button>
-      <button class="ghost" onclick="OAD.openSettingsModal()">Settings</button>
+      <button class="ghost" onclick="OAD.renderListView()" data-i18n="list">List</button>
+      <button class="ghost" onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
+      <button class="ghost" onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
+      <button class="ghost" id="nav-graph-btn" onclick="OAD.renderGraphView()" data-i18n="graph">Graph</button>
+      <button class="ghost" onclick="OAD.renderIdeaPanel()" data-i18n="ideas">Ideas</button>
+      <button class="ghost" onclick="OAD.renderHabitPanel()" data-i18n="habits">Habits</button>
+      <button class="ghost" onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
+      <button class="ghost" onclick="OAD.renderProposalsPanel()" data-i18n="proposals">Proposals</button>
+      <button class="ghost" onclick="OAD.openMailroomModal()" style="color:var(--accent);font-weight:600" data-i18n="scanMail">📥 Scan Mail</button>
+      <button class="ghost" onclick="OAD.openSettingsModal()" data-i18n="settings">Settings</button>
     </div>
   </header>
 
@@ -31,8 +32,8 @@
     <div id="list-panel">
       <div id="persona-bar"></div>
       <div id="list-toolbar">
-        <input id="search-input" type="text" placeholder="Search threads…" oninput="OAD.renderList()">
-        <button onclick="OAD.openNewThreadModal()">+ New</button>
+        <input id="search-input" type="text" placeholder="Search threads…" data-i18n-placeholder="searchPlaceholder" oninput="OAD.renderList()">
+        <button onclick="OAD.openNewThreadModal()" data-i18n="newThread">+ New</button>
       </div>
       <div id="thread-list"></div>
     </div>
@@ -48,14 +49,16 @@
 <!-- Layer order: supabase → supabase-client → data → engine → api → render → modals → seed → tests → boot -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
-<script src="js/supabase-client.js"></script>
-<script src="js/data.js"></script>
-<script src="js/engine.js"></script>
-<script src="js/api.js"></script>
-<script src="js/render.js"></script>
-<script src="js/modals.js"></script>
-<script src="tests/tests.data.js"></script>
-<script src="tests/tests.js"></script>
+<script src="js/supabase-client.js?v=17"></script>
+<script src="js/config.js?v=17"></script>
+<script src="js/data.js?v=17"></script>
+<script src="js/engine.js?v=17"></script>
+<script src="js/mailroom.js?v=17"></script>
+<script src="js/api.js?v=17"></script>
+<script src="js/render.js?v=17"></script>
+<script src="js/modals.js?v=17"></script>
+<script src="tests/tests.data.js?v=17"></script>
+<script src="tests/tests.js?v=17"></script>
 <script>OAD.boot();</script>
 
 </body>

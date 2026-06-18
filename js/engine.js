@@ -24,16 +24,9 @@ OAD.pressure = function (thread, _inBleedUp) {
     var blockingConns = (thread.connections || []).filter(function (c) { return c.edge_type === 'blocks'; });
     var bleedUp = 0;
     blockingConns.forEach(function (c) {
-      // UUID lookup first (stable); fall back to title match for legacy edges
       var blocked = null;
       if (c.to_uuid) {
         blocked = (OAD.DB.threads || []).find(function (t) { return t.uuid === c.to_uuid; }) || null;
-      }
-      if (!blocked && c.to_label) {
-        var label = c.to_label.toLowerCase();
-        blocked = (OAD.DB.threads || []).find(function (t) {
-          return t !== thread && (t.title || '').toLowerCase() === label;
-        });
       }
       bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
     });
@@ -229,6 +222,11 @@ OAD.prevCadenceDue = function (recurrence, daysOfWeek) {
       : new Date(y, m - 1, 15).toISOString().slice(0, 10);
   }
   if (recurrence === 'monthly-last') return new Date(y, m, 0).toISOString().slice(0, 10);
+  if (recurrence === 'weekly') {
+    const prev = new Date(today);
+    prev.setDate(prev.getDate() - 7);
+    return prev.toISOString().slice(0, 10);
+  }
   if (recurrence === 'weekly-days') {
     const days = (daysOfWeek || []).filter(function (dw) { return dw >= 0 && dw <= 6; });
     if (!days.length) return null;
@@ -263,26 +261,52 @@ OAD.getGraphContext = function (threadId) {
   function resolveEdge(c) {
     var target = null;
     if (c.to_uuid) target = threads.find(function (t) { return t.uuid === c.to_uuid; }) || null;
-    if (!target && c.to_label) {
-      var lbl = c.to_label.toLowerCase();
-      target = threads.find(function (t) { return t.id !== threadId && (t.title || '').toLowerCase() === lbl; }) || null;
-    }
     return { label: c.to_label || '', uuid: c.to_uuid || null, thread: target };
   }
 
   var conns = thread.connections || [];
-  return {
-    blocks:    conns.filter(function (c) { return c.edge_type === 'blocks';  }).map(resolveEdge),
-    enables:   conns.filter(function (c) { return c.edge_type === 'enables'; }).map(resolveEdge),
-    relates:   conns.filter(function (c) { return c.edge_type === 'relates'; }).map(resolveEdge),
-    blockedBy: threads.filter(function (t) {
-      if (t.id === threadId || t.status === 'closed') return false;
-      return (t.connections || []).some(function (c) {
-        if (c.edge_type !== 'blocks') return false;
-        return c.to_uuid ? c.to_uuid === thread.uuid
-          : (c.to_label || '').toLowerCase() === (thread.title || '').toLowerCase();
-      });
+  
+  var outboundBlocks = conns.filter(function (c) { return c.edge_type === 'blocks'; }).map(resolveEdge);
+  var inboundBlockedBy = threads.filter(function (t) {
+    if (t.id === threadId || t.status === 'closed') return false;
+    return (t.connections || []).some(function (c) {
+      return c.edge_type === 'blocked_by' && c.to_uuid === thread.uuid;
+    });
+  }).map(function (t) {
+    return { label: t.title, uuid: t.uuid, thread: t };
+  });
+
+  var outboundEnables = conns.filter(function (c) { return c.edge_type === 'enables'; }).map(resolveEdge);
+  var outboundRelates = conns.filter(function (c) { return c.edge_type === 'relates'; }).map(resolveEdge);
+
+  var outboundBlockedBy = conns.filter(function (c) { return c.edge_type === 'blocked_by'; })
+    .map(function (c) {
+      return threads.find(function (t) { return t.uuid === c.to_uuid; });
     })
+    .filter(Boolean);
+
+  var inboundBlocks = threads.filter(function (t) {
+    if (t.id === threadId || t.status === 'closed') return false;
+    return (t.connections || []).some(function (c) {
+      return c.edge_type === 'blocks' && c.to_uuid === thread.uuid;
+    });
+  });
+
+  var blocksMap = {};
+  outboundBlocks.concat(inboundBlockedBy).forEach(function (e) {
+    if (e.uuid) blocksMap[e.uuid] = e;
+  });
+  
+  var blockedByMap = {};
+  outboundBlockedBy.concat(inboundBlocks).forEach(function (t) {
+    if (t.id) blockedByMap[t.id] = t;
+  });
+
+  return {
+    blocks:    Object.values(blocksMap),
+    enables:   outboundEnables,
+    relates:   outboundRelates,
+    blockedBy: Object.values(blockedByMap)
   };
 };
 
@@ -305,11 +329,23 @@ OAD.getLifeAreaHeat = function () {
 
 // Selects the single highest-priority actionable thread for the "Focus Now" card.
 // Prefers threads with a next action set; falls back to highest pressure overall.
+OAD.isBlocked = function (thread) {
+  if (!thread) return false;
+  var ctx = OAD.getGraphContext(thread.id);
+  return ctx.blockedBy.length > 0;
+};
+
 OAD.selectFocusThread = function () {
   var candidates = (OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed'; })
+    .filter(function (t) { return t.status !== 'closed' && !OAD.isBlocked(t); })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
+  if (!candidates.length) {
+    candidates = (OAD.DB.threads || [])
+      .filter(function (t) { return t.status !== 'closed'; })
+      .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
+      .sort(function (a, b) { return b._score - a._score; });
+  }
   if (!candidates.length) return null;
   var actionable = candidates.filter(function (t) { return t.next_action || t.next_action_date; });
   return actionable.length ? actionable[0] : candidates[0];
@@ -353,6 +389,19 @@ OAD.cadenceOverdue = function (cadence) {
   today.setHours(0, 0, 0, 0);
   const due = new Date(cadence.next_due + 'T00:00:00');
   return due < today;
+};
+
+OAD.cadenceDoneThisPeriod = function (c) {
+  if (!c) return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = OAD.cadenceOverdue(c);
+  if (overdue) return false;
+  
+  const dueToday = c.next_due === today;
+  if (dueToday && c.last_completed === today) return true;
+
+  const prevDue = OAD.prevCadenceDue(c.recurrence, c.days_of_week);
+  return !!(c.last_completed && prevDue && c.last_completed >= prevDue);
 };
 
 OAD._cyclesCache = null;

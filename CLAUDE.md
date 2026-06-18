@@ -177,9 +177,9 @@ OAD.pressure(thread) returns 0-100:
 Located in `js/data.js` and `js/modals.js`. Accessible from the Settings modal.
 
 ### Export (`OAD.exportThreads()`)
-Moat-safe flat JSON. Includes per thread: uuid, title, status, priority, life_area, pressure score, closing_condition, next_action, next_action_date, full evolution_log. Calls `_normalizeDB()` + `saveDB()` before building the payload so UUID backfill is always complete.
+Moat-safe flat JSON. Includes basic thread attributes (uuid, parent_uuid, title, status, priority, life_area, pressure, closing_condition, next_action, next_action_date, etc.). Calls `_normalizeDB()` + `saveDB()` before building the payload so UUID backfill is always complete.
 
-**Deliberately excludes:** connections[] (the graph is the moat), current_assumption, assumption_verified, ai_insights[], persona data.
+**Deliberately excludes:** connections[] (the graph is the moat), evolution_log, current_assumption, contingency_action, contingency_escalation, ai_insights[], and persona data.
 
 Includes `exported_by: user_id` — ownership-stamped for future multi-user scoping.
 

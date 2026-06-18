@@ -6,6 +6,7 @@ OAD.DB = {
   habits: [],
   ideas: [],
   proposals: [],
+  toat: [],
 
   persona: {
     last_proactive_scan: null,
@@ -26,10 +27,7 @@ OAD.DB = {
   }
 };
 
-OAD.LIFE_AREAS = [
-  'Career', 'Health', 'Finance', 'Relationships',
-  'Education', 'Housing', 'Legal', 'Personal Growth', 'App Dev', 'Other'
-];
+OAD.LIFE_AREAS = OAD.Config.lifeAreas;
 
 OAD.RECURRENCES = [
   'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'weekly-days', 'custom'
@@ -37,7 +35,7 @@ OAD.RECURRENCES = [
 
 OAD.STATUSES   = ['open', 'waiting', 'stalled', 'closed'];
 OAD.PRIORITIES = ['critical', 'high', 'medium', 'low'];
-OAD.EDGE_TYPES = ['blocks', 'enables', 'relates'];
+OAD.EDGE_TYPES = ['blocks', 'blocked_by', 'enables', 'relates'];
 
 OAD.CLOSING_TYPES = ['outcome', 'action'];
 
@@ -434,8 +432,63 @@ OAD.applyImport = function (results, confirmedUpdates) {
   return { created: created, updated: updated, closed: closed };
 };
 
+OAD.getDailyToat = function () {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  OAD.DB.toat = OAD.DB.toat || [];
+
+  function isFriction(t) {
+    if (!t || t.status === 'closed') return false;
+    if (t.status === 'stalled') return true;
+    if (t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr) return true;
+    if (t.status === 'open' && t.next_action_date && t.next_action_date < todayStr) return true;
+    return false;
+  }
+
+  const todayEntry = OAD.DB.toat.find(e => e.date === todayStr);
+  if (todayEntry) {
+    const t = OAD.getThread(todayEntry.threadId);
+    if (t && isFriction(t)) {
+      return t;
+    }
+  }
+
+  const allThreads = OAD.DB.threads || [];
+  
+  const stalled = allThreads.filter(t => t.status === 'stalled');
+  const overdueWaiting = allThreads.filter(t => {
+    return t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr;
+  });
+  const overdueOpen = allThreads.filter(t => {
+    return t.status === 'open' && t.next_action_date && t.next_action_date < todayStr;
+  });
+
+  let selected = null;
+  if (stalled.length > 0) {
+    stalled.sort((a, b) => a.id - b.id);
+    selected = stalled[0];
+  } else if (overdueWaiting.length > 0) {
+    overdueWaiting.sort((a, b) => a.id - b.id);
+    selected = overdueWaiting[0];
+  } else if (overdueOpen.length > 0) {
+    overdueOpen.sort((a, b) => a.id - b.id);
+    selected = overdueOpen[0];
+  }
+
+  if (selected) {
+    OAD.DB.toat = OAD.DB.toat.filter(e => e.date !== todayStr);
+    OAD.DB.toat.push({ date: todayStr, threadId: selected.id });
+    OAD.saveDB();
+    return selected;
+  }
+
+  if (todayEntry) {
+    OAD.DB.toat = OAD.DB.toat.filter(e => e.date !== todayStr);
+    OAD.saveDB();
+  }
+  return null;
+};
+
 OAD.exportThreads = function () {
-  // Ensure UUIDs and parent_uuid are assigned before building the export.
   OAD._normalizeDB();
   OAD.saveDB();
 
@@ -451,25 +504,16 @@ OAD.exportThreads = function () {
       closing_condition:        t.closing_condition        || '',
       closing_condition_type:   t.closing_condition_type   || 'outcome',
       closing_condition_met:    t.closing_condition_met    || false,
-      current_assumption:       t.current_assumption       || '',
       assumption_verified:      t.assumption_verified      || false,
       next_action:              t.next_action              || '',
       next_action_date:         t.next_action_date         || '',
       next_action_channel:      t.next_action_channel      || '',
       next_action_contact:      t.next_action_contact      || '',
       contingency_trigger_date: t.contingency_trigger_date || '',
-      contingency_action:       t.contingency_action       || '',
-      contingency_escalation:   t.contingency_escalation   || '',
       deadline:                 t.deadline                 || null,
       effortEstimate:           t.effortEstimate           || null,
       weeklyCommitment:         t.weeklyCommitment         || null,
-      effortLogged:             t.effortLogged             || 0,
-      connections:              (t.connections || []).map(function (c) {
-        return { to_uuid: c.to_uuid || null, to_label: c.to_label || '', edge_type: c.edge_type, is_suggested: c.is_suggested || false };
-      }),
-      evolution_log:            (t.evolution_log || []).map(function (e) {
-        return { date: e.date, note: e.note };
-      })
+      effortLogged:             t.effortLogged             || 0
     };
   });
 
@@ -477,7 +521,7 @@ OAD.exportThreads = function () {
     exported_at:   new Date().toISOString(),
     exported_by:   OAD._userId || 'local',
     thread_count:  threads.length,
-    note:          'Full export: includes graph edges, assumptions, and deadline data. AI insights and persona excluded.',
+    note:          'Moat-safe export: graph structure, evolution history, proprietary contingency logic, and assumptions have been omitted.',
     threads:       threads
   }, null, 2);
 };
@@ -571,10 +615,11 @@ OAD._normalizeDB = function () {
   OAD.DB.habits   = OAD.DB.habits   || [];
   OAD.DB.ideas    = OAD.DB.ideas    || [];
   OAD.DB.proposals = OAD.DB.proposals || [];
-  // Backfill UUIDs and parent_uuid for threads created before these fields existed
+  // Backfill UUIDs and parent_uuid, and normalize/de-dupe life area
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
+    t.life_area = OAD.normalizeLifeArea(t.life_area);
   });
   // Backfill days_of_week for cadences created before weekly-days support existed
   OAD.DB.cadences.forEach(function (c) {

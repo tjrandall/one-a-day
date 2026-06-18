@@ -236,16 +236,30 @@ OAD._saveEditThread = function (id) {
   if (!t) return;
   const data = OAD._readThreadForm(t);
   if (!data) return;
+
+  const isClosing = (data.status === 'closed' || data.closing_condition_met);
   const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified };
-  OAD.updateThread(id, data);
   const notes = [];
   if (prev.status !== data.status) notes.push(`Status → ${data.status}`);
   if (prev.priority !== data.priority) notes.push(`Priority → ${data.priority}`);
   if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
-  if (notes.length) OAD.addEvolution(id, notes.join('; '));
-  OAD.closeModal();
-  OAD.refreshActiveView();
-  OAD.renderDetail(id);
+
+  if (isClosing && OAD.needsClosureWizard(id)) {
+    OAD.closeModal();
+    OAD.openClosureWizard(id, data, notes.length ? notes.join('; ') : '');
+  } else {
+    OAD.updateThread(id, data);
+    if (notes.length) OAD.addEvolution(id, notes.join('; '));
+    OAD.closeModal();
+    OAD.refreshActiveView();
+    if (isClosing) {
+      const panel = document.getElementById('detail-content');
+      if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+      OAD.goBackToLastView();
+    } else {
+      OAD.renderDetail(id);
+    }
+  }
 };
 
 OAD._deleteThread = function (id) {
@@ -285,13 +299,10 @@ OAD._saveLog = function (id) {
 OAD.openConnectionModal = function (id) {
   const t = OAD.getThread(id);
   if (!t) return;
-  const edgeOpts = OAD.EDGE_TYPES.map(e =>
-    `<option value="${e}">${e}</option>`).join('');
-  // Datalist of existing thread titles for UUID resolution on save
-  const threadOpts = (OAD.DB.threads || [])
-    .filter(function (x) { return x.id !== id && x.status !== 'closed'; })
-    .map(function (x) { return `<option value="${OAD.esc(x.title)}">`; })
-    .join('');
+  const edgeOpts = OAD.EDGE_TYPES.map(e => {
+    const label = e === 'blocked_by' ? 'is blocked by' : e;
+    return `<option value="${e}">${label}</option>`;
+  }).join('');
   OAD.openModal(`
     <h2>Add Connection — ${OAD.esc(t.title)}</h2>
     <div class="field">
@@ -300,30 +311,155 @@ OAD.openConnectionModal = function (id) {
     </div>
     <div class="field">
       <label>Connected Thread</label>
-      <input id="f-edge-label" type="text" list="f-edge-thread-list"
-        placeholder="Type to search threads, or enter any label">
-      <datalist id="f-edge-thread-list">${threadOpts}</datalist>
+      <div class="autocomplete-container">
+        <input type="text" id="f-edge-search" placeholder="Type to search threads..." autocomplete="off" />
+        <input type="hidden" id="f-edge-uuid" value="" />
+        <div id="f-edge-results" class="autocomplete-results"></div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveConnection(${id})">Add</button>
     </div>`);
-  setTimeout(() => document.getElementById('f-edge-label')?.focus(), 50);
+  setTimeout(() => {
+    document.getElementById('f-edge-search')?.focus();
+    OAD._initConnectionAutocomplete(id);
+  }, 50);
+};
+
+OAD._initConnectionAutocomplete = function (currentId) {
+  const searchInput = document.getElementById('f-edge-search');
+  const uuidInput = document.getElementById('f-edge-uuid');
+  const resultsDiv = document.getElementById('f-edge-results');
+  if (!searchInput || !uuidInput || !resultsDiv) return;
+
+  const threads = (OAD.DB.threads || [])
+    .filter(x => x.id !== currentId && x.status !== 'closed')
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  let activeIndex = -1;
+
+  function renderList(query) {
+    const q = (query || '').toLowerCase().trim();
+    const filtered = threads.filter(t => {
+      return (t.title || '').toLowerCase().includes(q) ||
+             (t.life_area || '').toLowerCase().includes(q) ||
+             (t.description || '').toLowerCase().includes(q);
+    });
+
+    if (filtered.length === 0) {
+      resultsDiv.innerHTML = '<div class="autocomplete-item text-muted">No threads found</div>';
+      return filtered;
+    }
+
+    resultsDiv.innerHTML = filtered.map((t, idx) => {
+      const activeClass = idx === activeIndex ? ' active' : '';
+      return `<div class="autocomplete-item${activeClass}" data-uuid="${t.uuid}" data-title="${OAD.esc(t.title)}" title="${OAD.esc(t.title)}">
+        <span class="item-title"><strong>${OAD.esc(t.title)}</strong></span>
+        <span class="item-area">${OAD.esc(t.life_area)}</span>
+      </div>`;
+    }).join('');
+
+    Array.from(resultsDiv.querySelectorAll('.autocomplete-item')).forEach((item, idx) => {
+      item.addEventListener('click', () => {
+        selectItem(filtered[idx]);
+      });
+    });
+
+    return filtered;
+  }
+
+  function selectItem(thread) {
+    if (!thread) return;
+    searchInput.value = thread.title;
+    uuidInput.value = thread.uuid;
+    resultsDiv.style.display = 'none';
+  }
+
+  searchInput.addEventListener('focus', () => {
+    resultsDiv.style.display = 'block';
+    activeIndex = -1;
+    renderList(searchInput.value);
+  });
+
+  const clickOutsideHandler = (e) => {
+    if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
+      resultsDiv.style.display = 'none';
+    }
+  };
+  document.addEventListener('click', clickOutsideHandler);
+
+  // Clean up click handler when modal is removed
+  const observer = new MutationObserver(() => {
+    if (!document.getElementById('f-edge-search')) {
+      document.removeEventListener('click', clickOutsideHandler);
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  searchInput.addEventListener('input', () => {
+    resultsDiv.style.display = 'block';
+    activeIndex = -1;
+    renderList(searchInput.value);
+  });
+
+  searchInput.addEventListener('keydown', (e) => {
+    const q = searchInput.value.toLowerCase().trim();
+    const filtered = threads.filter(t => {
+      return (t.title || '').toLowerCase().includes(q) ||
+             (t.life_area || '').toLowerCase().includes(q) ||
+             (t.description || '').toLowerCase().includes(q);
+    });
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (filtered.length > 0) {
+        activeIndex = (activeIndex + 1) % filtered.length;
+        renderList(searchInput.value);
+        scrollIntoView();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (filtered.length > 0) {
+        activeIndex = (activeIndex - 1 + filtered.length) % filtered.length;
+        renderList(searchInput.value);
+        scrollIntoView();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIndex >= 0 && activeIndex < filtered.length) {
+        selectItem(filtered[activeIndex]);
+      } else if (filtered.length > 0) {
+        selectItem(filtered[0]);
+      }
+    } else if (e.key === 'Escape') {
+      resultsDiv.style.display = 'none';
+    }
+  });
+
+  function scrollIntoView() {
+    const activeEl = resultsDiv.querySelector('.autocomplete-item.active');
+    if (activeEl) {
+      activeEl.scrollIntoView({ block: 'nearest' });
+    }
+  }
 };
 
 OAD._saveConnection = function (id) {
   const t = OAD.getThread(id);
   if (!t) return;
   const edge_type = document.getElementById('f-edge-type')?.value;
-  const to_label  = document.getElementById('f-edge-label')?.value.trim();
-  if (!to_label) { alert('Enter a thread name or label.'); return; }
-  // Resolve UUID if the label matches an existing thread title (case-insensitive)
-  const match = (OAD.DB.threads || []).find(function (x) {
-    return x.id !== id && x.title.toLowerCase() === to_label.toLowerCase();
-  });
-  const to_uuid = match ? match.uuid : null;
+  const to_uuid   = document.getElementById('f-edge-uuid')?.value;
+  if (!to_uuid) { alert('Please select a target thread.'); return; }
+  
+  const target = OAD.DB.threads.find(x => x.uuid === to_uuid);
+  if (!target) { alert('Invalid target thread.'); return; }
+  
+  const to_label = target.title;
+  t.connections = t.connections || [];
   t.connections.push({ to_uuid, to_label, edge_type });
-  OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}${to_uuid ? '' : ' (external)'}`);
+  OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}`);
   OAD.closeModal();
   OAD.refreshActiveView();
   OAD.renderDetail(id);
@@ -672,6 +808,39 @@ OAD.openSettingsModal = function () {
       </select>
     </div>
     <div class="field">
+      <label>Language</label>
+      <select id="f-locale">
+        <option value="en" ${OAD.Config.currentLocale === 'en' ? 'selected' : ''}>English</option>
+        <option value="es" ${OAD.Config.currentLocale === 'es' ? 'selected' : ''}>Español</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Greeting Title</label>
+      <input id="f-greeting-title" type="text" value="${OAD.esc(OAD.Config.userGreetingTitle)}" ${!OAD.isSuperAdmin() ? 'disabled' : ''} placeholder="e.g. Chief" />
+      ${!OAD.isSuperAdmin() ? '<span class="text-xs text-muted" style="margin-top:4px;display:block">Only SuperAdmin can modify this setting.</span>' : ''}
+    </div>
+    <div class="field">
+      <label>Life Areas</label>
+      <div id="life-areas-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px;max-height:160px;overflow-y:auto;border:1px solid var(--border);padding:8px;border-radius:4px;background:var(--surface)">
+        ${OAD.LIFE_AREAS.map((area, idx) => `
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="text" class="f-life-area-input" data-index="${idx}" value="${OAD.esc(area)}" ${!OAD.isSuperAdmin() ? 'disabled' : ''} style="flex:1" />
+            <button type="button" class="danger" style="padding:4px 8px;font-size:12px;margin:0" onclick="event.stopPropagation(); OAD._deleteLifeArea(${idx})" ${!OAD.isSuperAdmin() ? 'disabled' : ''}>Delete</button>
+          </div>
+        `).join('')}
+      </div>
+      ${OAD.isSuperAdmin() ? `
+        <div style="display:flex;gap:6px">
+          <input type="text" id="f-new-life-area" placeholder="New life area..." style="flex:1" />
+          <button type="button" class="success" style="padding:6px 12px;font-size:13px;margin:0" onclick="event.stopPropagation(); OAD._addLifeArea()">Add</button>
+        </div>
+      ` : '<span class="text-xs text-muted" style="margin-top:4px;display:block">Only SuperAdmin can manage Life Areas.</span>'}
+    </div>
+    <div class="field">
+      <label>Inbox Scanning Filter</label>
+      <input id="f-gmail-filter" type="text" value="${OAD.esc(OAD.Config.gmailSearchFilter)}" placeholder="is:unread ..." />
+    </div>
+    <div class="field">
       <label>Anthropic API Key</label>
       <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
     </div>
@@ -694,7 +863,7 @@ OAD.openSettingsModal = function () {
     </div>`);
 };
 
-OAD._saveSettings = function () {
+OAD._saveSettings = async function () {
   const key = document.getElementById('f-api-key')?.value.trim() || '';
   OAD.setApiKey(key);
   
@@ -704,8 +873,74 @@ OAD._saveSettings = function () {
     OAD.saveDB();
   }
   document.body.setAttribute('data-theme', theme);
+
+  const selectedLocale = document.getElementById('f-locale')?.value || 'en';
+  const oldLocale = OAD.Config.currentLocale;
+
+  const greetingInput = document.getElementById('f-greeting-title');
+  if (greetingInput && !greetingInput.disabled) {
+    OAD.Config.userGreetingTitle = greetingInput.value.trim() || 'Chief';
+    localStorage.setItem('oad_greeting_title', OAD.Config.userGreetingTitle);
+  }
+
+  // Save edited life areas if user is SuperAdmin
+  if (OAD.isSuperAdmin()) {
+    OAD._saveLifeAreasFromDOM();
+  }
+
+  const gmailFilterInput = document.getElementById('f-gmail-filter');
+  if (gmailFilterInput) {
+    OAD.Config.gmailSearchFilter = gmailFilterInput.value.trim() || '';
+    localStorage.setItem('oad_gmail_filter', OAD.Config.gmailSearchFilter);
+  }
+
+  if (selectedLocale !== oldLocale) {
+    await OAD.loadLanguage(selectedLocale);
+  } else {
+    OAD.translateDOM();
+  }
   
   OAD.closeModal();
+  OAD.refreshActiveView();
+};
+
+OAD._saveLifeAreasFromDOM = function () {
+  const inputs = document.querySelectorAll('.f-life-area-input');
+  if (!inputs.length) return;
+  const updatedAreas = [];
+  inputs.forEach(input => {
+    const val = OAD.normalizeLifeArea(input.value);
+    if (val && !updatedAreas.includes(val)) {
+      updatedAreas.push(val);
+    }
+  });
+  OAD.Config.lifeAreas = updatedAreas;
+  OAD.LIFE_AREAS = updatedAreas;
+  localStorage.setItem('oad_life_areas', JSON.stringify(updatedAreas));
+};
+
+OAD._deleteLifeArea = function (index) {
+  OAD._saveLifeAreasFromDOM();
+  OAD.Config.lifeAreas.splice(index, 1);
+  OAD.LIFE_AREAS = OAD.Config.lifeAreas;
+  localStorage.setItem('oad_life_areas', JSON.stringify(OAD.Config.lifeAreas));
+  OAD.openSettingsModal();
+};
+
+OAD._addLifeArea = function () {
+  OAD._saveLifeAreasFromDOM();
+  const input = document.getElementById('f-new-life-area');
+  const val = input ? input.value.trim() : '';
+  if (!val) return;
+  const normalized = OAD.normalizeLifeArea(val);
+  if (OAD.Config.lifeAreas.includes(normalized)) {
+    alert('Life area already exists!');
+    return;
+  }
+  OAD.Config.lifeAreas.push(normalized);
+  OAD.LIFE_AREAS = OAD.Config.lifeAreas;
+  localStorage.setItem('oad_life_areas', JSON.stringify(OAD.Config.lifeAreas));
+  OAD.openSettingsModal();
 };
 
 // ── Complete Action Wizard ──────────────────────────────────────
@@ -733,23 +968,6 @@ OAD._cawStep1 = function () {
   const caw = OAD._caw;
   const t   = OAD.getThread(caw.id);
   const prev = caw.step1 || {};
-  const hasAssumption = !!(t.current_assumption && t.current_assumption.trim());
-
-  const assumptionHtml = hasAssumption ? `
-    <div class="field">
-      <label>Did this verify the current assumption?</label>
-      <div class="text-sm text-muted" style="font-style:italic;margin:0 0 8px">"${OAD.esc(t.current_assumption)}"</div>
-      <div class="yn-group">
-        <label class="yn-opt">
-          <input type="radio" name="ca-av" value="yes" ${prev.assumption_verified === true ? 'checked' : ''}>
-          Yes — assumption verified
-        </label>
-        <label class="yn-opt">
-          <input type="radio" name="ca-av" value="no" ${prev.assumption_verified !== true ? 'checked' : ''}>
-          No — still unverified
-        </label>
-      </div>
-    </div>` : '';
 
   OAD.openModal(`
     ${OAD._wizardSteps(1)}
@@ -758,7 +976,6 @@ OAD._cawStep1 = function () {
       <label>What did you do? <span style="color:var(--critical)">*</span></label>
       <textarea id="ca-what-done" placeholder="Describe exactly what you did — this becomes the evolution log entry." style="min-height:90px">${OAD.esc(prev.what_done || '')}</textarea>
     </div>
-    ${assumptionHtml}
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._cawStep1Next()">Next →</button>
@@ -770,17 +987,7 @@ OAD._cawStep1Next = function () {
   const what_done = document.getElementById('ca-what-done')?.value.trim();
   if (!what_done) { alert('Describe what you did — this cannot be empty.'); return; }
 
-  const t = OAD.getThread(OAD._caw.id);
-  const hasAssumption = !!(t.current_assumption && t.current_assumption.trim());
-  let assumption_verified = t.assumption_verified;
-
-  if (hasAssumption) {
-    const av = document.querySelector('input[name="ca-av"]:checked')?.value;
-    if (!av) { alert('Select whether the assumption was verified.'); return; }
-    assumption_verified = (av === 'yes');
-  }
-
-  OAD._caw.step1 = { what_done: what_done, assumption_verified: assumption_verified };
+  OAD._caw.step1 = { what_done: what_done };
   OAD._cawStep2();
 };
 
@@ -907,7 +1114,6 @@ OAD._cawSave = function () {
   if (!t) return;
 
   const patch = {
-    assumption_verified:      caw.step1.assumption_verified,
     next_action:              caw.step2.action,
     next_action_date:         caw.step2.date,
     next_action_channel:      caw.step2.channel,
@@ -916,13 +1122,16 @@ OAD._cawSave = function () {
     contingency_action:       caw.step2.ctg_action
   };
 
+  if (caw.step1 && caw.step1.assumption_verified) {
+    patch.assumption_verified = true;
+  }
+
   if (t.deadline) patch.effortLogged = (t.effortLogged || 0) + 1;
   if (t.status === 'stalled') patch.status = 'open';
 
   OAD.updateThread(caw.id, patch);
 
   const logParts = ['Completed: ' + caw.step1.what_done];
-  if (caw.step1.assumption_verified && !t.assumption_verified) logParts.push('Assumption verified.');
   logParts.push('Next: ' + caw.step2.action + ' by ' + caw.step2.date + '.');
   OAD.addEvolution(caw.id, logParts.join(' '));
 
@@ -939,24 +1148,235 @@ OAD._cawSaveClose = function () {
   if (!t) return;
 
   const patch = {
-    assumption_verified:   caw.step1.assumption_verified,
     status:                'closed',
     closing_condition_met: true
   };
 
   if (t.deadline) patch.effortLogged = (t.effortLogged || 0) + 1;
 
-  OAD.updateThread(caw.id, patch);
-
-  const logParts = ['Completed: ' + caw.step1.what_done];
-  if (caw.step1.assumption_verified && !t.assumption_verified) logParts.push('Assumption verified.');
-  logParts.push('Closing condition met — thread closed.');
-  OAD.addEvolution(caw.id, logParts.join(' '));
+  const logNote = 'Completed: ' + caw.step1.what_done + '; Closing condition met — thread closed.';
 
   OAD._caw = null;
   OAD.closeModal();
-  OAD.refreshActiveView();
-  OAD.renderDetail(caw.id);
+
+  if (OAD.needsClosureWizard(t.id)) {
+    OAD.openClosureWizard(t.id, patch, logNote);
+  } else {
+    OAD.updateThread(t.id, patch);
+    OAD.addEvolution(t.id, logNote);
+    OAD.refreshActiveView();
+    const panel = document.getElementById('detail-content');
+    if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+    OAD.goBackToLastView();
+  }
+};
+
+OAD.needsClosureWizard = function (threadId) {
+  const t = OAD.getThread(threadId);
+  if (!t) return false;
+
+  // Active sub-threads
+  const activeSubthreads = (OAD.DB.threads || []).filter(function (x) {
+    return x.parent_uuid === t.uuid && x.status !== 'closed';
+  });
+
+  // Active outgoing connections
+  const conns = t.connections || [];
+  const activeOutgoing = conns.filter(function (c) {
+    if (!c.to_uuid) return false;
+    const target = OAD.DB.threads.find(function (x) { return x.uuid === c.to_uuid; });
+    return target && target.status !== 'closed';
+  });
+
+  // Active incoming connections
+  const activeIncoming = (OAD.DB.threads || []).filter(function (x) {
+    if (x.id === t.id || x.status === 'closed') return false;
+    return (x.connections || []).some(function (c) {
+      return c.to_uuid === t.uuid;
+    });
+  });
+
+  return activeSubthreads.length > 0 || activeOutgoing.length > 0 || activeIncoming.length > 0;
+};
+
+OAD.openClosureWizard = function (id, pendingPatch, logNote) {
+  const t = OAD.getThread(id);
+  if (!t) return;
+
+  const activeSubthreads = (OAD.DB.threads || []).filter(function (x) {
+    return x.parent_uuid === t.uuid && x.status !== 'closed';
+  });
+
+  const incoming = (OAD.DB.threads || []).filter(function (x) {
+    if (x.id === t.id || x.status === 'closed') return false;
+    return (x.connections || []).some(function (c) { return c.to_uuid === t.uuid; });
+  });
+
+  const outgoing = (t.connections || []).filter(function (c) {
+    if (!c.to_uuid) return false;
+    const target = OAD.DB.threads.find(function (x) { return x.uuid === c.to_uuid; });
+    return target && target.status !== 'closed';
+  });
+
+  const otherActiveThreads = (OAD.DB.threads || []).filter(function (x) {
+    return x.id !== t.id && x.parent_uuid !== t.uuid && x.status !== 'closed';
+  });
+
+  const otherOpts = otherActiveThreads.map(function (x) {
+    return `<option value="${x.uuid}">${OAD.esc(x.title)}</option>`;
+  }).join('');
+
+  let subthreadsHtml = '';
+  if (activeSubthreads.length > 0) {
+    subthreadsHtml = `
+      <div class="wizard-section-title">Active Sub-threads (${activeSubthreads.length})</div>
+      <div class="wizard-list">
+        ${activeSubthreads.map(function (sub) {
+          return `
+            <div class="wizard-row" style="margin-bottom:12px;padding:8px;background:var(--surface2);border-radius:6px">
+              <div style="font-weight:600;font-size:14px;margin-bottom:6px">${OAD.esc(sub.title)}</div>
+              <select id="sub-action-${sub.id}" onchange="document.getElementById('sub-parent-div-${sub.id}').style.display = this.value === 'reparent' ? 'block' : 'none'" style="width:100%">
+                <option value="promote">Promote to main thread (clear parent)</option>
+                <option value="close">Close this sub-thread too</option>
+                ${otherActiveThreads.length ? '<option value="reparent">Reparent to another active thread</option>' : ''}
+              </select>
+              <div id="sub-parent-div-${sub.id}" style="display:none;margin-top:6px">
+                <label style="font-size:12px;display:block;margin-bottom:2px">Select new parent:</label>
+                <select id="sub-parent-${sub.id}" style="width:100%">${otherOpts}</select>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  let connsHtml = '';
+  const totalConns = incoming.length + outgoing.length;
+  if (totalConns > 0) {
+    const parentThread = t.parent_uuid ? OAD.DB.threads.find(x => x.uuid === t.parent_uuid) : null;
+    const parentOptHtml = parentThread ? `<option value="parent">Transfer to parent thread ("${OAD.esc(parentThread.title)}")</option>` : '';
+
+    connsHtml = `
+      <div class="wizard-section-title" style="margin-top:16px">Active Graph Connections (${totalConns})</div>
+      <div class="wizard-list">
+        ${incoming.map(function (src) {
+          return `
+            <div class="wizard-row" style="margin-bottom:10px;padding:8px;background:var(--surface2);border-radius:6px;font-size:13px">
+              <div><strong>Incoming:</strong> "${OAD.esc(src.title)}" blocks this thread</div>
+              <select class="wizard-conn-action" data-src-id="${src.id}" data-type="incoming" style="width:100%;margin-top:6px">
+                <option value="delete">Delete this blocking relationship (clean break)</option>
+                <option value="keep">Keep connection (legacy reference)</option>
+                ${parentOptHtml}
+              </select>
+            </div>`;
+        }).join('')}
+        ${outgoing.map(function (c) {
+          const tgt = OAD.DB.threads.find(x => x.uuid === c.to_uuid);
+          return `
+            <div class="wizard-row" style="margin-bottom:10px;padding:8px;background:var(--surface2);border-radius:6px;font-size:13px">
+              <div><strong>Outgoing:</strong> This thread blocks "${OAD.esc(tgt ? tgt.title : c.to_label)}"</div>
+              <select class="wizard-conn-action" data-tgt-uuid="${c.to_uuid}" data-type="outgoing" style="width:100%;margin-top:6px">
+                <option value="delete">Delete this blocking relationship (clean break)</option>
+                <option value="keep">Keep connection (legacy reference)</option>
+                ${parentOptHtml}
+              </select>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  OAD.openModal(`
+    <h2>Thread Closure Wizard</h2>
+    <div style="font-size:14px;color:var(--text-muted);margin-bottom:16px">
+      You are closing <strong>"${OAD.esc(t.title)}"</strong>. Select how to handle its active subtasks and relationships.
+    </div>
+    <div style="max-height:300px;overflow-y:auto;padding-right:4px">
+      ${subthreadsHtml}
+      ${connsHtml}
+    </div>
+    <div class="modal-footer" style="margin-top:16px">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel Closure</button>
+      <button class="success" id="confirm-closure-btn">Confirm & Close Thread</button>
+    </div>`);
+
+  document.getElementById('confirm-closure-btn').onclick = function () {
+    // Process sub-threads
+    activeSubthreads.forEach(function (sub) {
+      const act = document.getElementById(`sub-action-${sub.id}`)?.value;
+      if (act === 'close') {
+        OAD.updateThread(sub.id, { status: 'closed', closing_condition_met: true });
+        OAD.addEvolution(sub.id, 'Closed automatically along with parent thread.');
+      } else if (act === 'reparent') {
+        const newParentUuid = document.getElementById(`sub-parent-${sub.id}`)?.value;
+        OAD.updateThread(sub.id, { parent_uuid: newParentUuid });
+        const parentT = OAD.DB.threads.find(x => x.uuid === newParentUuid);
+        OAD.addEvolution(sub.id, `Reparented to "${parentT ? parentT.title : 'another thread'}" upon parent closure.`);
+      } else {
+        // promote
+        OAD.updateThread(sub.id, { parent_uuid: null });
+        OAD.addEvolution(sub.id, 'Promoted to main independent thread upon parent closure.');
+      }
+    });
+
+    // Process connections
+    const connSelects = document.querySelectorAll('.wizard-conn-action');
+    connSelects.forEach(function (select) {
+      const act = select.value;
+      const type = select.getAttribute('data-type');
+      if (type === 'incoming') {
+        const srcId = parseInt(select.getAttribute('data-src-id'), 10);
+        const src = OAD.getThread(srcId);
+        if (src && src.connections) {
+          if (act === 'delete') {
+            src.connections = src.connections.filter(c => c.to_uuid !== t.uuid);
+            OAD.saveDB();
+          } else if (act === 'parent' && t.parent_uuid) {
+            src.connections.forEach(c => {
+              if (c.to_uuid === t.uuid) {
+                c.to_uuid = t.parent_uuid;
+                const parentT = OAD.DB.threads.find(x => x.uuid === t.parent_uuid);
+                c.to_label = parentT ? parentT.title : '';
+              }
+            });
+            OAD.saveDB();
+          }
+        }
+      } else {
+        // outgoing
+        const tgtUuid = select.getAttribute('data-tgt-uuid');
+        if (act === 'delete') {
+          t.connections = t.connections.filter(c => c.to_uuid !== tgtUuid);
+          OAD.saveDB();
+        } else if (act === 'parent' && t.parent_uuid) {
+          t.connections.forEach(c => {
+            if (c.to_uuid === tgtUuid) {
+              // Add blocking connection on the parent thread instead
+              const parentT = OAD.DB.threads.find(x => x.uuid === t.parent_uuid);
+              if (parentT) {
+                parentT.connections = parentT.connections || [];
+                const alreadyExists = parentT.connections.some(pc => pc.to_uuid === tgtUuid && pc.edge_type === 'blocks');
+                if (!alreadyExists) {
+                  parentT.connections.push({ to_uuid: tgtUuid, to_label: c.to_label, edge_type: 'blocks' });
+                }
+              }
+            }
+          });
+          // Remove from this thread
+          t.connections = t.connections.filter(c => c.to_uuid !== tgtUuid);
+          OAD.saveDB();
+        }
+      }
+    });
+
+    // Close the parent thread
+    OAD.updateThread(id, pendingPatch);
+    if (logNote) OAD.addEvolution(id, logNote);
+
+    OAD.closeModal();
+    OAD.refreshActiveView();
+    const panel = document.getElementById('detail-content');
+    if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+    OAD.goBackToLastView();
+  };
 };
 
 // ── Auth modal ────────────────────────────────────────────────────────
@@ -1058,4 +1478,352 @@ OAD._signOut = async function () {
   OAD.DB = { threads: [], cadences: [], persona: JSON.parse(JSON.stringify(OAD.DB.persona)) };
   OAD.closeModal();
   OAD.openSignInModal({ message: 'You have been signed out.' });
+};
+
+OAD.openCycleResolutionModal = function (threadId) {
+  const t = OAD.getThread(threadId);
+  if (!t) return;
+
+  const cycles = OAD.detectCycles();
+  const myCycles = cycles.filter(function (c) { return c.indexOf(t.id) !== -1; });
+
+  if (myCycles.length === 0) {
+    alert("This thread is not currently part of a dependency cycle.");
+    return;
+  }
+
+  // Build HTML for each cycle this thread is part of
+  let cyclesHtml = '';
+  myCycles.forEach(function (cycle, cycleIdx) {
+    const threadLoop = cycle.map(function (tid) { return OAD.getThread(tid); }).filter(Boolean);
+    const loopNames = threadLoop.map(function (x) { return `<strong>${OAD.esc(x.title)}</strong>`; }).join(' ➔ ');
+    
+    // Find the actual connection edges that form this cycle
+    const edges = [];
+    for (let i = 0; i < threadLoop.length; i++) {
+      const current = threadLoop[i];
+      const next = threadLoop[(i + 1) % threadLoop.length];
+      const conn = (current.connections || []).find(c => c.to_uuid === next.uuid && c.edge_type === 'blocks');
+      if (conn) {
+        edges.push({ from: current, to: next, conn: conn });
+      }
+    }
+
+    cyclesHtml += `
+      <div class="cycle-box" style="margin-bottom:20px;padding:12px;background:rgba(255,100,100,0.08);border:1px solid rgba(255,100,100,0.2);border-radius:8px">
+        <div style="font-weight:600;color:var(--critical);margin-bottom:8px">Cycle #${cycleIdx + 1}: Deadlock Loop</div>
+        <div style="font-size:13px;line-height:1.5;margin-bottom:12px">${loopNames} ➔ <em>(loop)</em></div>
+        
+        <div style="font-size:12px;font-weight:600;margin-bottom:6px">Break the cycle by severing a blocking relationship:</div>
+        <div class="cycle-edges-list">
+          ${edges.map(function (edge) {
+            return `
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,0.05)">
+                <div style="font-size:12px;flex-grow:1;color:var(--text-muted)">
+                  <strong>${OAD.esc(edge.from.title)}</strong> blocks <strong>${OAD.esc(edge.to.title)}</strong>
+                </div>
+                <button class="danger btn-xs" onclick="OAD._severCycleEdge(${edge.from.id}, '${edge.to.uuid}')" style="padding:4px 8px;font-size:11px">Sever Link</button>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  });
+
+  OAD.openModal(`
+    <h2>Resolve Dependency Cycle</h2>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.4">
+      Circular dependencies create execution deadlocks where none of the tasks can be resolved. 
+      Sever one of the links below to break the loop.
+    </div>
+    <div style="max-height:300px;overflow-y:auto;padding-right:4px">
+      ${cyclesHtml}
+    </div>
+    <div class="modal-footer" style="margin-top:16px">
+      <button class="secondary" onclick="OAD.closeModal()">Close Dialog</button>
+    </div>`);
+};
+
+OAD._severCycleEdge = function (fromId, toUuid) {
+  const fromThread = OAD.getThread(fromId);
+  if (!fromThread) return;
+  
+  const target = OAD.DB.threads.find(x => x.uuid === toUuid);
+  const targetTitle = target ? target.title : 'another thread';
+  
+  fromThread.connections = (fromThread.connections || []).filter(c => c.to_uuid !== toUuid);
+  OAD.saveDB();
+  OAD.addEvolution(fromId, `Severed cycle link: no longer blocks "${targetTitle}".`);
+  
+  const cycles = OAD.detectCycles();
+  const myCycles = cycles.filter(function (c) { return c.indexOf(fromId) !== -1; });
+  if (myCycles.length > 0) {
+    OAD.openCycleResolutionModal(fromId);
+  } else {
+    OAD.closeModal();
+  }
+  OAD.refreshActiveView();
+  const panel = document.getElementById('detail-content');
+  if (panel && OAD._activeId) OAD.renderDetail(OAD._activeId);
+};
+
+OAD.loadTesseract = function (onLoaded, onError) {
+  if (window.Tesseract) {
+    onLoaded();
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+  script.onload = onLoaded;
+  script.onerror = onError || (() => alert('Failed to load OCR scanner library (Tesseract.js). Please check your internet connection.'));
+  document.head.appendChild(script);
+};
+
+OAD.openMailroomModal = function () {
+  OAD.openModal(`
+    <h2>📥 Mailroom Intake</h2>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;line-height:1.4">
+      Upload a photo or document to scan locally. We will extract its text and dates to help you route or create a thread. No images are saved.
+    </div>
+    
+    <div class="mailroom-dropzone" id="mailroom-dropzone" onclick="document.getElementById('mailroom-file-input').click()">
+      <div class="mailroom-icon">📄</div>
+      <div style="font-weight:600;font-size:14px">Drag & Drop Image Here</div>
+      <div style="font-size:12px;color:var(--text-muted)">or click to browse files</div>
+      <input type="file" id="mailroom-file-input" accept="image/*" />
+    </div>
+    
+    <div class="modal-footer" style="margin-top:16px">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+    </div>
+  `);
+
+  const dropzone = document.getElementById('mailroom-dropzone');
+  const fileInput = document.getElementById('mailroom-file-input');
+  if (!dropzone || !fileInput) return;
+
+  dropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropzone.classList.add('dragover');
+  });
+  dropzone.addEventListener('dragleave', () => {
+    dropzone.classList.remove('dragover');
+  });
+  dropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    dropzone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) {
+      OAD._handleMailroomFileSelect(e.dataTransfer.files[0]);
+    }
+  });
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+      OAD._handleMailroomFileSelect(e.target.files[0]);
+    }
+  });
+};
+
+OAD._handleMailroomFileSelect = function (file) {
+  OAD.openModal(`
+    <h2>📥 Mailroom — Processing OCR</h2>
+    <div class="mailroom-progress-container">
+      <div class="mailroom-icon">🔍</div>
+      <div style="font-weight:600" id="mailroom-status-text">Loading OCR engine...</div>
+      <div class="mailroom-progress-bar-bg">
+        <div class="mailroom-progress-bar-fill" id="mailroom-progress-bar" style="width: 0%"></div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:8px">This process runs entirely locally in your browser.</div>
+    </div>
+  `);
+
+  const updateProgress = (pct) => {
+    const bar = document.getElementById('mailroom-progress-bar');
+    const txt = document.getElementById('mailroom-status-text');
+    if (bar) bar.style.width = pct + '%';
+    if (txt) txt.textContent = `Analyzing document: ${pct}%`;
+  };
+
+  OAD.loadTesseract(async () => {
+    try {
+      const reader = new FileReader();
+      reader.onload = async function () {
+        try {
+          const worker = await Tesseract.createWorker('eng', 1, {
+            logger: m => {
+              if (m.status === 'recognizing') {
+                updateProgress(Math.round(m.progress * 100));
+              }
+            }
+          });
+          const ret = await worker.recognize(reader.result);
+          await worker.terminate();
+          OAD._renderMailroomIntakeForm(ret.data.text);
+        } catch (err) {
+          console.error(err);
+          alert('Error during OCR processing. Please make sure the file is a valid image.');
+          OAD.openMailroomModal();
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to read document file.');
+      OAD.openMailroomModal();
+    }
+  }, () => {
+    alert('Failed to load OCR scanner library (Tesseract.js).');
+    OAD.openMailroomModal();
+  });
+};
+
+OAD._renderMailroomIntakeForm = function (text) {
+  const analysis = OAD.Mailroom.parseText(text);
+  const recommendations = OAD.Mailroom.getRecommendations(text);
+
+  const defaultTitle = analysis.suggestedTitle;
+  const suggestedArea = analysis.suggestedLifeArea;
+  const suggestedDate = analysis.dates.length > 0 ? analysis.dates[0] : '';
+
+  const shouldRecommendAttach = recommendations.length > 0 && recommendations[0].score >= 5;
+  const recommendedThreadUuid = shouldRecommendAttach ? recommendations[0].thread.uuid : '';
+
+  const areas = ['Career', 'Finance', 'Housing', 'Health', 'Education', 'Legal', 'Other'];
+  const areaOpts = areas.map(a => `<option value="${a}" ${a === suggestedArea ? 'selected' : ''}>${a}</option>`).join('');
+
+  const sortedActive = (OAD.DB.threads || [])
+    .filter(t => t.status !== 'closed')
+    .sort((a, b) => a.title.localeCompare(b.title));
+  const threadOpts = sortedActive.map(t => {
+    const isRec = recommendations.length > 0 && t.uuid === recommendations[0].thread.uuid;
+    const recLabel = isRec ? ' ★ Suggested Match' : '';
+    return `<option value="${t.uuid}" ${t.uuid === recommendedThreadUuid ? 'selected' : ''}>${OAD.esc(t.title)} (${OAD.esc(t.life_area)})${recLabel}</option>`;
+  }).join('');
+
+  OAD.openModal(`
+    <h2 style="margin-bottom:8px">📥 Mailroom — Intake Form</h2>
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px">Review recommendations below. You can override any of these options.</div>
+    
+    <div class="mailroom-layout">
+      <div class="mailroom-left">
+        <label>Extracted Document Text</label>
+        <div class="mailroom-raw-text">${OAD.esc(text)}</div>
+      </div>
+      
+      <div class="mailroom-right">
+        <div class="mailroom-options-group">
+          <label class="mailroom-option">
+            <input type="radio" name="mailroom-action" id="act-new" value="new" ${!shouldRecommendAttach ? 'checked' : ''} onchange="OAD._toggleMailroomActionFields()" />
+            Create new Thread
+          </label>
+          <label class="mailroom-option">
+            <input type="radio" name="mailroom-action" id="act-attach" value="attach" ${shouldRecommendAttach ? 'checked' : ''} onchange="OAD._toggleMailroomActionFields()" />
+            Attach to existing Thread
+          </label>
+        </div>
+        
+        <div id="mailroom-new-fields" style="display: ${!shouldRecommendAttach ? 'block' : 'none'}">
+          <div class="field" style="margin-bottom:12px">
+            <label>Thread Title</label>
+            <input type="text" id="m-title" value="${OAD.esc(defaultTitle)}" placeholder="e.g. IRS Notice 2026" />
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label>Description / Notes</label>
+            <textarea id="m-desc" placeholder="Details extracted from document...">Extracted Text:\n${text.slice(0, 300)}...</textarea>
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label>Life Area</label>
+            <select id="m-area">${areaOpts}</select>
+          </div>
+          <div class="field-row" style="margin-bottom:12px">
+            <div class="field">
+              <label>Priority</label>
+              <select id="m-priority">
+                <option value="medium" selected>Medium</option>
+                <option value="critical">Critical</option>
+                <option value="high">High</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Next Action Date</label>
+              <input type="date" id="m-date" value="${suggestedDate}" />
+            </div>
+          </div>
+        </div>
+        
+        <div id="mailroom-attach-fields" style="display: ${shouldRecommendAttach ? 'block' : 'none'}">
+          <div class="field" style="margin-bottom:12px">
+            <label>Select Thread</label>
+            <select id="m-target-uuid">
+              <option value="">-- Select a thread --</option>
+              ${threadOpts}
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:12px">
+            <label>Evolution Note to Append</label>
+            <textarea id="m-evol-note" placeholder="Write a short update note...">Mail Intake: Received document. Extracted details:\n${text.slice(0, 150)}...</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="modal-footer" style="margin-top:20px">
+      <button class="secondary" onclick="OAD.openMailroomModal()">Back</button>
+      <button onclick="OAD._saveMailroomIntake()">Create / Update</button>
+    </div>
+  `, 'modal-lg');
+};
+
+OAD._toggleMailroomActionFields = function () {
+  const isNew = document.getElementById('act-new')?.checked;
+  const newFields = document.getElementById('mailroom-new-fields');
+  const attachFields = document.getElementById('mailroom-attach-fields');
+  if (newFields) newFields.style.display = isNew ? 'block' : 'none';
+  if (attachFields) attachFields.style.display = isNew ? 'none' : 'block';
+};
+
+OAD._saveMailroomIntake = function () {
+  const isNew = document.getElementById('act-new')?.checked;
+  
+  if (isNew) {
+    const title = document.getElementById('m-title')?.value.trim();
+    if (!title) { alert('Please enter a thread title.'); return; }
+    
+    const description = document.getElementById('m-desc')?.value.trim();
+    const life_area = document.getElementById('m-area')?.value;
+    const priority = document.getElementById('m-priority')?.value;
+    const next_action_date = document.getElementById('m-date')?.value || null;
+    
+    const newThread = {
+      id: Date.now(),
+      uuid: crypto.randomUUID ? crypto.randomUUID() : 'u-' + Math.random().toString(36).substring(2, 9),
+      title,
+      description,
+      life_area,
+      status: 'open',
+      priority,
+      next_action_date,
+      evolution_log: [{ date: new Date().toISOString().slice(0, 10), note: 'Thread created via Mailroom Intake.' }]
+    };
+    
+    OAD.DB.threads = OAD.DB.threads || [];
+    OAD.DB.threads.push(newThread);
+    OAD.saveDB();
+    OAD.refreshActiveView();
+    OAD.closeModal();
+    OAD.selectThread(newThread.id);
+  } else {
+    const targetUuid = document.getElementById('m-target-uuid')?.value;
+    if (!targetUuid) { alert('Please select a target thread.'); return; }
+    
+    const thread = OAD.DB.threads.find(x => x.uuid === targetUuid);
+    if (!thread) { alert('Selected thread not found.'); return; }
+    
+    const note = document.getElementById('m-evol-note')?.value.trim() || 'Received document via Mailroom Intake.';
+    
+    OAD.addEvolution(thread.id, note);
+    OAD.saveDB();
+    OAD.refreshActiveView();
+    OAD.closeModal();
+    OAD.selectThread(thread.id);
+  }
 };

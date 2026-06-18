@@ -43,8 +43,8 @@ def _assert_eq(actual, expected, label):
 def _boot(page):
     """Load the app and bypass the test overlay."""
     page.add_init_script("window.OAD = window.OAD || {}; window.OAD.supabase = null;")
-    page.goto(BASE_URL)
-    page.wait_for_timeout(2000)
+    page.goto(f"{BASE_URL}/?tests=true")
+    page.wait_for_selector("#test-overlay")
 
 
 def _dismiss_overlay(page):
@@ -52,7 +52,7 @@ def _dismiss_overlay(page):
     btn = page.query_selector("#test-overlay button")
     if btn:
         btn.click()
-        page.wait_for_timeout(1000)
+        page.wait_for_selector("#test-overlay", state="detached")
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

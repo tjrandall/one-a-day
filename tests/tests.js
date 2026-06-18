@@ -7,14 +7,14 @@ OAD.test = function (name, fn) {
   OAD._tests.push({ name, fn });
 };
 
-OAD._runTests = function () {
+OAD._runTests = async function () {
   OAD._testResults = [];
   let passed = 0;
   let failed = 0;
 
   for (const { name, fn } of OAD._tests) {
     try {
-      fn();
+      await fn();
       OAD._testResults.push({ name, ok: true });
       passed++;
     } catch (err) {
@@ -142,16 +142,14 @@ OAD.test('exportThreads: includes full thread data, excludes ai_insights and per
   OAD._assert('life_area'                in row,      'life_area included');
   OAD._assert('pressure'                 in row,      'pressure included');
   OAD._assert('closing_condition'        in row,      'closing_condition included');
-  OAD._assert('current_assumption'       in row,      'current_assumption included');
+  OAD._assert(!('current_assumption' in row),         'current_assumption excluded');
   OAD._assert('assumption_verified'      in row,      'assumption_verified included');
   OAD._assert('next_action'              in row,      'next_action included');
   OAD._assert('next_action_date'         in row,      'next_action_date included');
   OAD._assert('deadline'                 in row,      'deadline included');
   OAD._assert('effortEstimate'           in row,      'effortEstimate included');
-  OAD._assert('connections'              in row,      'connections included');
-  OAD._assert(row.connections.length > 0,            'connections array exported');
-  OAD._assertEqual(row.connections[0].to_uuid, 'abc-123', 'connection to_uuid preserved');
-  OAD._assert(row.evolution_log.length > 0,          'evolution_log included');
+  OAD._assert(!('connections' in row),                'connections excluded');
+  OAD._assert(!('evolution_log' in row),              'evolution_log excluded');
   OAD._assert(!('ai_insights' in row),               'ai_insights excluded');
   OAD._assert('exported_at'   in parsed,             'export has timestamp');
   OAD._assert('thread_count'  in parsed,             'export has thread_count');
@@ -998,6 +996,23 @@ OAD.test('_normalizeDB: backfills days_of_week on cadences that predate the fiel
   OAD._assert(Array.isArray(OAD.DB.cadences[0].days_of_week), 'legacy cadence should get a days_of_week array backfilled');
   OAD.DB.cadences = saved;
 });
+
+OAD.test('cadenceDoneThisPeriod: identifies if a cadence has been completed in the current period', function () {
+  const today = new Date().toISOString().slice(0, 10);
+  const c = OAD.makeCadence({
+    title: 'Done this period test',
+    recurrence: 'weekly',
+    last_completed: today,
+    next_due: OAD.nextCadenceDue('weekly', today)
+  });
+
+  OAD._assert(OAD.cadenceDoneThisPeriod(c), 'Weekly cadence marked done today should be done this period');
+
+  c.last_completed = '1970-01-01';
+  c.next_due = today;
+  OAD._assert(!OAD.cadenceDoneThisPeriod(c), 'Weekly cadence due today but not completed today should not be done this period');
+});
+
 // ── Tests: Cycle and Critical Path ─────────────────────────────────────
 
 OAD.test('detectCycles: returns cycles', function () {
@@ -1254,11 +1269,13 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
   const originalHabits  = OAD.DB.habits;
   const originalCadences = OAD.DB.cadences;
   const originalPersona = OAD.DB.persona;
+  const originalGreeting = OAD.Config.userGreetingTitle;
 
   const panel = document.getElementById('detail-content');
   const originalHTML = panel ? panel.innerHTML : '';
 
   try {
+    OAD.Config.userGreetingTitle = '';
     // Set up minimal mock DB
     OAD.DB.threads = [
       { id: 1, uuid: 't1', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', next_action_date: '2026-06-15' },
@@ -1304,21 +1321,257 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
     OAD.DB.habits = originalHabits;
     OAD.DB.cadences = originalCadences;
     OAD.DB.persona = originalPersona;
+    OAD.Config.userGreetingTitle = originalGreeting;
   }
 });
 
-OAD.boot = function () {
+OAD.test('strict ID-driven engine and focus selection excludes blocked threads', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', connections: [] };
+    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'open', life_area: 'Work', priority: 'high', connections: [{ to_uuid: 'uuid-a', to_label: 'Task A', edge_type: 'blocks' }] };
+    
+    OAD.DB.threads = [threadA, threadB];
+
+    // Assert that Task A is blocked by Task B
+    OAD._assert(OAD.isBlocked(threadA), 'Task A should be blocked by Task B via UUID');
+    OAD._assert(!OAD.isBlocked(threadB), 'Task B should not be blocked');
+
+    // Focus selection should select Task B (Task A is blocked)
+    const focus = OAD.selectFocusThread();
+    OAD._assert(focus !== null, 'Focus thread should be selected');
+    OAD._assertEqual(focus.id, 102, 'Task B should be selected as focus since Task A is blocked');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('daily TOAT selection and persistence', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalToat = OAD.DB.toat;
+  try {
+    OAD.DB.toat = [];
+    
+    const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'medium' };
+    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'stalled', life_area: 'Work', priority: 'high' };
+    const threadC = { id: 103, uuid: 'uuid-c', title: 'Task C', status: 'waiting', life_area: 'Work', priority: 'low', next_action_date: '2020-01-01' };
+    const threadD = { id: 104, uuid: 'uuid-d', title: 'Task D', status: 'waiting', life_area: 'Work', priority: 'low', next_action_date: '2099-01-01' };
+    
+    OAD.DB.threads = [threadA, threadB, threadC, threadD];
+
+    // Should select Task B (stalled) first as it has highest priority
+    const toat = OAD.getDailyToat();
+    OAD._assert(toat !== null, 'TOAT should be selected');
+    OAD._assertEqual(toat.id, 102, 'Should select Task B as oldest stalled thread');
+
+    // Calling again should return the persisted selection
+    const secondToat = OAD.getDailyToat();
+    OAD._assertEqual(secondToat.id, 102, 'Should persist selected TOAT for the day');
+
+    // Clear locked TOAT
+    OAD.DB.toat = [];
+    // Remove stalled task, should pick overdue waiting next
+    OAD.DB.threads = [threadA, threadC, threadD];
+    const thirdToat = OAD.getDailyToat();
+    OAD._assertEqual(thirdToat.id, 103, 'Should select Task C as overdue waiting thread');
+
+    // Clear locked TOAT
+    OAD.DB.toat = [];
+    // Remove overdue waiting task. If only healthy open (threadA) and future waiting (threadD) remain, no TOAT should be selected
+    OAD.DB.threads = [threadA, threadD];
+    const fourthToat = OAD.getDailyToat();
+    OAD._assert(fourthToat === null, 'Should return null when no friction tasks are present');
+
+    // Add an overdue open thread, which is a friction task, so it should be selected
+    const threadE = { id: 105, uuid: 'uuid-e', title: 'Task E', status: 'open', life_area: 'Work', priority: 'medium', next_action_date: '2020-01-01' };
+    OAD.DB.threads = [threadA, threadD, threadE];
+    const fifthToat = OAD.getDailyToat();
+    OAD._assertEqual(fifthToat.id, 105, 'Should select Task E as overdue open thread');
+
+    OAD.DB.toat = [];
+    const threadF = { id: 106, uuid: 'uuid-f', title: 'Task F', status: 'open', life_area: 'Work', priority: 'critical' };
+    OAD.DB.threads = [threadA, threadD, threadF];
+    const seventhToat = OAD.getDailyToat();
+    OAD._assert(seventhToat === null, 'Should return null for high pressure open thread (only stalled or overdue are TOAT candidates)');
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.DB.toat = originalToat;
+  }
+});
+
+OAD.test('moat-safe export strips proprietary attributes', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const thread = {
+      id: 101,
+      uuid: 'uuid-a',
+      title: 'Task A',
+      status: 'open',
+      priority: 'high',
+      life_area: 'Work',
+      current_assumption: 'A test assumption',
+      contingency_action: 'A fallback plan',
+      connections: [{ to_uuid: 'uuid-b', edge_type: 'blocks' }],
+      evolution_log: [{ date: '2026-06-17', note: 'Created' }],
+      ai_insights: ['Proactive scan note']
+    };
+    OAD.DB.threads = [thread];
+
+    const exportedStr = OAD.exportThreads();
+    const parsed = JSON.parse(exportedStr);
+
+    OAD._assert(Array.isArray(parsed.threads), 'Export should contain threads array');
+    const exportedThread = parsed.threads[0];
+
+    // Assert essential attributes are kept
+    OAD._assertEqual(exportedThread.title, 'Task A', 'Title should be exported');
+    OAD._assertEqual(exportedThread.uuid, 'uuid-a', 'UUID should be exported');
+
+    // Assert proprietary attributes are completely stripped
+    OAD._assert(exportedThread.connections === undefined, 'connections should be stripped');
+    OAD._assert(exportedThread.evolution_log === undefined, 'evolution_log should be stripped');
+    OAD._assert(exportedThread.current_assumption === undefined, 'current_assumption should be stripped');
+    OAD._assert(exportedThread.contingency_action === undefined, 'contingency_action should be stripped');
+    OAD._assert(exportedThread.contingency_escalation === undefined, 'contingency_escalation should be stripped');
+    OAD._assert(exportedThread.ai_insights === undefined, 'ai_insights should be stripped');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('blocked_by connection validation and bidirectional graph resolution', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', connections: [{ to_uuid: 'uuid-b', edge_type: 'blocked_by' }] };
+    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'open', connections: [] };
+
+    OAD.DB.threads = [threadA, threadB];
+
+    // Graph context for Task A (blocked by B)
+    const ctxA = OAD.getGraphContext(threadA.id);
+    OAD._assert(ctxA.blockedBy.length === 1, 'Task A should be blocked by 1 thread');
+    OAD._assertEqual(ctxA.blockedBy[0].id, 102, 'Task B should block Task A');
+
+    // Graph context for Task B (blocks A)
+    const ctxB = OAD.getGraphContext(threadB.id);
+    OAD._assert(ctxB.blocks.length === 1, 'Task B should block 1 thread');
+    OAD._assertEqual(ctxB.blocks[0].uuid, 'uuid-a', 'Task B should block Task A');
+
+    // Blocked validation check
+    OAD._assert(OAD.isBlocked(threadA), 'Task A should be blocked');
+    OAD._assert(!OAD.isBlocked(threadB), 'Task B should not be blocked');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('mailroom text extraction of dates, currency, and life areas', function () {
+  const sampleOCRText = `
+    IRS NOTICE OF TAX LIEN - STATEMENT DATE: 2026-07-15
+    Total Balance Due: $4,850.73 by June 24, 2026.
+    Please send payment immediately to the IRS office.
+  `;
+
+  const parsed = OAD.Mailroom.parseText(sampleOCRText);
+
+  // Assertions for dates
+  OAD._assert(parsed.dates.indexOf('2026-07-15') !== -1, 'Should extract YYYY-MM-DD date');
+  OAD._assert(parsed.dates.indexOf('2026-06-24') !== -1, 'Should extract word Month date');
+
+  // Assertions for money
+  OAD._assert(parsed.money.indexOf(4850.73) !== -1, 'Should extract monetary balance');
+
+  // Assertions for suggested title & life area
+  OAD._assertEqual(parsed.suggestedTitle, 'IRS NOTICE OF TAX LIEN - STATEMENT DATE: 2026-07-1', 'Should extract first line as title');
+  OAD._assertEqual(parsed.suggestedLifeArea, 'Finance', 'Should match Finance keywords (tax, balance, irs, lien)');
+});
+
+OAD.test('mailroom thread recommendation scoring', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const thread1 = { id: 201, uuid: 'uuid-ecornell', title: 'eCornell Course Registration', status: 'open' };
+    const thread2 = { id: 202, uuid: 'uuid-irs', title: 'IRS Lien Investigation', status: 'open' };
+    OAD.DB.threads = [thread1, thread2];
+
+    const sampleText = 'Got an official notice from eCornell university regarding assignment CAC101.';
+    const recommendations = OAD.Mailroom.getRecommendations(sampleText);
+
+    OAD._assert(recommendations.length > 0, 'Should find matching recommendations');
+    OAD._assertEqual(recommendations[0].thread.uuid, 'uuid-ecornell', 'Top match should be eCornell');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('translation and configuration system core verification', async function () {
+  const prevLocale = OAD.Config.currentLocale;
+  const prevTitle = OAD.Config.userGreetingTitle;
+  const prevCache = JSON.parse(JSON.stringify(OAD.TranslationCache));
+
+  try {
+    OAD._assert(OAD.isSuperAdmin(), 'Current user environment must verify as SuperAdmin');
+
+    OAD.TranslationCache = {
+      testScanButton: "Escanear correo de prueba",
+      testSaveButton: "Guardar prueba"
+    };
+
+    OAD._assertEqual(OAD.t('testScanButton'), 'Escanear correo de prueba', 'OAD.t should look up key in cache');
+    OAD._assertEqual(OAD.t('missing_translation_key'), 'missing_translation_key', 'OAD.t should fallback to key if not in cache');
+
+    await OAD.loadLanguage('es');
+    OAD._assertEqual(OAD.Config.currentLocale, 'es', 'Config locale should update to es');
+    OAD._assertEqual(OAD.t('scanMail'), '📥 Escanear Correo', 'Translation cache should fetch Spanish keys from json file');
+
+    await OAD.loadLanguage('en');
+    OAD._assertEqual(OAD.Config.currentLocale, 'en', 'Config locale should switch back to en');
+    OAD._assertEqual(OAD.t('scanMail'), '📥 Scan Mail', 'Translation cache should fetch English keys');
+
+  } finally {
+    OAD.Config.currentLocale = prevLocale;
+    OAD.Config.userGreetingTitle = prevTitle;
+    OAD.TranslationCache = prevCache;
+    await OAD.loadLanguage();
+  }
+});
+
+OAD.test('life areas configuration and normalization', function () {
+  // Test normalizeLifeArea
+  OAD._assertEqual(OAD.normalizeLifeArea('education'), 'Education', 'Should capitalize education');
+  OAD._assertEqual(OAD.normalizeLifeArea('job_search'), 'Job Search', 'Should capitalize and replace underscores');
+  OAD._assertEqual(OAD.normalizeLifeArea('finance'), 'Finances', 'Should map finance to Finances');
+  OAD._assertEqual(OAD.normalizeLifeArea('finances'), 'Finances', 'Should map finances to Finances');
+  OAD._assertEqual(OAD.normalizeLifeArea('career'), 'Career', 'Should capitalize career');
+
+  // Test dynamic configuration pointer
+  const origLifeAreas = OAD.Config.lifeAreas;
+  try {
+    OAD.Config.lifeAreas = ['Custom Area 1', 'Custom Area 2'];
+    OAD.LIFE_AREAS = OAD.Config.lifeAreas;
+    OAD._assertEqual(OAD.LIFE_AREAS[0], 'Custom Area 1', 'LIFE_AREAS should point to Config.lifeAreas');
+  } finally {
+    OAD.Config.lifeAreas = origLifeAreas;
+    OAD.LIFE_AREAS = origLifeAreas;
+  }
+});
+
+OAD.boot = async function () {
+  await OAD.loadLanguage();
   const savedThreads  = OAD.DB.threads.slice();
   const savedPersona  = JSON.parse(JSON.stringify(OAD.DB.persona));
 
-  const summary = OAD._runTests();
+  const summary = await OAD._runTests();
 
   OAD.DB.threads = [];
   OAD.DB.persona = savedPersona;
 
-  OAD._renderTestOverlay(OAD._testResults, summary);
-
-  if (summary.failed === 0) {
-    document.getElementById('test-continue-btn')?.focus();
+  const showOverlay = summary.failed > 0 || location.search.includes('tests=true');
+  if (showOverlay) {
+    OAD._renderTestOverlay(OAD._testResults, summary);
+    if (summary.failed === 0) {
+      document.getElementById('test-continue-btn')?.focus();
+    }
+  } else {
+    OAD._initApp();
   }
 };
