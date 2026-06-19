@@ -108,10 +108,12 @@ OAD.getEisenhowerQuadrant = function (thread) {
 
 OAD.suggestArea = function (title) {
   const lower = title.toLowerCase();
+  if (/job board|job search|job hunt|weekly job|apply to/.test(lower)) return 'Job Search';
   if (/job|work|career|employ|hire|interview|resume/.test(lower)) return 'Career';
   if (/health|doctor|medical|therapy|mental|physical/.test(lower)) return 'Health';
-  if (/money|finance|bank|debt|loan|tax|budget|invest/.test(lower)) return 'Finance';
-  if (/friend|family|partner|relationship|social/.test(lower)) return 'Relationships';
+  if (/money|finance|bank|debt|loan|tax|budget|invest/.test(lower)) return 'Finances';
+  if (/\bfamily\b|parent|sibling|spouse|\bkid\b|child|\bmom\b|\bdad\b/.test(lower)) return 'Family';
+  if (/friend|partner|relationship|social/.test(lower)) return 'Relationships';
   if (/school|class|degree|cert|course|learn|study/.test(lower)) return 'Education';
   if (/house|rent|lease|mortgage|apartment|move/.test(lower)) return 'Housing';
   if (/legal|court|law|attorney|contract|va |vr&e|vre/.test(lower)) return 'Legal';

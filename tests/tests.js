@@ -607,8 +607,8 @@ OAD.test('suggestArea: detects Career', function () {
   OAD._assertEqual(OAD.suggestArea('new job application'), 'Career');
 });
 
-OAD.test('suggestArea: detects Finance', function () {
-  OAD._assertEqual(OAD.suggestArea('paying off debt'), 'Finance');
+OAD.test('suggestArea: detects Finances', function () {
+  OAD._assertEqual(OAD.suggestArea('paying off debt'), 'Finances');
 });
 
 OAD.test('suggestArea: detects Health', function () {
@@ -617,6 +617,18 @@ OAD.test('suggestArea: detects Health', function () {
 
 OAD.test('suggestArea: VR&E → Legal', function () {
   OAD._assertEqual(OAD.suggestArea('VR&E counselor meeting'), 'Legal');
+});
+
+OAD.test('suggestArea: job board → Job Search (not Career)', function () {
+  OAD._assertEqual(OAD.suggestArea('M/W/F job board sweep'), 'Job Search');
+});
+
+OAD.test('suggestArea: weekly job application cadence → Job Search', function () {
+  OAD._assertEqual(OAD.suggestArea('Weekly Job Application Cadence'), 'Job Search');
+});
+
+OAD.test('suggestArea: family → Family (not Relationships)', function () {
+  OAD._assertEqual(OAD.suggestArea('Call mom about family finances'), 'Family');
 });
 
 // ── Tests: Complete Action Wizard ────────────────────────────────────

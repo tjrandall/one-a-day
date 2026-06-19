@@ -1137,7 +1137,7 @@ OAD.renderDailyView = function () {
         '<span class="ds-bucket-label">' + label + '</span>' +
         '<span class="ds-bucket-count" aria-label="' + items.length + ' items">' + items.length + '</span>' +
       '</h3>' +
-      '<div class="ds-bucket-body">' + items.join('') + '</div>' +
+      items.join('') +
     '</section>';
   }
 
