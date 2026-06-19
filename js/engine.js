@@ -111,8 +111,8 @@ OAD.suggestArea = function (title) {
   if (/job board|job search|job hunt|weekly job|apply to/.test(lower)) return 'Job Search';
   if (/job|work|career|employ|hire|interview|resume/.test(lower)) return 'Career';
   if (/health|doctor|medical|therapy|mental|physical/.test(lower)) return 'Health';
-  if (/money|finance|bank|debt|loan|tax|budget|invest/.test(lower)) return 'Finances';
   if (/\bfamily\b|parent|sibling|spouse|\bkid\b|child|\bmom\b|\bdad\b/.test(lower)) return 'Family';
+  if (/money|finance|bank|debt|loan|tax|budget|invest/.test(lower)) return 'Finances';
   if (/friend|partner|relationship|social/.test(lower)) return 'Relationships';
   if (/school|class|degree|cert|course|learn|study/.test(lower)) return 'Education';
   if (/house|rent|lease|mortgage|apartment|move/.test(lower)) return 'Housing';
