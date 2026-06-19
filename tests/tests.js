@@ -1180,6 +1180,10 @@ OAD._finishBoot = function () {
   const theme = (OAD.DB.persona && OAD.DB.persona.theme) || 'dark';
   document.body.setAttribute('data-theme', theme);
   OAD.renderDailyView();
+  
+  if (typeof OAD.checkDailyIntercept === 'function') {
+    OAD.checkDailyIntercept();
+  }
 };
 
 // ── Tests: render.js Graph Data Extraction ───────────────────────────

@@ -133,7 +133,8 @@ OAD.makeThread = function (overrides) {
     connections: [],
     parent_uuid: null,
     evolution_log: [],
-    ai_insights: []
+    ai_insights: [],
+    date_push_count: 0
   }, overrides);
 };
 
@@ -357,7 +358,7 @@ OAD._IMPORT_FIELDS = [
   'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
   'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
-  'connections', 'parent_uuid'
+  'connections', 'parent_uuid', 'date_push_count'
 ];
 
 OAD.applyImport = function (results, confirmedUpdates) {
@@ -394,6 +395,7 @@ OAD.applyImport = function (results, confirmedUpdates) {
       effortEstimate:           row.effortEstimate           || null,
       weeklyCommitment:         row.weeklyCommitment         || null,
       effortLogged:             row.effortLogged             || 0,
+      date_push_count:          row.date_push_count          || 0,
       connections:              row.connections              || []
     });
     const added = OAD.addThread(t);
@@ -513,7 +515,8 @@ OAD.exportThreads = function () {
       deadline:                 t.deadline                 || null,
       effortEstimate:           t.effortEstimate           || null,
       weeklyCommitment:         t.weeklyCommitment         || null,
-      effortLogged:             t.effortLogged             || 0
+      effortLogged:             t.effortLogged             || 0,
+      date_push_count:          t.date_push_count          || 0
     };
   });
 

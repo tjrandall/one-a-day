@@ -238,13 +238,28 @@ OAD._saveEditThread = function (id) {
   if (!data) return;
 
   const isClosing = (data.status === 'closed' || data.closing_condition_met);
-  const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified };
+  const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified, next_action_date: t.next_action_date };
   const notes = [];
   if (prev.status !== data.status) notes.push(`Status → ${data.status}`);
   if (prev.priority !== data.priority) notes.push(`Priority → ${data.priority}`);
   if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
 
-  if (isClosing && OAD.needsClosureWizard(id)) {
+  if (prev.next_action_date !== data.next_action_date && prev.next_action_date && data.next_action_date) {
+    if (data.next_action_date > prev.next_action_date) {
+      data.date_push_count = (t.date_push_count || 0) + 1;
+      notes.push(`Date pushed back to ${data.next_action_date}`);
+      
+      if (data.date_push_count % 3 === 0) {
+        OAD.closeModal();
+        OAD.openPushbackWizard(id, data, notes);
+        return;
+      }
+    } else {
+      notes.push(`Date moved up to ${data.next_action_date}`);
+    }
+  }
+
+  if (isClosing && OAD.needsClosureWizard && OAD.needsClosureWizard(id)) {
     OAD.closeModal();
     OAD.openClosureWizard(id, data, notes.length ? notes.join('; ') : '');
   } else {
@@ -270,6 +285,142 @@ OAD._deleteThread = function (id) {
   OAD.refreshActiveView();
   const panel = document.getElementById('detail-content');
   if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+};
+
+OAD.openPushbackWizard = function(id, data, notes) {
+  const encodedData = encodeURIComponent(JSON.stringify(data));
+  const encodedNotes = encodeURIComponent(JSON.stringify(notes));
+  OAD.openModal(`
+    <h2>Coach Pushback</h2>
+    <div class="field" style="color: var(--critical); margin-bottom: 16px;">
+      You've pushed the date back on this thread 3 times. 
+      The AI coach is requesting clarification. What is actually blocking this?
+    </div>
+    <div class="field">
+      <label>Real Blocking Reason</label>
+      <textarea id="f-pushback-reason" placeholder="What's the real truth here?"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.openEditModal(${id})">Cancel Date Change</button>
+      <button onclick="OAD._confirmPushback(${id}, '${encodedData}', '${encodedNotes}')">Acknowledge & Save</button>
+    </div>
+  `);
+};
+
+OAD._confirmPushback = function(id, encodedData, encodedNotes) {
+  const data = JSON.parse(decodeURIComponent(encodedData));
+  const notes = JSON.parse(decodeURIComponent(encodedNotes));
+  const reason = document.getElementById('f-pushback-reason')?.value.trim();
+  if (!reason) { alert('Please provide the real reason.'); return; }
+  
+  notes.push(`Coach Pushback Answered: ${reason}`);
+  data.current_assumption = reason;
+  data.assumption_verified = false;
+  
+  const isClosing = (data.status === 'closed' || data.closing_condition_met);
+  
+  OAD.updateThread(id, data);
+  if (notes.length) OAD.addEvolution(id, notes.join('; '));
+  OAD.closeModal();
+  OAD.refreshActiveView();
+  
+  if (isClosing) {
+    const panel = document.getElementById('detail-content');
+    if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
+    OAD.goBackToLastView();
+  } else {
+    OAD.renderDetail(id);
+    
+    // Optionally trigger AI Insight generation for the new context
+    if (typeof OAD.genInsight === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
+       OAD.genInsight(OAD.getThread(id)).then(insight => {
+         if (insight) {
+           OAD.addInsight(id, insight);
+           OAD.renderDetail(id);
+         }
+       }).catch(console.error);
+    }
+  }
+
+  // Hook: Persona Auto-Evolution
+  if (typeof OAD.extractPersonaLesson === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
+    const t = OAD.getThread(id);
+    OAD.extractPersonaLesson(t.title, data.date_push_count, reason).then(lesson => {
+      if (lesson && lesson.warrants_update) {
+        OAD.openPersonaUpdateModal(lesson);
+      }
+    }).catch(console.error);
+  }
+};
+
+OAD.openPersonaUpdateModal = function (lesson) {
+  const encodedLesson = encodeURIComponent(JSON.stringify(lesson));
+  OAD.openModal(`
+    <h2>Coach Observation</h2>
+    <p style="margin-bottom: 16px; color: var(--text-muted);">${OAD.esc(lesson.coach_message)}</p>
+    <div class="field" style="margin-bottom: 16px;">
+      <label>Proposed Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
+      <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
+        ${OAD.esc(lesson.proposed_addition)}
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
+      <button class="success" onclick="OAD._acceptPersonaUpdate('${encodedLesson}')">Accept Update</button>
+    </div>
+  `);
+};
+
+OAD._acceptPersonaUpdate = function (encodedLesson) {
+  const lesson = JSON.parse(decodeURIComponent(encodedLesson));
+  const listName = lesson.target_list === 'what_is_not_working' ? 'what_is_not_working' : 'assumption_tendencies';
+  OAD.DB.persona[listName] = OAD.DB.persona[listName] || [];
+  OAD.DB.persona[listName].push(lesson.proposed_addition);
+  OAD.saveDB();
+  OAD.closeModal();
+};
+
+OAD.checkDailyIntercept = async function () {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  OAD.DB.persona = OAD.DB.persona || {};
+  if (OAD.DB.persona.last_intercept_date === todayStr) return;
+  
+  if (!OAD.API_KEY && !OAD.GEMINI_API_KEY) return;
+  
+  OAD.openModal(`
+    <div style="text-align: center; padding: 40px 20px;">
+      <h2 style="margin-bottom: 16px;">Coach is reviewing your day...</h2>
+      <div class="text-muted">Synthesizing load, cadences, and stalled threads.</div>
+    </div>
+  `);
+  
+  try {
+    const briefing = await OAD.genDailyIntercept();
+    OAD.DB.persona.last_intercept_date = todayStr;
+    OAD.saveDB();
+    
+    OAD.openModal(`
+      <h2>Morning Briefing</h2>
+      <div class="field" style="margin-bottom: 16px;">
+        <div style="font-weight: 600; color: var(--accent); margin-bottom: 4px;">Focus</div>
+        <div>${OAD.esc(briefing.focus)}</div>
+      </div>
+      <div class="field" style="margin-bottom: 16px;">
+        <div style="font-weight: 600; color: var(--critical); margin-bottom: 4px;">Avoidance</div>
+        <div>${OAD.esc(briefing.avoidance)}</div>
+      </div>
+      <div class="field" style="margin-bottom: 24px;">
+        <div style="font-weight: 600; color: var(--warning); margin-bottom: 4px;">Reality Check</div>
+        <div>${OAD.esc(briefing.reality_check)}</div>
+      </div>
+      <div class="modal-footer">
+        <button class="success" onclick="OAD.closeModal()">I'm on it</button>
+      </div>
+    `);
+  } catch (err) {
+    console.error(err);
+    OAD.closeModal();
+  }
 };
 
 OAD.openLogModal = function (id) {
@@ -841,10 +992,23 @@ OAD.openSettingsModal = function () {
       <input id="f-gmail-filter" type="text" value="${OAD.esc(OAD.Config.gmailSearchFilter)}" placeholder="is:unread ..." />
     </div>
     <div class="field">
+      <label>AI Provider</label>
+      <select id="f-ai-provider" onchange="document.getElementById('f-gemini-key-container').style.display = this.value === 'gemini' ? 'block' : 'none'; document.getElementById('f-claude-key-container').style.display = this.value === 'anthropic' ? 'block' : 'none';">
+        <option value="anthropic" ${OAD.AI_PROVIDER === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option>
+        <option value="gemini" ${OAD.AI_PROVIDER === 'gemini' ? 'selected' : ''}>Google (Gemini)</option>
+      </select>
+    </div>
+    <div class="field" id="f-claude-key-container" style="display: ${OAD.AI_PROVIDER === 'anthropic' ? 'block' : 'none'}">
       <label>Anthropic API Key</label>
       <input id="f-api-key" type="password" value="${OAD.esc(OAD.API_KEY)}" placeholder="sk-ant-…">
     </div>
-    <p class="text-muted text-sm">Key is stored in localStorage — never sent anywhere except Anthropic's API.</p>
+    <div class="field" id="f-gemini-key-container" style="display: ${OAD.AI_PROVIDER === 'gemini' ? 'block' : 'none'}">
+      <label>Gemini API Key</label>
+      <input id="f-gemini-api-key" type="password" value="${OAD.esc(OAD.GEMINI_API_KEY)}" placeholder="AIza..." style="margin-bottom:8px">
+      <label>Gemini Model</label>
+      <input id="f-gemini-model" type="text" value="${OAD.esc(OAD.GEMINI_MODEL)}" placeholder="e.g. gemini-3.1-pro-preview">
+    </div>
+    <p class="text-muted text-sm" id="ai-provider-info">Keys are stored in localStorage — never sent anywhere except to the selected provider.</p>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
       <p class="text-muted text-sm" style="margin-bottom:10px">
@@ -864,8 +1028,11 @@ OAD.openSettingsModal = function () {
 };
 
 OAD._saveSettings = async function () {
-  const key = document.getElementById('f-api-key')?.value.trim() || '';
-  OAD.setApiKey(key);
+  const provider = document.getElementById('f-ai-provider')?.value || 'anthropic';
+  const claudeKey = document.getElementById('f-api-key')?.value.trim() || '';
+  const geminiKey = document.getElementById('f-gemini-api-key')?.value.trim() || '';
+  const geminiModel = document.getElementById('f-gemini-model')?.value.trim() || 'gemini-3.1-pro-preview';
+  OAD.setAiSettings(provider, claudeKey, geminiKey, geminiModel);
   
   const theme = document.getElementById('f-theme')?.value || 'dark';
   if (OAD.DB.persona) {

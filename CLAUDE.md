@@ -96,6 +96,7 @@ Every thread has:
 - connections[] — graph edges: {to_label, edge_type: blocks|enables|relates}
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
+- date_push_count (integer) — tracks how many times the next_action_date has been pushed back
 
 ## Data Model — Deadline-Driven Prioritization (LIVE)
 
@@ -156,11 +157,14 @@ OAD.pressure(thread) returns 0-100:
 ## Cross-Load Awareness (engine.js)
 `OAD.getDayLoad(dateStr)` — sums `pressure(t, true)` for all non-closed threads whose `next_action_date === dateStr`. The `_inBleedUp=true` flag prevents recursive calls into `getDayLoad`. If the day's total load exceeds 150, each thread on that date gets +12 pressure. Implemented in `engine.js`; tested with a 3-thread stalled-critical fixture at date '2099-01-01'.
 
-## API Layer (api.js)
-- OAD.genInsight(thread) — calls claude-sonnet-4-20250514, injects full persona context, returns JSON insight
-- OAD.draftEmail(tid) — generates email draft via Claude
-- Model: claude-sonnet-4-20250514
-- Requires server context for CORS — run via python3 -m http.server 8080
+## API Layer (api.js) & The Coach Engine
+- **OAD._llmCall(messages, systemPrompt)** — Router that dynamically sends requests to either Claude or Gemini based on the user's provider setting.
+- **OAD._geminiCall / OAD._claudeCall** — Provider-specific implementations.
+- **OAD.genDailyIntercept()** — Synthesizes day load, stalled threads, and overdue cadences into a 3-bullet morning briefing (Focus, Avoidance, Reality Check).
+- **OAD.extractPersonaLesson(thread, pushes, reason)** — Analyzes procrastination behavior and proposes updates to the user's Persona (`assumption_tendencies` or `what_is_not_working`).
+- **OAD.genInsight(thread)** — Generates deep-dive insight for a specific thread.
+- **OAD.draftEmail(tid)** — Generates an email draft based on thread history.
+- Model defaults: `gemini-1.5-pro-latest` or `claude-3-5-sonnet-latest`.
 
 ## Render Layer (render.js)
 - `OAD.renderList()` — thread list with persona bar, pressure scores, sorted by pressure desc; deadline countdown rows; at-risk elevation
@@ -184,9 +188,9 @@ Moat-safe flat JSON. Includes basic thread attributes (uuid, parent_uuid, title,
 Includes `exported_by: user_id` — ownership-stamped for future multi-user scoping.
 
 ### Import (`OAD.parseImportFile()` + `OAD.applyImport()`)
-Accepts the same JSON format. Matching priority: **(1) UUID** — `row.uuid` finds existing thread → update; **(2) title fallback** — `row.uuid` absent/null AND exactly one non-closed thread shares the title → update (prevents duplicates from AI-generated patches and older export formats that omit UUIDs); **(3) create** — neither matched. Title fallback is deliberately conservative: if two open threads share the same title, the row falls through to create rather than risk updating the wrong one.
+Accepts the same JSON format. Matching priority: **(1)** UUID match — `row.uuid` finds existing thread → update; **(2)** title fallback — `row.uuid` absent/null AND exactly one non-closed thread shares the title → update (prevents duplicates from AI-generated patches and older export formats that omit UUIDs); **(3)** create — neither matched. Title fallback is deliberately conservative: if two open threads share the same title, the row falls through to create rather than risk updating the wrong one.
 
-**`_IMPORT_FIELDS`** controls which fields sync on update. `title` is included — an import can rename a thread. The `_diffImportItem` preview shows title changes before the user confirms.
+**`_IMPORT_FIELDS`** controls which fields sync on update. `title` and `date_push_count` are included. The `_diffImportItem` preview shows title changes before the user confirms.
 
 - Row with UUID matching an existing thread → staged as update (shows field-by-field diff, requires per-item checkbox confirmation)
 - Row with unknown or absent UUID → create
