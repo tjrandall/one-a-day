@@ -622,6 +622,7 @@ OAD._normalizeDB = function () {
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
+    if (t.date_push_count == null) t.date_push_count = 0;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
   });
   // Backfill days_of_week for cadences created before weekly-days support existed

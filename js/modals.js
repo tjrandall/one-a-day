@@ -293,7 +293,7 @@ OAD.openPushbackWizard = function(id, data, notes) {
   OAD.openModal(`
     <h2>Coach Pushback</h2>
     <div class="field" style="color: var(--critical); margin-bottom: 16px;">
-      You've pushed the date back on this thread 3 times. 
+      You've pushed the date back on this thread ${data.date_push_count} times.
       The AI coach is requesting clarification. What is actually blocking this?
     </div>
     <div class="field">
@@ -1006,7 +1006,7 @@ OAD.openSettingsModal = function () {
       <label>Gemini API Key</label>
       <input id="f-gemini-api-key" type="password" value="${OAD.esc(OAD.GEMINI_API_KEY)}" placeholder="AIza..." style="margin-bottom:8px">
       <label>Gemini Model</label>
-      <input id="f-gemini-model" type="text" value="${OAD.esc(OAD.GEMINI_MODEL)}" placeholder="e.g. gemini-3.1-pro-preview">
+      <input id="f-gemini-model" type="text" value="${OAD.esc(OAD.GEMINI_MODEL)}" placeholder="e.g. gemini-1.5-pro-latest">
     </div>
     <p class="text-muted text-sm" id="ai-provider-info">Keys are stored in localStorage — never sent anywhere except to the selected provider.</p>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
@@ -1031,7 +1031,7 @@ OAD._saveSettings = async function () {
   const provider = document.getElementById('f-ai-provider')?.value || 'anthropic';
   const claudeKey = document.getElementById('f-api-key')?.value.trim() || '';
   const geminiKey = document.getElementById('f-gemini-api-key')?.value.trim() || '';
-  const geminiModel = document.getElementById('f-gemini-model')?.value.trim() || 'gemini-3.1-pro-preview';
+  const geminiModel = document.getElementById('f-gemini-model')?.value.trim() || 'gemini-1.5-pro-latest';
   OAD.setAiSettings(provider, claudeKey, geminiKey, geminiModel);
   
   const theme = document.getElementById('f-theme')?.value || 'dark';
