@@ -186,12 +186,16 @@ OAD.deleteCadence = function (id) {
 
 // Maps the camelCase JSON seed schema to the snake_case thread model.
 // Accepts "task" as a closing_condition_type alias for "action".
+// Skips any row whose title already exists (any status) to prevent duplicates on re-import.
 OAD.bulkImport = function (arr) {
   var CLOSING_TYPE = { task: 'action', outcome: 'outcome', action: 'action' };
   var count = 0;
   arr.forEach(function (r) {
+    var title = r.title || '';
+    if (!title) return;
+    if (OAD.DB.threads.some(function (t) { return t.title === title; })) return;
     OAD.addThread(OAD.makeThread({
-      title:                    r.title                || r.title                || '',
+      title:                    title,
       life_area:               (r.lifeArea             || r.life_area            || 'Other').toLowerCase(),
       status:                   r.status               || 'open',
       priority:                 r.priority             || 'medium',

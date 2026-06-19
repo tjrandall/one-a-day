@@ -835,6 +835,30 @@ OAD.test('suggestArea: family → Family (not Relationships)', function () {
 
 }());
 
+// ── Tests: bulkImport dedup guard ────────────────────────────────────
+
+OAD.test('bulkImport: skips rows whose title already exists', function () {
+  const before = OAD.DB.threads.length;
+  OAD.bulkImport([{ title: 'Dedup Test Thread', lifeArea: 'Career', status: 'open' }]);
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'first import should create the thread');
+  OAD.bulkImport([{ title: 'Dedup Test Thread', lifeArea: 'Career', status: 'open' }]);
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'second import should not create a duplicate');
+});
+
+OAD.test('bulkImport: skips even when existing thread is closed', function () {
+  const before = OAD.DB.threads.length;
+  OAD.bulkImport([{ title: 'Closed Dedup Thread', lifeArea: 'Career', status: 'closed' }]);
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'first import creates it');
+  OAD.bulkImport([{ title: 'Closed Dedup Thread', lifeArea: 'Career', status: 'open' }]);
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'should not recreate a closed thread');
+});
+
+OAD.test('bulkImport: skips titleless rows', function () {
+  const before = OAD.DB.threads.length;
+  OAD.bulkImport([{ title: '', lifeArea: 'Career' }, { lifeArea: 'Career' }]);
+  OAD._assertEqual(OAD.DB.threads.length, before, 'titleless rows should be skipped');
+});
+
 // ── Tests: Import — title sync and no-UUID guard ─────────────────────
 
 OAD.test('applyImport: title field updates when title is in _IMPORT_FIELDS', function () {

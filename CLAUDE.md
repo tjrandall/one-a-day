@@ -37,7 +37,7 @@ one-a-day/
 │   ├── render.js           # All DOM rendering
 │   └── modals.js           # All modal functions, form handling, auth modals
 ├── tests/
-│   ├── tests.js            # Full test suite (115 tests) + boot functions
+│   ├── tests.js            # Full test suite (118 tests) + boot functions
 │   └── tests.data.js       # Seed data: threads, cadences, habits, ideas
 └── README.md
 
