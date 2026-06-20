@@ -97,23 +97,28 @@ OAD.renderCommandCenter = function () {
   const tryScore = totalPlanned === 0 ? 0 : Math.round((totalRetained / totalPlanned) * 100);
   const tryColor = tryScore >= 80 ? 'var(--success)' : tryScore >= 60 ? 'orange' : 'var(--critical)';
 
-  // Build the counselor breakdown
-  const counselors = {};
+  // Build the breakdown (by Director for CCO, by Counselor for Directors)
+  const breakdown = {};
   dischargedClients.forEach(c => {
-    if (!counselors[c.counselor]) counselors[c.counselor] = { planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
-    counselors[c.counselor].planned += c.total_planned_days;
+    let groupName = c.counselor;
+    if (OAD._demoRole === 'CCO') {
+      groupName = (c.counselor === 'Emma Clark') ? 'Director B (Clark)' : 'Director A (Jenkins & Kim)';
+    }
+
+    if (!breakdown[groupName]) breakdown[groupName] = { planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
+    breakdown[groupName].planned += c.total_planned_days;
     if (c.checkout_type === 'Standard') {
-      counselors[c.counselor].retained += c.total_stay_days;
-      counselors[c.counselor].standard++;
+      breakdown[groupName].retained += c.total_stay_days;
+      breakdown[groupName].standard++;
     } else if (c.checkout_type === 'ACA') {
-      counselors[c.counselor].aca++;
+      breakdown[groupName].aca++;
     } else if (c.checkout_type === 'BNC') {
-      counselors[c.counselor].bnc++;
+      breakdown[groupName].bnc++;
     }
   });
 
-  const counselorHtml = Object.keys(counselors).map(name => {
-    const data = counselors[name];
+  const breakdownHtml = Object.keys(breakdown).map(name => {
+    const data = breakdown[name];
     const score = Math.round((data.retained / data.planned) * 100);
     const color = score >= 80 ? 'var(--success)' : score >= 60 ? 'orange' : 'var(--critical)';
     return `
@@ -168,7 +173,7 @@ OAD.renderCommandCenter = function () {
           Currently tracking <strong>${totalRetained}</strong> retained days out of <strong>${totalPlanned}</strong> planned days across <strong>${dischargedClients.length}</strong> discharges.
         </p>
         <div style="background:var(--surface2); border-radius:12px; overflow:hidden; border:1px solid var(--border)">
-          ${counselorHtml}
+          ${breakdownHtml}
         </div>
       </div>
       `}
