@@ -195,7 +195,7 @@ OAD.renderCommandCenter = function () {
             <td style="padding:16px 0; color:var(--text-main)">Day ${c.total_stay_days} of ${c.projected_days}</td>
             <td style="padding:16px 0; text-align:right">
               ${OAD._demoRole.startsWith('Counselor') 
-                ? `<button class="ghost" style="font-size:12px; padding:6px 12px; color:var(--primary); font-weight:600; border:1px solid rgba(var(--primary-rgb), 0.2)">View Details</button>`
+                ? `<button class="ghost" style="font-size:12px; padding:6px 12px; color:var(--primary); font-weight:600; border:1px solid rgba(var(--primary-rgb), 0.2)" onclick="alert('Loading clinical workspace for ${OAD.esc(c.name)}... (Full EHR integration arriving in Q3)')">View Details</button>`
                 : `<button class="ghost" style="font-size:12px; padding:6px 12px; color:var(--accent); font-weight:600; border:1px solid rgba(var(--accent-rgb), 0.2)" onclick="alert('AUDIT LOG: User broken glass to view record for ${OAD.esc(c.name)}.')">🔓 Break Glass</button>`
               }
             </td>
