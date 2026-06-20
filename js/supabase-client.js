@@ -6,7 +6,14 @@
 window.OAD = window.OAD || {};
 
 (function () {
-  var url = 'https://hypddwbncupihqfhwiwb.supabase.co';
-  var key = 'sb_publishable_CC_pPMBcknXHEYlqkORohw_M5hB7WKS';
-  OAD.supabase = window.supabase.createClient(url, key);
+  var url = '<URL-REPO>';
+  var key = '<REPO-KEY>';
+  
+  if (url !== '<URL-REPO>') {
+    OAD.supabase = window.supabase.createClient(url, key);
+  } else {
+    // If placeholders aren't filled out, do not initialize the client
+    // so the app cleanly falls back to offline/local mode.
+    console.warn('[OAD] Supabase not configured. Running in offline mode.');
+  }
 }());

@@ -1170,8 +1170,11 @@ OAD._initApp = async function () {
     return;
   }
   if (!loadResult) {
-    OAD._seedData();
-    OAD.importCourseData();
+    // Provide an empty database for new accounts instead of mock data
+    OAD.DB = {
+      threads: [], cadences: [], habits: [], ideas: [],
+      persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
+    };
   }
   if (OAD._migrateActionDeadlines() > 0) OAD.saveDB();
   OAD._finishBoot();
@@ -1191,8 +1194,11 @@ OAD._bootAfterAuth = async function () {
       return;
     }
     if (!localResult) {
-      OAD._seedData();
-      await OAD.importCourseData();
+      // Provide an empty database for new accounts instead of mock data
+      OAD.DB = {
+        threads: [], cadences: [], habits: [], ideas: [],
+        persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
+      };
     }
     await OAD._saveToCloud();
   } else {
@@ -1597,21 +1603,27 @@ OAD.test('life areas configuration and normalization', function () {
 
 OAD.boot = async function () {
   await OAD.loadLanguage();
-  const savedThreads  = OAD.DB.threads.slice();
-  const savedPersona  = JSON.parse(JSON.stringify(OAD.DB.persona));
 
-  const summary = await OAD._runTests();
+  if (location.search.includes('tests=true')) {
+    const savedThreads  = OAD.DB.threads.slice();
+    const savedPersona  = JSON.parse(JSON.stringify(OAD.DB.persona));
 
-  OAD.DB.threads = [];
-  OAD.DB.persona = savedPersona;
+    const summary = await OAD._runTests();
 
-  const showOverlay = summary.failed > 0 || location.search.includes('tests=true');
-  if (showOverlay) {
-    OAD._renderTestOverlay(OAD._testResults, summary);
-    if (summary.failed === 0) {
-      document.getElementById('test-continue-btn')?.focus();
+    OAD.DB.threads = [];
+    OAD.DB.persona = savedPersona;
+
+    const showOverlay = summary.failed > 0 || location.search.includes('tests=true');
+    if (showOverlay) {
+      OAD._renderTestOverlay(OAD._testResults, summary);
+      if (summary.failed === 0) {
+        document.getElementById('test-continue-btn')?.focus();
+      }
+    } else {
+      OAD._initApp();
     }
   } else {
+    // Skip tests in production / demo so mock data doesn't pollute the DOM
     OAD._initApp();
   }
 };
