@@ -1047,6 +1047,14 @@ OAD.openSettingsModal = function () {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveSettings()">Save</button>
     </div>`);
+
+  // Enforce mutual exclusivity
+  const entCb = document.getElementById('f-enterprise-mode');
+  const demoCb = document.getElementById('f-demo-mode');
+  if (entCb && demoCb) {
+    entCb.addEventListener('change', () => { if (entCb.checked) demoCb.checked = false; });
+    demoCb.addEventListener('change', () => { if (demoCb.checked) entCb.checked = false; });
+  }
 };
 
 OAD._saveSettings = async function () {
