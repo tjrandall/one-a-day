@@ -1,5 +1,7 @@
 window.OAD = window.OAD || {};
 
+OAD._DB_KEY = 'oad_db';
+
 OAD.DB = {
   threads: [],
   cadences: [],
