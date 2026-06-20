@@ -895,10 +895,18 @@ OAD._userId     = null;  // set on successful Supabase sign-in
 
 // ── localStorage (sync, used by tests and as local cache) ──────────────
 
+OAD.isEnterpriseMode = function () {
+  return localStorage.getItem('oad_enterprise_mode') === 'true';
+};
+
 OAD.saveDB = function () {
   if (!OAD._DB_PERSIST) return;
   try {
-    localStorage.setItem(OAD._DB_KEY, JSON.stringify(OAD.DB));
+    if (!OAD.isEnterpriseMode()) {
+      localStorage.setItem(OAD._DB_KEY, JSON.stringify(OAD.DB));
+    } else {
+      localStorage.removeItem(OAD._DB_KEY); // Instantly wipe PHI from browser cache
+    }
   } catch (e) {
     console.warn('[OAD] saveDB failed:', e);
   }
@@ -928,6 +936,7 @@ OAD.clearDB = function () {
 // ── Supabase cloud persistence ──────────────────────────────────────────
 
 OAD._saveToCloud = async function () {
+  if (OAD._userId && OAD._userId.startsWith('demo-')) return; // bypass mock demo users
   try {
     var { error } = await OAD.supabase
       .from('user_data')
@@ -939,6 +948,7 @@ OAD._saveToCloud = async function () {
 };
 
 OAD._loadFromCloud = async function () {
+  if (OAD._userId && OAD._userId.startsWith('demo-')) return false; // bypass mock demo users
   try {
     var { data, error } = await OAD.supabase
       .from('user_data')

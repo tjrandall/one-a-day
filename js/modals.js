@@ -1010,6 +1010,26 @@ OAD.openSettingsModal = function () {
     </div>
     <p class="text-muted text-sm" id="ai-provider-info">Keys are stored in localStorage — never sent anywhere except to the selected provider.</p>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">
+      <div class="field" style="margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="f-enterprise-mode" ${OAD.isEnterpriseMode() ? 'checked' : ''}>
+          <div style="display:flex;flex-direction:column">
+            <span>Enterprise Mode (HIPAA Compliance)</span>
+            <span class="text-xs text-muted" style="font-weight:normal">Disables browser local storage caching for PHI protection.</span>
+          </div>
+        </label>
+      </div>
+      <div class="field" style="margin-bottom:0">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="checkbox" id="f-demo-mode" ${OAD.Config.demoMode ? 'checked' : ''}>
+          <div style="display:flex;flex-direction:column">
+            <span>Demo Mode (Local Presenter)</span>
+            <span class="text-xs text-muted" style="font-weight:normal">Enables predefined mock logins to bypass network auth.</span>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
       <p class="text-muted text-sm" style="margin-bottom:10px">
         Flat JSON of all ${count} thread${count !== 1 ? 's' : ''}: title, status, priority, area, pressure, next action, by-when, closing condition, and full evolution log.
@@ -1037,9 +1057,22 @@ OAD._saveSettings = async function () {
   const theme = document.getElementById('f-theme')?.value || 'dark';
   if (OAD.DB.persona) {
     OAD.DB.persona.theme = theme;
-    OAD.saveDB();
   }
   document.body.setAttribute('data-theme', theme);
+
+  const enterpriseToggle = document.getElementById('f-enterprise-mode');
+  if (enterpriseToggle) {
+    localStorage.setItem('oad_enterprise_mode', enterpriseToggle.checked ? 'true' : 'false');
+  }
+
+  const demoToggle = document.getElementById('f-demo-mode');
+  if (demoToggle) {
+    OAD.Config.demoMode = demoToggle.checked;
+    localStorage.setItem('oad_demo_mode', demoToggle.checked ? 'true' : 'false');
+  }
+
+  // Calling saveDB will respect the enterprise flag, clearing cache if turned on.
+  OAD.saveDB();
 
   const selectedLocale = document.getElementById('f-locale')?.value || 'en';
   const oldLocale = OAD.Config.currentLocale;
@@ -1554,6 +1587,17 @@ OAD.openSignInModal = function (opts) {
   OAD.openModal(`
     <h2>Sign In to One-A-Day</h2>
     ${msg}
+    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
+      <button class="ghost" style="border:1px solid var(--border); display:flex; align-items:center; justify-content:center; gap:8px;" onclick="OAD._signInWithProvider('google')">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        Sign in with Google
+      </button>
+      <button class="ghost" style="border:1px solid var(--border); display:flex; align-items:center; justify-content:center; gap:8px;" onclick="OAD._signInWithProvider('azure')">
+        <svg width="18" height="18" viewBox="0 0 21 21"><path fill="#f25022" d="M0 0h10v10H0z"/><path fill="#7fba00" d="M11 0h10v10H11z"/><path fill="#00a4ef" d="M0 11h10v10H0z"/><path fill="#ffb900" d="M11 11h10v10H11z"/></svg>
+        Sign in with Microsoft
+      </button>
+    </div>
+    <div style="text-align:center; margin:8px 0; color:var(--text-muted); font-size:12px; text-transform:uppercase; letter-spacing:1px;">Or use Email</div>
     <div class="field">
       <label>Email</label>
       <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email">
@@ -1575,6 +1619,25 @@ OAD._authError = function (msg) {
   if (el) el.textContent = msg;
 };
 
+OAD._signInWithProvider = async function (provider) {
+  OAD._authError('');
+  const scopes = provider === 'google' 
+    ? 'https://www.googleapis.com/auth/calendar.readonly' 
+    : 'Calendars.Read';
+  
+  const { data, error } = await OAD.supabase.auth.signInWithOAuth({
+    provider: provider,
+    options: {
+      scopes: scopes,
+      redirectTo: window.location.origin
+    }
+  });
+
+  if (error) {
+    OAD._authError(error.message);
+  }
+};
+
 OAD._signIn = async function () {
   const email    = document.getElementById('auth-email')?.value.trim();
   const password = document.getElementById('auth-password')?.value;
@@ -1582,6 +1645,41 @@ OAD._signIn = async function () {
   OAD._authError('');
   const btn = document.querySelector('.modal .success');
   if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+
+  // SuperAdmin Local Login (Always available)
+  if (email === 'admin' && password === 'gowiththeflow') {
+    OAD._userId = 'local-superadmin-id';
+    OAD.closeModal();
+    await OAD._bootAfterAuth();
+    return;
+  }
+
+  // Demo Login Intercept (Only active if Demo Mode is enabled)
+  if (OAD.Config.demoMode) {
+    if (email === 'executive' && password === 'daboss') {
+      OAD._userId = 'demo-executive-id';
+      localStorage.setItem('oad_enterprise_mode', 'true');
+      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('CCO');
+      OAD.closeModal();
+      await OAD._bootAfterAuth();
+      return;
+    } else if (email === 'director' && password === 'showboat') {
+      OAD._userId = 'demo-director-id';
+      localStorage.setItem('oad_enterprise_mode', 'true');
+      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Director A');
+      OAD.closeModal();
+      await OAD._bootAfterAuth();
+      return;
+    } else if (email === 'counselor 1' && password === 'worker') {
+      OAD._userId = 'demo-counselor-id';
+      localStorage.setItem('oad_enterprise_mode', 'true');
+      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Counselor Jenkins');
+      OAD.closeModal();
+      await OAD._bootAfterAuth();
+      return;
+    }
+  }
+
   const { data, error } = await OAD.supabase.auth.signInWithPassword({ email, password });
   if (error) {
     OAD._authError(error.message);

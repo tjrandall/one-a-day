@@ -265,3 +265,10 @@ UI behavior:
 - Overdue cadences surface as a hard banner in the detail panel
 - Completed cadences show ✓; reset automatically on next trigger date
 - No pressure score — binary: done or not done
+
+## Calendar Sync & OAuth SSO
+- **OAuth Providers:** Google (`google`) and Microsoft (`azure`) are implemented in the `OAD._signInWithProvider` flow (`js/modals.js`).
+- **Scopes Requested:** 
+  - Google: `https://www.googleapis.com/auth/calendar.readonly`
+  - Microsoft: `Calendars.Read`
+- **Security:** Access tokens are secured and provided via `supabase.auth.getSession()` session metadata, preparing the application to safely pull down calendar events.

@@ -10,7 +10,8 @@ OAD.Config = {
   lifeAreas: JSON.parse(localStorage.getItem('oad_life_areas')) || [
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
     'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
-  ]
+  ],
+  demoMode: localStorage.getItem('oad_demo_mode') === 'true'
 };
 
 OAD.normalizeLifeArea = function (area) {
@@ -71,6 +72,7 @@ OAD.t = function(key) {
 
 // Check if current user is SuperAdmin
 OAD.isSuperAdmin = function() {
+  if (OAD._userId === 'local-superadmin-id') return true;
   // Always true for this environment, ensuring no lockouts.
   return true;
 };
