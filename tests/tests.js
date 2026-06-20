@@ -1621,9 +1621,11 @@ OAD.boot = async function () {
       }
     } else {
       OAD._initApp();
+      if (typeof OAD._updateDemoIndicator === 'function') OAD._updateDemoIndicator();
     }
   } else {
     // Skip tests in production / demo so mock data doesn't pollute the DOM
     OAD._initApp();
+    if (typeof OAD._updateDemoIndicator === 'function') OAD._updateDemoIndicator();
   }
 };

@@ -1019,15 +1019,17 @@ OAD.openSettingsModal = function () {
           </div>
         </label>
       </div>
+      ${OAD._userId === 'local-superadmin-id' ? `
       <div class="field" style="margin-bottom:0">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="f-demo-mode" ${OAD.Config.demoMode ? 'checked' : ''}>
           <div style="display:flex;flex-direction:column">
-            <span>Demo Mode (Local Presenter)</span>
+            <span style="color:var(--critical)">SuperAdmin: Demo Mode</span>
             <span class="text-xs text-muted" style="font-weight:normal">Enables predefined mock logins to bypass network auth.</span>
           </div>
         </label>
       </div>
+      ` : ''}
     </div>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
@@ -1069,6 +1071,7 @@ OAD._saveSettings = async function () {
   if (demoToggle) {
     OAD.Config.demoMode = demoToggle.checked;
     localStorage.setItem('oad_demo_mode', demoToggle.checked ? 'true' : 'false');
+    OAD._updateDemoIndicator();
   }
 
   // Calling saveDB will respect the enterprise flag, clearing cache if turned on.
@@ -1102,6 +1105,16 @@ OAD._saveSettings = async function () {
   
   OAD.closeModal();
   OAD.refreshActiveView();
+};
+
+OAD._updateDemoIndicator = function() {
+  const h1 = document.querySelector('header h1');
+  if (!h1) return;
+  if (OAD.Config.demoMode) {
+    h1.innerHTML = 'One-A-Day <span style="font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 4px; opacity: 0.7;">Demo</span>';
+  } else {
+    h1.textContent = 'One-A-Day';
+  }
 };
 
 OAD._saveLifeAreasFromDOM = function () {
@@ -1658,21 +1671,18 @@ OAD._signIn = async function () {
   if (OAD.Config.demoMode) {
     if (email === 'executive' && password === 'daboss') {
       OAD._userId = 'demo-executive-id';
-      localStorage.setItem('oad_enterprise_mode', 'true');
       if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('CCO');
       OAD.closeModal();
       await OAD._bootAfterAuth();
       return;
     } else if (email === 'director' && password === 'showboat') {
       OAD._userId = 'demo-director-id';
-      localStorage.setItem('oad_enterprise_mode', 'true');
       if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Director A');
       OAD.closeModal();
       await OAD._bootAfterAuth();
       return;
     } else if (email === 'counselor 1' && password === 'worker') {
       OAD._userId = 'demo-counselor-id';
-      localStorage.setItem('oad_enterprise_mode', 'true');
       if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Counselor Jenkins');
       OAD.closeModal();
       await OAD._bootAfterAuth();
