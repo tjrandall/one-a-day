@@ -148,6 +148,9 @@ OAD.renderCommandCenter = function () {
             <button class="ghost" style="cursor:pointer; font-size:12px; padding:4px 8px; border:1px solid var(--border); font-weight:normal; border-radius:4px; margin-left:8px" onclick="OAD.openSchedulesModal()">
               📅 Schedules
             </button>
+            <button class="primary" style="cursor:pointer; font-size:12px; padding:4px 12px; border:none; font-weight:600; border-radius:4px; margin-left:8px" onclick="OAD.openAdmitClientModal()">
+              🏥 Admit Client
+            </button>
           </h2>
           <div style="display:flex; align-items:center; gap:12px">
             <span class="ds-date" style="margin:0">Demo Role:</span>

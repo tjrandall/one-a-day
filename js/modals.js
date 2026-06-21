@@ -2171,3 +2171,122 @@ OAD.openSchedulesModal = function() {
   `;
   OAD.openModal(html);
 };
+
+OAD.openAdmitClientModal = function() {
+  const html = `
+    <div class="modal-header">
+      <h2>Simulate EHR Admission</h2>
+    </div>
+    <div class="modal-body" style="padding: 24px;">
+      <p style="color:var(--text-muted); margin-bottom:20px; font-size:13px; line-height:1.5">
+        In production, this event is triggered automatically via API when the client is entered into the EHR. For the demo, this manually triggers the <code>hc_admission.json</code> Rules Engine to spawn all required threads.
+      </p>
+      <div class="input-group">
+        <label>Client Name</label>
+        <input type="text" id="f-client-name" placeholder="e.g. John Doe" value="Demo Client">
+      </div>
+      <div class="input-group" style="margin-top:16px;">
+        <label>Primary Counselor</label>
+        <select id="f-client-counselor">
+          <option value="Sarah Jenkins">Sarah Jenkins</option>
+          <option value="David Kim">David Kim</option>
+          <option value="Emma Clark">Emma Clark</option>
+        </select>
+      </div>
+      <div class="input-group" style="margin-top:16px;">
+        <label>Track / Length of Stay</label>
+        <select id="f-client-track">
+          <option value="28">28-Day Residential Track</option>
+          <option value="14">14-Day Short Track</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._executeAdmission()">Execute Payload</button>
+    </div>
+  `;
+  OAD.openModal(html);
+};
+
+OAD._executeAdmission = async function() {
+  const name = document.getElementById('f-client-name').value.trim() || 'Demo Client';
+  const counselor = document.getElementById('f-client-counselor').value;
+  const days = parseInt(document.getElementById('f-client-track').value) || 28;
+  
+  // 1. Add to Command Center Clients
+  if (!OAD._demoClients) OAD._demoClients = [];
+  const today = new Date().toISOString().split('T')[0];
+  OAD._demoClients.push({
+    name: name,
+    counselor: counselor,
+    projected_days: days,
+    total_planned_days: days,
+    check_in_date: today,
+    checkout_type: 'Active',
+    total_stay_days: 1
+  });
+
+  // 2. Fetch and apply Rules Engine payload
+  try {
+    const res = await fetch('hc_admission.json');
+    if (res.ok) {
+      const payload = await res.json();
+      const now = new Date();
+      let threadsAdded = 0;
+      
+      payload.triggers.forEach(trigger => {
+        if (trigger.type === 'thread') {
+           // calculate due date
+           let due = new Date(now);
+           if (trigger.anchor === 'admission') {
+             if (trigger.offset_days) due.setDate(due.getDate() + trigger.offset_days);
+             if (trigger.offset_hours) due.setHours(due.getHours() + trigger.offset_hours);
+           } else if (trigger.anchor === 'discharge') {
+             due.setDate(due.getDate() + days); // add length of stay
+             if (trigger.offset_days) due.setDate(due.getDate() + trigger.offset_days);
+             if (trigger.offset_hours) due.setHours(due.getHours() + trigger.offset_hours);
+           }
+           
+           OAD.DB.threads.push({
+             id: 'T-' + Math.random().toString(36).substr(2, 9),
+             title: `[${trigger.owner_role}] ${trigger.name} - ${name}`,
+             status: 'active',
+             priority: trigger.priority || 'Normal',
+             area: trigger.owner_role,
+             pressure: trigger.priority === 'High' ? 8 : 5,
+             next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
+             by_when: due.toISOString().split('T')[0],
+             closing_condition: 'Documentation submitted.',
+             evolution: [],
+             created_at: now.toISOString(),
+             updated_at: now.toISOString()
+           });
+           threadsAdded++;
+        } else if (trigger.type === 'cadence') {
+           OAD.DB.cadences.push({
+             id: 'C-' + Math.random().toString(36).substr(2, 9),
+             title: `[${trigger.owner_role}] ${trigger.name} - ${name}`,
+             interval_days: trigger.interval_days,
+             area: trigger.owner_role,
+             last_completed: null,
+             next_due: null,
+             active: true
+           });
+        }
+      });
+      alert(`ADMISSION SUCCESS:\\n${name} has been admitted.\\n\\nRules Engine parsed hc_admission.json and instantly spawned ${threadsAdded} dependent clinical threads and cadences across the organization!`);
+    } else {
+      alert('Failed to load Rules Engine payload.');
+    }
+  } catch (e) {
+    console.error("Rules engine failed:", e);
+    alert('Failed to execute admission rules.');
+  }
+
+  OAD.saveDB();
+  OAD.closeModal();
+  if (OAD._lastView === 'CommandCenter') OAD.renderCommandCenter();
+  else if (OAD._lastView === 'Matrix') OAD.renderMatrixView();
+  else OAD.renderListView();
+};
