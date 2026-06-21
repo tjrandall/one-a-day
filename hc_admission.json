@@ -1,0 +1,150 @@
+{
+  "protocol": "28-Day Residential Track",
+  "version": "1.0",
+  "triggers": [
+    {
+      "type": "thread",
+      "name": "RA check-in process (Search gear, list belongings, binder, consent)",
+      "owner_role": "RA",
+      "anchor": "admission",
+      "offset_hours": 2,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Medical - urine, med review",
+      "owner_role": "Medical",
+      "anchor": "admission",
+      "offset_hours": 4,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Facility Tour",
+      "owner_role": "RA",
+      "anchor": "admission",
+      "offset_hours": 4,
+      "priority": "High",
+      "mandatory": true,
+      "blocked_by": ["RA check-in process (Search gear, list belongings, binder, consent)", "Medical - urine, med review"]
+    },
+    {
+      "type": "thread",
+      "name": "Assign the counselor & case manager",
+      "owner_role": "Director",
+      "anchor": "admission",
+      "offset_days": 1,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "BPS; Treatment Plan, Group Schedule meeting finalized",
+      "owner_role": "Counselor",
+      "anchor": "admission",
+      "offset_days": 2,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Review wish list, ROI signed; Phone screenings for placement",
+      "owner_role": "Case Manager",
+      "anchor": "admission",
+      "offset_days": 2,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "cadence",
+      "name": "ASAM or contact note",
+      "owner_role": "Counselor",
+      "interval_days": 6,
+      "due_time": "16:00",
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "cadence",
+      "name": "Master Treatment Plan Review - insurance, releases, placement",
+      "owner_role": "Case Manager",
+      "interval_days": 3,
+      "constraints": ["weekdays_only"]
+    },
+    {
+      "type": "thread",
+      "name": "Meeting with case management",
+      "owner_role": "Case Manager",
+      "anchor": "admission",
+      "window_start_days": 13,
+      "window_end_days": 17,
+      "constraints": ["weekdays_only"]
+    },
+    {
+      "type": "thread",
+      "name": "Utilization Review / Concurrent Auth",
+      "owner_role": "Counselor",
+      "anchor": "admission",
+      "offset_days": 14,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "escalation",
+      "name": "destination+funding",
+      "owner_role": "Case Manager",
+      "anchor": "discharge",
+      "offset_days": -10,
+      "priority": "High",
+      "mandatory": true,
+      "escalate_to": "Director",
+      "escalate_at_offset_days": -7
+    },
+    {
+      "type": "thread",
+      "name": "Final paperwork requirements",
+      "owner_role": "Counselor",
+      "anchor": "discharge",
+      "offset_days": -1,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Final paperwork requirements",
+      "owner_role": "Case Manager",
+      "anchor": "discharge",
+      "offset_days": -1,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Final paperwork requirements",
+      "owner_role": "Medical",
+      "anchor": "discharge",
+      "offset_days": -1,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Transportation",
+      "owner_role": "Transportation",
+      "anchor": "discharge",
+      "offset_days": 0,
+      "priority": "High",
+      "mandatory": true
+    },
+    {
+      "type": "thread",
+      "name": "Discharge Summary",
+      "owner_role": "Counselor",
+      "anchor": "discharge",
+      "offset_hours": 24,
+      "priority": "Normal"
+    }
+  ]
+}
