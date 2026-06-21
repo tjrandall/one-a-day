@@ -1262,12 +1262,28 @@ OAD.renderDailyView = function () {
       var labelCls = total >= 3 ? 'load-row-heavy' : total === 2 ? 'load-row-busy' : 'load-row-clear';
       var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       
+      var shiftStr = '';
+      if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
+        var dow = dayDt.getDay();
+        if (OAD._demoRole.includes('Counselor')) {
+          // Sun-Thu shift
+          if (dow === 5 || dow === 6) shiftStr = ' (OFF)';
+          else shiftStr = ' (8-4:30pm)';
+        } else if (OAD._demoRole.includes('Director') || OAD._demoRole.includes('Case Manager')) {
+          // Mon-Fri shift
+          if (dow === 0 || dow === 6) shiftStr = ' (OFF)';
+          else shiftStr = ' (9-5pm)';
+        } else if (OAD._demoRole === 'Medical' || OAD._demoRole === 'RA') {
+          shiftStr = ' (12hr Shift)';
+        }
+      }
+      
       const pct = Math.min((total / 4) * 100, 100);
       rows +=
         '<div class="load-row ' + labelCls + '" aria-label="' +
             OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + label + '">' +
           '<div class="load-row-details">' +
-            '<span class="load-day">'   + OAD.esc(dayLabel) + '</span>' +
+            '<span class="load-day">'   + OAD.esc(dayLabel) + '<span style="color:var(--text-muted);font-weight:400;font-size:11px;margin-left:4px">' + shiftStr + '</span></span>' +
             '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
             '<span class="load-label">' + OAD.esc(label) + '</span>' +
           '</div>' +
