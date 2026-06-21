@@ -2110,3 +2110,64 @@ OAD._saveMailroomIntake = function () {
     OAD.selectThread(thread.id);
   }
 };
+
+OAD.openSchedulesModal = function() {
+  const html = `
+    <div class="modal-header">
+      <h2>Employee Schedule Configuration</h2>
+    </div>
+    <div class="modal-body" style="padding: 24px; font-size: 14px;">
+      <p style="color:var(--text-muted); margin-bottom:24px; line-height:1.5;">
+        The Clinical Rules Engine cross-references these shift schedules during automatic thread generation to ensure granular SLAs (e.g., "Due in 48 hours") intelligently route around off-shift hours and weekends.
+      </p>
+      
+      <table style="width:100%; border-collapse:collapse; background:var(--surface2); border-radius:8px; overflow:hidden; border:1px solid var(--border)">
+        <thead>
+          <tr style="text-align:left; border-bottom:1px solid var(--border); background:var(--surface)">
+            <th style="padding:12px 16px; font-weight:600">Role / Name</th>
+            <th style="padding:12px 16px; font-weight:600">Working Days</th>
+            <th style="padding:12px 16px; font-weight:600">Shift Hours</th>
+            <th style="padding:12px 16px; text-align:right; font-weight:600">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 16px; font-weight:600">Director<br><span style="font-weight:400; color:var(--text-muted); font-size:12px">Jenkins, Kim, Clark</span></td>
+            <td style="padding:12px 16px">Mon - Fri</td>
+            <td style="padding:12px 16px; font-family:var(--mono); font-size:13px">09:00 - 17:00</td>
+            <td style="padding:12px 16px; text-align:right"><span style="color:var(--success); font-weight:600; font-size:12px; background:rgba(var(--success-rgb), 0.1); padding:4px 8px; border-radius:4px">Active</span></td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 16px; font-weight:600">Counselor<br><span style="font-weight:400; color:var(--text-muted); font-size:12px">Clinical Team</span></td>
+            <td style="padding:12px 16px">Mon - Fri</td>
+            <td style="padding:12px 16px; font-family:var(--mono); font-size:13px">08:00 - 16:00</td>
+            <td style="padding:12px 16px; text-align:right"><span style="color:var(--success); font-weight:600; font-size:12px; background:rgba(var(--success-rgb), 0.1); padding:4px 8px; border-radius:4px">Active</span></td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 16px; font-weight:600">Case Manager<br><span style="font-weight:400; color:var(--text-muted); font-size:12px">Placement & Ops</span></td>
+            <td style="padding:12px 16px">Mon - Fri</td>
+            <td style="padding:12px 16px; font-family:var(--mono); font-size:13px">09:00 - 17:00</td>
+            <td style="padding:12px 16px; text-align:right"><span style="color:var(--success); font-weight:600; font-size:12px; background:rgba(var(--success-rgb), 0.1); padding:4px 8px; border-radius:4px">Active</span></td>
+          </tr>
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:12px 16px; font-weight:600">Medical / Nurse<br><span style="font-weight:400; color:var(--text-muted); font-size:12px">24/7 Coverage</span></td>
+            <td style="padding:12px 16px">Mon - Sun</td>
+            <td style="padding:12px 16px; font-family:var(--mono); font-size:13px">24 Hours</td>
+            <td style="padding:12px 16px; text-align:right"><span style="color:var(--success); font-weight:600; font-size:12px; background:rgba(var(--success-rgb), 0.1); padding:4px 8px; border-radius:4px">Active</span></td>
+          </tr>
+          <tr>
+            <td style="padding:12px 16px; font-weight:600">Recovery Advocate (RA)<br><span style="font-weight:400; color:var(--text-muted); font-size:12px">Shift Rotation</span></td>
+            <td style="padding:12px 16px">Mon - Sun</td>
+            <td style="padding:12px 16px; font-family:var(--mono); font-size:13px">24 Hours</td>
+            <td style="padding:12px 16px; text-align:right"><span style="color:var(--success); font-weight:600; font-size:12px; background:rgba(var(--success-rgb), 0.1); padding:4px 8px; border-radius:4px">Active</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Close</button>
+      <button onclick="OAD.closeModal(); alert('Schedules locked. The Rules Engine will now enforce shift logic on all new admissions.')">Save Configuration</button>
+    </div>
+  \`;
+  OAD.openModal(html);
+};
