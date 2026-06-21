@@ -338,12 +338,12 @@ OAD.isBlocked = function (thread) {
 };
 
 OAD.selectFocusThread = function () {
-  var candidates = (OAD.DB.threads || [])
+  var candidates = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
     .filter(function (t) { return t.status !== 'closed' && !OAD.isBlocked(t); })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
   if (!candidates.length) {
-    candidates = (OAD.DB.threads || [])
+    candidates = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
       .filter(function (t) { return t.status !== 'closed'; })
       .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
       .sort(function (a, b) { return b._score - a._score; });

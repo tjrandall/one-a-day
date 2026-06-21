@@ -2236,8 +2236,7 @@ OAD._executeAdmission = async function() {
       let threadsAdded = 0;
       
       payload.triggers.forEach(trigger => {
-        if (trigger.type === 'thread') {
-           // calculate due date
+        if (trigger.type === 'thread' || trigger.type === 'escalation') {
            let due = new Date(now);
            if (trigger.anchor === 'admission') {
              if (trigger.offset_days) due.setDate(due.getDate() + trigger.offset_days);
@@ -2265,15 +2264,31 @@ OAD._executeAdmission = async function() {
            });
            threadsAdded++;
         } else if (trigger.type === 'cadence') {
-           OAD.DB.cadences.push({
-             id: 'C-' + Math.random().toString(36).substr(2, 9),
-             title: `[${trigger.owner_role}] ${trigger.name} - ${name}`,
-             interval_days: trigger.interval_days,
-             area: trigger.owner_role,
-             last_completed: null,
-             next_due: null,
-             active: true
-           });
+           if (trigger.interval_days) {
+             let iteration = 1;
+             for (let i = trigger.interval_days; i <= days; i += trigger.interval_days) {
+               let due = new Date(now);
+               due.setDate(due.getDate() + i);
+               
+               OAD.DB.threads.push({
+                 id: OAD.nextId(),
+                 uuid: 'u-' + Math.random().toString(36).substr(2, 9),
+                 title: `[${trigger.owner_role}] ${trigger.name} (Part ${iteration}) - ${name}`,
+                 status: 'open',
+                 priority: trigger.priority || 'Normal',
+                 life_area: trigger.owner_role,
+                 pressure: trigger.priority === 'High' ? 8 : 5,
+                 next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
+                 next_action_date: due.toISOString().split('T')[0],
+                 closing_condition: 'Documentation submitted.',
+                 evolution_log: [],
+                 created_at: now.toISOString(),
+                 updated_at: now.toISOString()
+               });
+               threadsAdded++;
+               iteration++;
+             }
+           }
         }
       });
       alert(`ADMISSION SUCCESS:\\n${name} has been admitted.\\n\\nRules Engine parsed hc_admission.json and instantly spawned ${threadsAdded} dependent clinical threads and cadences across the organization!`);
