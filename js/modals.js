@@ -2249,16 +2249,17 @@ OAD._executeAdmission = async function() {
            }
            
            OAD.DB.threads.push({
-             id: 'T-' + Math.random().toString(36).substr(2, 9),
+             id: OAD.nextId(),
+             uuid: 'u-' + Math.random().toString(36).substr(2, 9),
              title: `[${trigger.owner_role}] ${trigger.name} - ${name}`,
-             status: 'active',
+             status: 'open',
              priority: trigger.priority || 'Normal',
-             area: trigger.owner_role,
+             life_area: trigger.owner_role,
              pressure: trigger.priority === 'High' ? 8 : 5,
              next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
-             by_when: due.toISOString().split('T')[0],
+             next_action_date: due.toISOString().split('T')[0],
              closing_condition: 'Documentation submitted.',
-             evolution: [],
+             evolution_log: [],
              created_at: now.toISOString(),
              updated_at: now.toISOString()
            });

@@ -62,6 +62,24 @@ OAD.getThreadByUUID = function (uuid) {
   return OAD.DB.threads.find(t => t.uuid === uuid) || null;
 };
 
+OAD.getVisibleThreads = function() {
+  let threads = OAD.DB.threads || [];
+  if (OAD._demoMode && OAD._demoRole) {
+    if (OAD._demoRole.includes('Counselor')) {
+      threads = threads.filter(t => t.life_area === 'Counselor');
+    } else if (OAD._demoRole.includes('Director')) {
+      threads = threads.filter(t => t.life_area === 'Director' || t.life_area === 'Counselor');
+    } else if (OAD._demoRole === 'RA') {
+      threads = threads.filter(t => t.life_area === 'RA');
+    } else if (OAD._demoRole === 'Case Manager') {
+      threads = threads.filter(t => t.life_area === 'Case Manager');
+    } else if (OAD._demoRole === 'Medical') {
+      threads = threads.filter(t => t.life_area === 'Medical');
+    }
+  }
+  return threads;
+};
+
 OAD.addThread = function (thread) {
   thread.id = OAD.nextId();
   thread.evolution_log  = thread.evolution_log  || [];

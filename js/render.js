@@ -4,7 +4,7 @@ OAD._activeId = null;
 
 OAD.renderList = function () {
   const query   = (document.getElementById('search-input')?.value || '').toLowerCase();
-  const threads = OAD.DB.threads
+  const threads = OAD.getVisibleThreads()
     .filter(t => !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query))
     .map(t => ({ ...t, _score: OAD.pressure(t) }))
     .sort((a, b) => b._score - a._score);
@@ -65,7 +65,7 @@ OAD.renderPersonaBar = function () {
   const bar = document.getElementById('persona-bar');
   if (!bar) return;
 
-  const threads = OAD.DB.threads;
+  const threads = OAD.getVisibleThreads();
   const open    = threads.filter(t => t.status !== 'closed').length;
   const stalled = threads.filter(t => t.status === 'stalled').length;
   const scores  = threads.map(t => OAD.pressure(t));
@@ -727,7 +727,7 @@ OAD.renderTodayView = function () {
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.DB.threads || [])
+  const active = (OAD.getVisibleThreads() || [])
     .filter(function (t) { return t.status !== 'closed'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
@@ -967,7 +967,7 @@ OAD.renderDailyView = function () {
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.DB.threads || [])
+  const active = (OAD.getVisibleThreads() || [])
     .filter(function (t) { return t.status !== 'closed'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
@@ -1154,7 +1154,7 @@ OAD.renderDailyView = function () {
   var toatWidgetHtml = '';
   if (toatThread) {
     const tpc = OAD.pressureClass(OAD.pressure(toatThread));
-    const openThreads = (OAD.DB.threads || []).filter(t => t.status !== 'closed');
+    const openThreads = (OAD.getVisibleThreads() || []).filter(t => t.status !== 'closed');
     const frictionThreads = openThreads.filter(t => t.status === 'stalled' || t.status === 'waiting');
     frictionThreads.sort((a, b) => a.id - b.id);
     openThreads.sort((a, b) => a.id - b.id);
@@ -1374,7 +1374,7 @@ OAD.renderMatrixView = function () {
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
   // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.DB.threads || [])
+  const active = (OAD.getVisibleThreads() || [])
     .filter(function (t) { return t.status !== 'closed'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
@@ -1662,7 +1662,7 @@ OAD.goBackToLastView = function () {
 };
 
 OAD.getGraphDataForArea = function (areaFilter) {
-  var threads = (OAD.DB.threads || []).filter(function (t) { return t.status !== 'closed'; });
+  var threads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status !== 'closed'; });
   
   if (!areaFilter || areaFilter === 'All Areas') {
     var nodes = threads;
@@ -2130,7 +2130,7 @@ OAD._renderGraphFallback = function (data) {
   
   var cardsHtml = data.nodes.map(function (t) {
     var conns = t.connections || [];
-    var threads = OAD.DB.threads || [];
+    var threads = OAD.getVisibleThreads() || [];
     
     var blocks = [];
     var blockedBy = [];
@@ -2212,7 +2212,7 @@ OAD.renderListView = function () {
   if (OAD._activeListSearch === undefined) OAD._activeListSearch = '';
   if (OAD._activeListStatus === undefined) OAD._activeListStatus = 'all';
 
-  const threads = OAD.DB.threads;
+  const threads = OAD.getVisibleThreads();
   const openCount = threads.filter(t => t.status !== 'closed').length;
   const stalledCount = threads.filter(t => t.status === 'stalled').length;
   const scores = threads.map(t => OAD.pressure(t));
@@ -2274,7 +2274,7 @@ OAD.filterListTab = function () {
   const cycles = OAD.detectCycles();
   const cycleThreadIds = new Set(cycles.flat());
 
-  const threads = OAD.DB.threads
+  const threads = OAD.getVisibleThreads()
     .filter(t => {
       const matchesSearch = !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query);
       const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
