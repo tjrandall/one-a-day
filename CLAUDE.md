@@ -77,6 +77,7 @@ All code lives on window.OAD = {}. No modules, no bundler — plain vanilla JS t
 3. ✅ Auth UI (sign in, sign up, sign out, session restore)
 4. **Realtime cross-device sync** — subscribe to user_data table changes, re-render on update
 5. **Capacitor mobile packaging** — wrap for iOS App Store + Google Play
+6. **5-Day Census Trend for Counselors** — visual trendline on the TRY dashboard card
 
 localStorage is a temporary bridge only — do not build new features on top of it.
 
