@@ -2168,6 +2168,6 @@ OAD.openSchedulesModal = function() {
       <button class="secondary" onclick="OAD.closeModal()">Close</button>
       <button onclick="OAD.closeModal(); alert('Schedules locked. The Rules Engine will now enforce shift logic on all new admissions.')">Save Configuration</button>
     </div>
-  \`;
+  `;
   OAD.openModal(html);
 };
