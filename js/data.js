@@ -64,7 +64,7 @@ OAD.getThreadByUUID = function (uuid) {
 
 OAD.getVisibleThreads = function() {
   let threads = OAD.DB.threads || [];
-  if (OAD._demoMode && OAD._demoRole) {
+  if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
     if (OAD._demoRole.includes('Counselor')) {
       threads = threads.filter(t => t.life_area === 'Counselor');
     } else if (OAD._demoRole.includes('Director')) {
