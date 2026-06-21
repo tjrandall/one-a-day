@@ -99,33 +99,38 @@ OAD.renderCommandCenter = function () {
 
   // Build the breakdown (by Director for CCO, by Counselor for Directors)
   const breakdown = {};
-  dischargedClients.forEach(c => {
+  clients.forEach(c => {
     let groupName = c.counselor;
     if (OAD._demoRole === 'CCO') {
       groupName = (c.counselor === 'Emma Clark') ? 'Director B (Clark)' : 'Director A (Jenkins & Kim)';
     }
 
-    if (!breakdown[groupName]) breakdown[groupName] = { planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
-    breakdown[groupName].planned += c.total_planned_days;
-    if (c.checkout_type === 'Standard') {
-      breakdown[groupName].retained += c.total_stay_days;
-      breakdown[groupName].standard++;
-    } else if (c.checkout_type === 'ACA') {
-      breakdown[groupName].aca++;
-    } else if (c.checkout_type === 'BNC') {
-      breakdown[groupName].bnc++;
+    if (!breakdown[groupName]) breakdown[groupName] = { active: 0, planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
+    
+    if (c.checkout_type === 'Active') {
+      breakdown[groupName].active++;
+    } else {
+      breakdown[groupName].planned += c.total_planned_days;
+      if (c.checkout_type === 'Standard') {
+        breakdown[groupName].retained += c.total_stay_days;
+        breakdown[groupName].standard++;
+      } else if (c.checkout_type === 'ACA') {
+        breakdown[groupName].aca++;
+      } else if (c.checkout_type === 'BNC') {
+        breakdown[groupName].bnc++;
+      }
     }
   });
 
   const breakdownHtml = Object.keys(breakdown).map(name => {
     const data = breakdown[name];
-    const score = Math.round((data.retained / data.planned) * 100);
+    const score = data.planned === 0 ? 0 : Math.round((data.retained / data.planned) * 100);
     const color = score >= 80 ? 'var(--success)' : score >= 60 ? 'orange' : 'var(--critical)';
     return `
       <div style="display:flex; justify-content:space-between; align-items:center; padding:16px; border-bottom:1px solid var(--border)">
         <div>
           <div style="font-weight:600; font-size:15px; margin-bottom:4px;">${OAD.esc(name)}</div>
-          <div style="font-size:12px; color:var(--text-muted)">${data.standard} Standard | ${data.aca} ACA | ${data.bnc} BNC</div>
+          <div style="font-size:12px; color:var(--text-muted)">Active (${data.active}) - Discharges in last 24h: ${data.standard} Standard | ${data.aca} ACA | ${data.bnc} BNC</div>
         </div>
         <div style="text-align:right">
           <div style="font-size:20px; font-weight:700; color:${color}">${score}%</div>
