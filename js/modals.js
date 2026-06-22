@@ -1116,12 +1116,12 @@ OAD._saveSettings = async function () {
 };
 
 OAD._updateDemoIndicator = function() {
-  const h1 = document.querySelector('header h1');
-  if (!h1) return;
+  const brand = document.querySelector('.fq-navbar-brand');
+  if (!brand) return;
   if (OAD.Config.demoMode) {
-    h1.innerHTML = 'One-A-Day <span style="font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 4px; opacity: 0.7;">Demo</span>';
+    brand.innerHTML = '<img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;"><span style="font-size: 12px; font-weight: 800; color: var(--fq-text-muted); margin-left: 12px; opacity: 0.7; padding-top:4px; letter-spacing:1px;">DEMO</span>';
   } else {
-    h1.textContent = 'One-A-Day';
+    brand.innerHTML = '<img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;">';
   }
 };
 
@@ -1606,7 +1606,7 @@ OAD.openSignInModal = function (opts) {
   opts = opts || {};
   const msg = opts.message ? `<div class="auth-message">${OAD.esc(opts.message)}</div>` : '';
   OAD.openModal(`
-    <h2>Sign In to One-A-Day</h2>
+    <h2>Sign In to FlowQueue</h2>
     ${msg}
     <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:16px;">
       <button class="ghost" style="border:1px solid var(--border); display:flex; align-items:center; justify-content:center; gap:8px;" onclick="OAD._signInWithProvider('google')">

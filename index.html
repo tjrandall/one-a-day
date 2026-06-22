@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>FlowQueue</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <link rel="icon" type="image/png" href="img/avatar.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&family=Montserrat:wght@600;700;800&display=swap" rel="stylesheet">
@@ -13,7 +14,9 @@
 
 <div id="app">
   <header>
-    <h1>One-A-Day</h1>
+    <div class="fq-navbar-brand" style="display:flex; align-items:center;">
+      <img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;">
+    </div>
     <div class="header-actions">
       <button class="ghost" onclick="OAD.renderDailyView()" data-i18n="dailySummary" style="font-weight:600">Daily Summary</button>
       <button class="ghost" onclick="OAD.renderListView()" data-i18n="list">List</button>
