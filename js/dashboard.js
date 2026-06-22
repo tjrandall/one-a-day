@@ -62,7 +62,7 @@ OAD.renderCommandCenter = function () {
     panel.innerHTML = `
       <div class="ds-panel" role="main" style="max-width: 900px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:60vh">
         <h2>No Demo Data Loaded</h2>
-        <p style="color:var(--text-muted); margin-bottom:24px">Please upload the demo_clients.csv file to view the Command Center.</p>
+        <p style="color:var(--text-muted); margin-bottom:24px">Please upload the demo/demo_data.csv file to view the Command Center.</p>
         <label class="success" style="cursor:pointer; padding:12px 24px; border-radius:8px; font-weight:600">
           Upload CSV
           <input type="file" accept=".csv" style="display:none" onchange="OAD.loadDemoCsv(event)">

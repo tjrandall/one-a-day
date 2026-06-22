@@ -380,6 +380,43 @@ OAD._acceptPersonaUpdate = function (encodedLesson) {
   OAD.closeModal();
 };
 
+OAD.openGraphIntelligencePanel = function (threadId) {
+  var t = OAD.getThread(threadId);
+  if (!t) return;
+  var unconfirmed = (t.connections || []).filter(function (c) { return c.auto_generated && !c.confirmed_by_user; });
+  if (!unconfirmed.length) {
+    OAD.renderDetail(threadId);
+    return;
+  }
+  var rows = unconfirmed.map(function (c) {
+    var target = (OAD.DB.threads || []).find(function (x) { return x.uuid === c.to_uuid; });
+    var targetTitle = target ? target.title : (c.to_label || c.to_uuid);
+    return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="font-size:12px;color:var(--text-muted);font-weight:700;text-transform:uppercase;margin-bottom:4px">' +
+        OAD.esc(c.rule || 'ADE') + ' · ' + Math.round((c.confidence || 1) * 100) + '% confidence' +
+      '</div>' +
+      '<div style="font-size:13px;margin-bottom:8px">' +
+        '<strong>' + OAD.esc(c.edge_type) + '</strong> → ' + OAD.esc(targetTitle) +
+      '</div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<button class="success" style="font-size:12px;padding:4px 12px" ' +
+          'onclick="OAD.confirmEdge(' + threadId + ',\'' + c.uuid + '\');OAD.openGraphIntelligencePanel(' + threadId + ')">✓ Confirm</button>' +
+        '<button class="secondary" style="font-size:12px;padding:4px 12px" ' +
+          'onclick="OAD.rejectEdge(' + threadId + ',\'' + c.uuid + '\');OAD.openGraphIntelligencePanel(' + threadId + ')">✗ Reject</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  OAD.openModal(
+    '<h2>Graph Intelligence</h2>' +
+    '<p class="text-muted text-sm" style="margin-bottom:16px">' + OAD.esc(t.title) + '</p>' +
+    '<p style="margin-bottom:16px;font-size:13px">AI-inferred connections pending review. Confirm to keep, reject to suppress this suggestion permanently.</p>' +
+    rows +
+    '<div class="modal-footer">' +
+      '<button class="secondary" onclick="OAD.closeModal();OAD.renderDetail(' + threadId + ')">Done</button>' +
+    '</div>'
+  );
+};
+
 OAD.checkDailyIntercept = async function () {
   const todayStr = new Date().toISOString().slice(0, 10);
   OAD.DB.persona = OAD.DB.persona || {};
@@ -609,7 +646,17 @@ OAD._saveConnection = function (id) {
   
   const to_label = target.title;
   t.connections = t.connections || [];
-  t.connections.push({ to_uuid, to_label, edge_type });
+  t.connections.push({
+    uuid:              OAD._generateUUID(),
+    to_uuid,
+    to_label,
+    edge_type,
+    auto_generated:    false,
+    rule:              null,
+    confidence:        1.0,
+    confirmed_by_user: true,
+    created_at:        new Date().toISOString()
+  });
   OAD.addEvolution(id, `Connection added: ${edge_type} → ${to_label}`);
   OAD.closeModal();
   OAD.refreshActiveView();
@@ -922,9 +969,13 @@ OAD._confirmImport = function () {
   });
   const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates);
   OAD._pendingImport = null;
+  const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
   OAD.closeModal();
   OAD.refreshActiveView();
-  alert('Import complete: ' + result.created + ' created, ' + result.updated + ' updated.');
+  var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
+  if (result.edges_merged > 0) msg += ', ' + result.edges_merged + ' edges restored';
+  if (adeCount > 0) msg += ', ' + adeCount + ' AI edges inferred';
+  alert(msg + '.');
 };
 
 OAD._downloadExport = function () {
@@ -2179,7 +2230,7 @@ OAD.openAdmitClientModal = function() {
     </div>
     <div class="modal-body" style="padding: 24px;">
       <p style="color:var(--text-muted); margin-bottom:20px; font-size:13px; line-height:1.5">
-        In production, this event is triggered automatically via API when the client is entered into the EHR. For the demo, this manually triggers the <code>hc_admission.json</code> Rules Engine to spawn all required threads.
+        In production, this event is triggered automatically via API when the client is entered into the EHR. For the demo, this manually triggers the <code>config/rules/hc_admission.json</code> Rules Engine to spawn all required threads.
       </p>
       <div class="input-group">
         <label>Client Name</label>
@@ -2229,7 +2280,7 @@ OAD._executeAdmission = async function() {
 
   // 2. Fetch and apply Rules Engine payload
   try {
-    const res = await fetch('hc_admission.json');
+    const res = await fetch('config/rules/hc_admission.json');
     if (res.ok) {
       const payload = await res.json();
       const now = new Date();
@@ -2291,7 +2342,7 @@ OAD._executeAdmission = async function() {
            }
         }
       });
-      alert(`ADMISSION SUCCESS:\\n${name} has been admitted.\\n\\nRules Engine parsed hc_admission.json and instantly spawned ${threadsAdded} dependent clinical threads and cadences across the organization!`);
+      alert(`ADMISSION SUCCESS:\\n${name} has been admitted.\\n\\nRules Engine parsed config/rules/hc_admission.json and instantly spawned ${threadsAdded} dependent clinical threads and cadences across the organization!`);
     } else {
       alert('Failed to load Rules Engine payload.');
     }
