@@ -1748,31 +1748,22 @@ OAD._signIn = async function () {
   const btn = document.querySelector('.modal .success');
   if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
 
-  // SuperAdmin Local Login (Always available)
-  if (email === 'admin' && password === 'gowiththeflow') {
+  // SuperAdmin local login — credentials loaded from js/demo.config.js (gitignored).
+  // If demo.config.js is absent (prod/local dev), this block never matches.
+  const _dCfg = (typeof OAD.DemoConfig !== 'undefined') ? OAD.DemoConfig : null;
+  if (_dCfg && _dCfg.superAdmin && email === _dCfg.superAdmin.email && password === _dCfg.superAdmin.password) {
     OAD._userId = 'local-superadmin-id';
     OAD.closeModal();
     await OAD._bootAfterAuth();
     return;
   }
 
-  // Demo Login Intercept (Only active if Demo Mode is enabled)
-  if (OAD.Config.demoMode) {
-    if (email === 'executive' && password === 'daboss') {
-      OAD._userId = 'demo-executive-id';
-      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('CCO');
-      OAD.closeModal();
-      await OAD._bootAfterAuth();
-      return;
-    } else if (email === 'director' && password === 'showboat') {
-      OAD._userId = 'demo-director-id';
-      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Director A');
-      OAD.closeModal();
-      await OAD._bootAfterAuth();
-      return;
-    } else if (email === 'counselor 1' && password === 'worker') {
-      OAD._userId = 'demo-counselor-id';
-      if (window.OAD && typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole('Counselor Jenkins');
+  // Demo role login — only active when demoMode is enabled and demo.config.js is present.
+  if (OAD.Config.demoMode && _dCfg && Array.isArray(_dCfg.roles)) {
+    const match = _dCfg.roles.find(function (r) { return r.email === email && r.password === password; });
+    if (match) {
+      OAD._userId = match.userId;
+      if (typeof OAD.changeDemoRole === 'function') OAD.changeDemoRole(match.role);
       OAD.closeModal();
       await OAD._bootAfterAuth();
       return;

@@ -69,6 +69,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
 <script src="js/supabase-client.js?v=17"></script>
 <script src="js/config.js?v=17"></script>
+<!-- Demo credentials — gitignored, absent in prod/local dev. Silent no-op if file not present. -->
+<script>window.OAD = window.OAD || {}; OAD.DemoConfig = null;</script>
+<script src="js/demo.config.js" onerror="void 0"></script>
 <script src="js/data.js?v=17"></script>
 <script src="js/engine.js?v=17"></script>
 <script src="js/mailroom.js?v=17"></script>

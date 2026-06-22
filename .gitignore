@@ -1,0 +1,6 @@
+# Demo credentials — never commit real passwords
+js/demo.config.js
+
+# OS
+.DS_Store
+Thumbs.db
