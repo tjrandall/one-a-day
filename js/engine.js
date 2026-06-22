@@ -89,6 +89,16 @@ OAD.pressure = function (thread, _inBleedUp) {
     }
   }
 
+  // Escalation: CIC Discharge Readiness (-5d rule)
+  if (window.OAD && window.OAD.CIC && window.OAD.CIC.checkDischargeReadiness) {
+    var cicScore = window.OAD.CIC.checkDischargeReadiness(thread);
+    if (cicScore > 0) {
+      score += cicScore;
+      if (!thread.focusReason) thread.focusReason = '⚠ MISSING DISCHARGE LOC';
+      else thread.focusReason += ' · ⚠ MISSING DISCHARGE LOC';
+    }
+  }
+
   return Math.min(score, 100);
 };
 

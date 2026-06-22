@@ -86,6 +86,10 @@ OAD.maskName = function(fullName, role) {
 
 OAD._demoRole = 'CCO';
 OAD.changeDemoRole = function(role) {
+  if (role === 'Operations (CIC)') {
+    window.location.href = 'cic/index.html';
+    return;
+  }
   OAD._demoRole = role;
   document.body.className = 'role-' + role.replace(/ /g, '-').toLowerCase();
   OAD.renderCommandCenter();
@@ -220,6 +224,8 @@ OAD.renderCommandCenter = function () {
               <option value="Counselor 8" ${OAD._demoRole === 'Counselor 8' ? 'selected' : ''}>Counselor 8</option>
               <option value="Counselor 9" ${OAD._demoRole === 'Counselor 9' ? 'selected' : ''}>Counselor 9</option>
               <option value="Counselor 10" ${OAD._demoRole === 'Counselor 10' ? 'selected' : ''}>Counselor 10</option>
+              <option disabled>──────────</option>
+              <option value="Operations (CIC)">Operations & Logistics (Map View)</option>
             </select>
           </div>
         </div>
