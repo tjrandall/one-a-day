@@ -11,7 +11,7 @@ OAD.Config = {
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
     'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
   ],
-  demoMode: localStorage.getItem('oad_demo_mode') === 'true'
+  demoMode: localStorage.getItem('oad_demo_mode') === 'true' || (typeof OAD !== 'undefined' && !!OAD.DemoConfig)
 };
 
 OAD.normalizeLifeArea = function (area) {
