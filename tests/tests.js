@@ -148,11 +148,16 @@ OAD.test('exportThreads: includes full thread data, excludes ai_insights and per
   OAD._assert('next_action_date'         in row,      'next_action_date included');
   OAD._assert('deadline'                 in row,      'deadline included');
   OAD._assert('effortEstimate'           in row,      'effortEstimate included');
-  OAD._assert(!('connections' in row),                'connections excluded');
+  OAD._assert('connections'            in row,        'connections included');
+  OAD._assert(Array.isArray(row.connections),         'connections is array');
   OAD._assert(!('evolution_log' in row),              'evolution_log excluded');
   OAD._assert(!('ai_insights' in row),               'ai_insights excluded');
   OAD._assert('exported_at'   in parsed,             'export has timestamp');
   OAD._assert('thread_count'  in parsed,             'export has thread_count');
+  OAD._assert('edges'         in parsed,             'export has top-level edges array');
+  OAD._assert('edge_count'    in parsed,             'export has edge_count');
+  OAD._assert('deleted_edge_uuids' in parsed,        'export has deleted_edge_uuids');
+  OAD._assert(Array.isArray(parsed.edges),           'top-level edges is array');
 });
 
 OAD.test('makeThread: parent_uuid defaults to null', function () {
@@ -1222,7 +1227,11 @@ OAD._finishBoot = function () {
   const theme = (OAD.DB.persona && OAD.DB.persona.theme) || 'dark';
   document.body.setAttribute('data-theme', theme);
   OAD.renderDailyView();
-  
+
+  if (typeof OAD.runADE === 'function') {
+    OAD.runADE();
+  }
+
   if (typeof OAD.checkDailyIntercept === 'function') {
     OAD.checkDailyIntercept();
   }
@@ -1473,8 +1482,8 @@ OAD.test('moat-safe export strips proprietary attributes', function () {
     OAD._assertEqual(exportedThread.title, 'Task A', 'Title should be exported');
     OAD._assertEqual(exportedThread.uuid, 'uuid-a', 'UUID should be exported');
 
-    // Assert proprietary attributes are completely stripped
-    OAD._assert(exportedThread.connections === undefined, 'connections should be stripped');
+    // Assert connections included, other proprietary attributes stripped
+    OAD._assert(Array.isArray(exportedThread.connections), 'connections should be included as array');
     OAD._assert(exportedThread.evolution_log === undefined, 'evolution_log should be stripped');
     OAD._assert(exportedThread.current_assumption === undefined, 'current_assumption should be stripped');
     OAD._assert(exportedThread.contingency_action === undefined, 'contingency_action should be stripped');
@@ -1598,6 +1607,165 @@ OAD.test('life areas configuration and normalization', function () {
   } finally {
     OAD.Config.lifeAreas = origLifeAreas;
     OAD.LIFE_AREAS = origLifeAreas;
+  }
+});
+
+// ── Tests: ADE Engine ────────────────────────────────────────────────
+
+OAD.test('_adeAddEdge: creates edge between two threads', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    const t1 = OAD.addThread(OAD.makeThread({ title: 'Source', status: 'open' }));
+    const t2 = OAD.addThread(OAD.makeThread({ title: 'Target', status: 'open' }));
+    OAD.DB.ade_suppressions = [];
+    const added = OAD._adeAddEdge(t1, t2, 'blocks', 'ADE-TEST', 0.95);
+    OAD._assert(added, '_adeAddEdge should return true when edge created');
+    const edge = (t1.connections || []).find(function (c) { return c.to_uuid === t2.uuid; });
+    OAD._assert(!!edge, 'edge should exist on source thread');
+    OAD._assert(edge.auto_generated, 'edge should be marked auto_generated');
+    OAD._assert(!edge.confirmed_by_user, 'edge should not be confirmed yet');
+    OAD._assertEqual(edge.rule, 'ADE-TEST', 'rule should be set');
+    OAD._assertEqual(edge.confidence, 0.95, 'confidence should be set');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('_adeAddEdge: does not duplicate existing edge', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    const t1 = OAD.addThread(OAD.makeThread({ title: 'Source2', status: 'open' }));
+    const t2 = OAD.addThread(OAD.makeThread({ title: 'Target2', status: 'open' }));
+    OAD.DB.ade_suppressions = [];
+    OAD._adeAddEdge(t1, t2, 'blocks', 'ADE-TEST', 0.95);
+    const second = OAD._adeAddEdge(t1, t2, 'blocks', 'ADE-TEST', 0.95);
+    OAD._assert(!second, '_adeAddEdge should return false on duplicate');
+    const count = (t1.connections || []).filter(function (c) { return c.to_uuid === t2.uuid && c.edge_type === 'blocks'; }).length;
+    OAD._assertEqual(count, 1, 'only one edge should exist');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('_adeAddEdge: respects ade_suppressions', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    const t1 = OAD.addThread(OAD.makeThread({ title: 'Sup source', status: 'open' }));
+    const t2 = OAD.addThread(OAD.makeThread({ title: 'Sup target', status: 'open' }));
+    OAD.DB.ade_suppressions = [{ from_uuid: t1.uuid, to_uuid: t2.uuid, rule: 'ADE-TEST' }];
+    const added = OAD._adeAddEdge(t1, t2, 'blocks', 'ADE-TEST', 0.95);
+    OAD._assert(!added, 'suppressed edge should not be created');
+    OAD._assertEqual((t1.connections || []).length, 0, 'no edges on suppressed source');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-001: sequential week threads get blocks edge', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const w1 = OAD.addThread(OAD.makeThread({ title: 'Python 101 Week 1', status: 'open' }));
+    const w2 = OAD.addThread(OAD.makeThread({ title: 'Python 101 Week 2', status: 'open' }));
+    const w3 = OAD.addThread(OAD.makeThread({ title: 'Python 101 Week 3', status: 'open' }));
+    OAD._ade001_sequential();
+    const e12 = (w1.connections || []).find(function (c) { return c.to_uuid === w2.uuid && c.edge_type === 'blocks'; });
+    const e23 = (w2.connections || []).find(function (c) { return c.to_uuid === w3.uuid && c.edge_type === 'blocks'; });
+    OAD._assert(!!e12, 'Week 1 should block Week 2');
+    OAD._assert(!!e23, 'Week 2 should block Week 3');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-001: non-consecutive weeks do not get direct edge', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const w1 = OAD.addThread(OAD.makeThread({ title: 'Data 200 Week 1', status: 'open' }));
+    const w3 = OAD.addThread(OAD.makeThread({ title: 'Data 200 Week 3', status: 'open' }));
+    OAD._ade001_sequential();
+    const e13 = (w1.connections || []).find(function (c) { return c.to_uuid === w3.uuid && c.edge_type === 'blocks'; });
+    OAD._assert(!e13, 'Week 1 should NOT directly block Week 3 (non-consecutive)');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-002: parent_uuid creates enables edge', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const parent = OAD.addThread(OAD.makeThread({ title: 'Parent project', status: 'open' }));
+    const child  = OAD.addThread(OAD.makeThread({ title: 'Child task', status: 'open', parent_uuid: parent.uuid }));
+    OAD._ade002_parentChild();
+    const edge = (parent.connections || []).find(function (c) { return c.to_uuid === child.uuid && c.edge_type === 'enables'; });
+    OAD._assert(!!edge, 'parent should enable child');
+    OAD._assertEqual(edge.rule, 'ADE-002', 'rule should be ADE-002');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-003: shared identifier with prep→submit creates blocks edge', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const prep   = OAD.addThread(OAD.makeThread({ title: 'Draft CS-101 Proposal', status: 'open' }));
+    const submit = OAD.addThread(OAD.makeThread({ title: 'Submit CS-101 Proposal', status: 'open' }));
+    OAD._ade003_sharedIdentifier();
+    const edge = (prep.connections || []).find(function (c) { return c.to_uuid === submit.uuid && c.edge_type === 'blocks'; });
+    OAD._assert(!!edge, 'Draft should block Submit for same identifier');
+    OAD._assertEqual(edge.rule, 'ADE-003', 'rule should be ADE-003');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('confirmEdge: sets confirmed_by_user on matching edge', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const edgeUuid = OAD._generateUUID();
+    const t = OAD.addThread(OAD.makeThread({ title: 'Confirm target', status: 'open' }));
+    t.connections = [{ uuid: edgeUuid, to_uuid: 'some-uuid', edge_type: 'blocks', auto_generated: true, confirmed_by_user: false }];
+    OAD.confirmEdge(t.id, edgeUuid);
+    const edge = t.connections.find(function (c) { return c.uuid === edgeUuid; });
+    OAD._assert(edge.confirmed_by_user, 'edge should be confirmed after confirmEdge');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('rejectEdge: removes edge and adds to ade_suppressions', function () {
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const edgeUuid = OAD._generateUUID();
+    const t = OAD.addThread(OAD.makeThread({ title: 'Reject target', status: 'open' }));
+    const targetUuid = OAD._generateUUID();
+    t.connections = [{ uuid: edgeUuid, to_uuid: targetUuid, edge_type: 'blocks', auto_generated: true, confirmed_by_user: false, rule: 'ADE-001' }];
+    OAD.rejectEdge(t.id, edgeUuid);
+    OAD._assertEqual(t.connections.length, 0, 'edge should be removed after reject');
+    const suppressed = OAD.DB.ade_suppressions.find(function (s) { return s.from_uuid === t.uuid && s.to_uuid === targetUuid; });
+    OAD._assert(!!suppressed, 'suppression entry should be created');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
   }
 });
 

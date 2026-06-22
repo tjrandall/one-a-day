@@ -510,8 +510,136 @@ OAD.calculateCriticalPath = function (threadId, visited) {
     }
   });
 
-  return { 
-    weight: weight + maxPathWeight, 
-    path: [threadId].concat(maxPath) 
+  return {
+    weight: weight + maxPathWeight,
+    path: [threadId].concat(maxPath)
   };
+};
+
+// ── Auto-Dependency Engine (ADE) ──────────────────────────────────────
+// Infers graph edges from thread data. Rules run in order; each checks
+// the suppression list and skips duplicate edges before writing.
+
+OAD._adeAddEdge = function (fromThread, toThread, edgeType, rule, confidence) {
+  if (!fromThread || !toThread || fromThread.uuid === toThread.uuid) return false;
+  var suppressions = OAD.DB.ade_suppressions || [];
+  var suppressed = suppressions.some(function (s) {
+    return s.from_uuid === fromThread.uuid && s.to_uuid === toThread.uuid && s.rule === rule;
+  });
+  if (suppressed) return false;
+  fromThread.connections = fromThread.connections || [];
+  var exists = fromThread.connections.some(function (c) {
+    return c.to_uuid === toThread.uuid && c.edge_type === edgeType;
+  });
+  if (exists) return false;
+  fromThread.connections.push({
+    uuid:              OAD._generateUUID(),
+    to_uuid:           toThread.uuid,
+    to_label:          toThread.title,
+    edge_type:         edgeType,
+    auto_generated:    true,
+    rule:              rule,
+    confidence:        confidence,
+    confirmed_by_user: false,
+    created_at:        new Date().toISOString()
+  });
+  return true;
+};
+
+// ADE-001: Sequential coursework — Week N blocks Week N+1; all weeks block Finals.
+OAD._ade001_sequential = function () {
+  var created = 0;
+  var open = (OAD.DB.threads || []).filter(function (t) { return t.status !== 'closed'; });
+  var weekPat  = /^(.*?)\bWeek\s+(\d+)\b/i;
+  var finalPat = /\b(final exam|finals|final)\b/i;
+
+  var groups = {};
+  open.forEach(function (t) {
+    var m = t.title.match(weekPat);
+    if (!m) return;
+    var prefix = m[1].replace(/[-—:\s]+$/, '').trim().toLowerCase();
+    if (!prefix) return;
+    if (!groups[prefix]) groups[prefix] = { weeks: [], finals: [] };
+    groups[prefix].weeks.push({ thread: t, n: parseInt(m[2], 10) });
+  });
+  open.forEach(function (t) {
+    if (!finalPat.test(t.title)) return;
+    Object.keys(groups).forEach(function (prefix) {
+      if (t.title.toLowerCase().indexOf(prefix) !== -1) {
+        groups[prefix].finals.push(t);
+      }
+    });
+  });
+
+  Object.keys(groups).forEach(function (prefix) {
+    var g = groups[prefix];
+    g.weeks.sort(function (a, b) { return a.n - b.n; });
+    for (var i = 0; i < g.weeks.length - 1; i++) {
+      if (g.weeks[i + 1].n === g.weeks[i].n + 1) {
+        if (OAD._adeAddEdge(g.weeks[i].thread, g.weeks[i + 1].thread, 'blocks', 'ADE-001', 0.97)) created++;
+      }
+    }
+    g.finals.forEach(function (f) {
+      g.weeks.forEach(function (w) {
+        if (OAD._adeAddEdge(w.thread, f, 'blocks', 'ADE-001', 0.97)) created++;
+      });
+    });
+  });
+  return created;
+};
+
+// ADE-002: parent_uuid → parent enables child (structural certainty).
+OAD._ade002_parentChild = function () {
+  var created = 0;
+  (OAD.DB.threads || []).forEach(function (child) {
+    if (!child.parent_uuid || child.status === 'closed') return;
+    var parent = OAD.getThreadByUUID(child.parent_uuid);
+    if (parent && parent.status !== 'closed') {
+      if (OAD._adeAddEdge(parent, child, 'enables', 'ADE-002', 1.0)) created++;
+    }
+  });
+  return created;
+};
+
+// ADE-003: Shared job/project identifier + prep→submit action word pattern.
+OAD._ade003_sharedIdentifier = function () {
+  var created = 0;
+  var open = (OAD.DB.threads || []).filter(function (t) { return t.status !== 'closed'; });
+  var ID_PAT    = /\b([A-Z]{2,5}[-\s][A-Z0-9]{2,}(?:-[A-Z0-9]+)*)\b/g;
+  var PREP_PAT  = /\b(build|draft|prepare|review|create|write|complete)\b/i;
+  var SUBM_PAT  = /\b(submit|apply|send|deliver|file|upload)\b/i;
+
+  var byId = {};
+  open.forEach(function (t) {
+    var re = new RegExp(ID_PAT.source, 'g'), m;
+    while ((m = re.exec(t.title)) !== null) {
+      var key = m[1].replace(/\s/g, '-').toUpperCase();
+      if (!byId[key]) byId[key] = [];
+      byId[key].push(t);
+    }
+  });
+
+  Object.keys(byId).forEach(function (key) {
+    var group = byId[key];
+    if (group.length < 2) return;
+    var preppers  = group.filter(function (t) { return PREP_PAT.test(t.title); });
+    var submitters = group.filter(function (t) { return SUBM_PAT.test(t.title); });
+    preppers.forEach(function (prep) {
+      submitters.forEach(function (sub) {
+        if (prep.uuid !== sub.uuid) {
+          if (OAD._adeAddEdge(prep, sub, 'blocks', 'ADE-003', 0.92)) created++;
+        }
+      });
+    });
+  });
+  return created;
+};
+
+OAD.runADE = function () {
+  var created = 0;
+  created += OAD._ade001_sequential();
+  created += OAD._ade002_parentChild();
+  created += OAD._ade003_sharedIdentifier();
+  if (created > 0) OAD.saveDB();
+  return created;
 };

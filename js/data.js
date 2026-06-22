@@ -9,6 +9,7 @@ OAD.DB = {
   ideas: [],
   proposals: [],
   toat: [],
+  ade_suppressions: [],
 
   persona: {
     last_proactive_scan: null,
@@ -315,13 +316,12 @@ OAD.checkInHabit = function (id, done, note) {
   return h;
 };
 
-// ── Moat-safe export ─────────────────────────────────────────────────
-// Exports surface-level thread data only. Deliberately excludes:
-//   connections[] — the dependency graph is the product moat
-//   current_assumption / assumption_verified — assumption audit trail
+// ── Export ────────────────────────────────────────────────────────────
+// Includes thread data and full graph edges. Deliberately excludes:
+//   evolution_log — history audit trail
+//   current_assumption — live assumption text
 //   ai_insights[] — counsel engine history
 //   persona data — behavioral profile
-// Safe to share without leaking proprietary architecture.
 // In a multi-user system this must be scoped to the authenticated user —
 // the exported_by field makes ownership explicit for that future.
 
@@ -340,8 +340,10 @@ OAD.parseImportFile = function (jsonString) {
     const parsed = JSON.parse(jsonString);
     const rows = Array.isArray(parsed) ? parsed : (parsed.threads || []);
     if (!Array.isArray(rows)) return { error: 'Invalid format: expected a threads array.' };
-    const deletedUuids = Array.isArray(parsed.deleted_uuids) ? parsed.deleted_uuids : [];
-    const results = { create: [], update: [], close: [], invalid: [] };
+    const deletedUuids     = Array.isArray(parsed.deleted_uuids)      ? parsed.deleted_uuids      : [];
+    const deletedEdgeUuids = Array.isArray(parsed.deleted_edge_uuids) ? parsed.deleted_edge_uuids : [];
+    const importEdges      = Array.isArray(parsed.edges)              ? parsed.edges              : [];
+    const results = { create: [], update: [], close: [], invalid: [], edges: importEdges, deletedEdgeUuids: deletedEdgeUuids };
     // Collect threads to close from deleted_uuids
     deletedUuids.forEach(function (uuid) {
       const existing = OAD.getThreadByUUID(uuid);
@@ -454,8 +456,44 @@ OAD.applyImport = function (results, confirmedUpdates) {
     updated++;
   });
 
+  // Remove edges flagged for deletion
+  (results.deletedEdgeUuids || []).forEach(function (edgeUuid) {
+    (OAD.DB.threads || []).forEach(function (t) {
+      if (t.connections) {
+        t.connections = t.connections.filter(function (c) { return c.uuid !== edgeUuid; });
+      }
+    });
+  });
+
+  // Merge top-level edges — skips duplicates (matched by edge UUID or same from/to/type)
+  var edgesMerged = 0;
+  (results.edges || []).forEach(function (edge) {
+    if (!edge.from_uuid || !edge.to_uuid) return;
+    var fromThread = OAD.getThreadByUUID(edge.from_uuid);
+    if (!fromThread) return;
+    fromThread.connections = fromThread.connections || [];
+    var alreadyExists = fromThread.connections.some(function (c) {
+      return (c.uuid && c.uuid === edge.id) ||
+             (c.to_uuid === edge.to_uuid && c.edge_type === edge.label);
+    });
+    if (!alreadyExists) {
+      fromThread.connections.push({
+        uuid:              edge.id || OAD._generateUUID(),
+        to_uuid:           edge.to_uuid,
+        to_label:          edge.to_label || '',
+        edge_type:         edge.label,
+        auto_generated:    edge.auto_generated    || false,
+        rule:              edge.rule              || null,
+        confidence:        edge.confidence        != null ? edge.confidence : 1.0,
+        confirmed_by_user: edge.confirmed_by_user !== false,
+        created_at:        edge.created_at        || null
+      });
+      edgesMerged++;
+    }
+  });
+
   OAD.saveDB();
-  return { created: created, updated: updated, closed: closed };
+  return { created: created, updated: updated, closed: closed, edges_merged: edgesMerged };
 };
 
 OAD.getDailyToat = function () {
@@ -515,7 +553,7 @@ OAD.getDailyToat = function () {
 };
 
 OAD.exportThreads = function () {
-  OAD._normalizeDB();
+  OAD._normalizeDB(); // ensures all connection UUIDs are backfilled
   OAD.saveDB();
 
   const threads = (OAD.DB.threads || []).map(function (t) {
@@ -540,16 +578,52 @@ OAD.exportThreads = function () {
       effortEstimate:           t.effortEstimate           || null,
       weeklyCommitment:         t.weeklyCommitment         || null,
       effortLogged:             t.effortLogged             || 0,
-      date_push_count:          t.date_push_count          || 0
+      date_push_count:          t.date_push_count          || 0,
+      connections:              (t.connections || []).map(function (c) {
+        return {
+          uuid:              c.uuid,
+          to_uuid:           c.to_uuid,
+          to_label:          c.to_label || '',
+          edge_type:         c.edge_type,
+          auto_generated:    c.auto_generated    || false,
+          rule:              c.rule              || null,
+          confidence:        c.confidence        != null ? c.confidence : 1.0,
+          confirmed_by_user: c.confirmed_by_user !== false,
+          created_at:        c.created_at        || null
+        };
+      })
     };
   });
 
+  // Derive flat top-level edges array for ADE-aware consumers
+  const edges = [];
+  (OAD.DB.threads || []).forEach(function (t) {
+    (t.connections || []).forEach(function (c) {
+      if (!c.to_uuid) return;
+      edges.push({
+        id:                c.uuid,
+        from_uuid:         t.uuid,
+        to_uuid:           c.to_uuid,
+        label:             c.edge_type,
+        to_label:          c.to_label || '',
+        auto_generated:    c.auto_generated    || false,
+        rule:              c.rule              || null,
+        confidence:        c.confidence        != null ? c.confidence : 1.0,
+        confirmed_by_user: c.confirmed_by_user !== false,
+        created_at:        c.created_at        || null
+      });
+    });
+  });
+
   return JSON.stringify({
-    exported_at:   new Date().toISOString(),
-    exported_by:   OAD._userId || 'local',
-    thread_count:  threads.length,
-    note:          'Moat-safe export: graph structure, evolution history, proprietary contingency logic, and assumptions have been omitted.',
-    threads:       threads
+    exported_at:        new Date().toISOString(),
+    exported_by:        OAD._userId || 'local',
+    thread_count:       threads.length,
+    edge_count:         edges.length,
+    note:               'Export includes thread data and graph edges. Evolution history, AI insights, and persona data are omitted.',
+    threads:            threads,
+    edges:              edges,
+    deleted_edge_uuids: []
   }, null, 2);
 };
 
@@ -637,17 +711,21 @@ OAD.ideaOfTheWeek = function () {
 // Ensures all expected arrays exist and all threads have UUIDs.
 // Called after loading from localStorage or Supabase.
 OAD._normalizeDB = function () {
-  OAD.DB.threads  = OAD.DB.threads  || [];
-  OAD.DB.cadences = OAD.DB.cadences || [];
-  OAD.DB.habits   = OAD.DB.habits   || [];
-  OAD.DB.ideas    = OAD.DB.ideas    || [];
-  OAD.DB.proposals = OAD.DB.proposals || [];
-  // Backfill UUIDs and parent_uuid, and normalize/de-dupe life area
+  OAD.DB.threads         = OAD.DB.threads         || [];
+  OAD.DB.cadences        = OAD.DB.cadences        || [];
+  OAD.DB.habits          = OAD.DB.habits          || [];
+  OAD.DB.ideas           = OAD.DB.ideas           || [];
+  OAD.DB.proposals       = OAD.DB.proposals       || [];
+  OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
+  // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
     if (t.date_push_count == null) t.date_push_count = 0;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
+    (t.connections || []).forEach(function (c) {
+      if (!c.uuid) c.uuid = OAD._generateUUID();
+    });
   });
   // Backfill days_of_week for cadences created before weekly-days support existed
   OAD.DB.cadences.forEach(function (c) {
@@ -991,6 +1069,24 @@ OAD._loadFromCloud = async function () {
     console.warn('[OAD] cloud load error:', e);
     return false;
   }
+};
+
+OAD.confirmEdge = function (threadId, edgeUuid) {
+  var t = OAD.getThread(threadId);
+  if (!t) return;
+  var conn = (t.connections || []).find(function (c) { return c.uuid === edgeUuid; });
+  if (conn) { conn.confirmed_by_user = true; OAD.saveDB(); }
+};
+
+OAD.rejectEdge = function (threadId, edgeUuid) {
+  var t = OAD.getThread(threadId);
+  if (!t) return;
+  var conn = (t.connections || []).find(function (c) { return c.uuid === edgeUuid; });
+  if (!conn) return;
+  OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
+  OAD.DB.ade_suppressions.push({ from_uuid: t.uuid, to_uuid: conn.to_uuid, rule: conn.rule || null });
+  t.connections = t.connections.filter(function (c) { return c.uuid !== edgeUuid; });
+  OAD.saveDB();
 };
 
 // Fetches both course seed files and loads them. Call from console: OAD.importCourseData()

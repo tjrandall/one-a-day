@@ -37,7 +37,7 @@ one-a-day/
 │   ├── render.js           # All DOM rendering
 │   └── modals.js           # All modal functions, form handling, auth modals
 ├── tests/
-│   ├── tests.js            # Full test suite (118 tests) + boot functions
+│   ├── tests.js            # Full test suite (111 tests) + boot functions
 │   └── tests.data.js       # Seed data: threads, cadences, habits, ideas
 └── README.md
 
@@ -94,7 +94,7 @@ Every thread has:
 - next_action, next_action_date, next_action_channel, next_action_contact
 - contingency_trigger_date, contingency_action, contingency_escalation
 - deadline (ISO date, optional), effortEstimate, weeklyCommitment, effortLogged
-- connections[] — graph edges: {to_label, edge_type: blocks|enables|relates}
+- connections[] — graph edges: `{uuid, to_uuid, to_label, edge_type: blocks|enables|relates|blocked_by, auto_generated, rule, confidence, confirmed_by_user, created_at}`. Edges with `auto_generated: true` and `confirmed_by_user: false` are ADE-inferred, pending review.
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
 - date_push_count (integer) — tracks how many times the next_action_date has been pushed back
@@ -184,7 +184,9 @@ Located in `js/data.js` and `js/modals.js`. Accessible from the Settings modal.
 ### Export (`OAD.exportThreads()`)
 Moat-safe flat JSON. Includes basic thread attributes (uuid, parent_uuid, title, status, priority, life_area, pressure, closing_condition, next_action, next_action_date, etc.). Calls `_normalizeDB()` + `saveDB()` before building the payload so UUID backfill is always complete.
 
-**Deliberately excludes:** connections[] (the graph is the moat), evolution_log, current_assumption, contingency_action, contingency_escalation, ai_insights[], and persona data.
+**Includes:** per-thread `connections[]` (full edge metadata), top-level `edges[]` (flat list of all edges), `edge_count`, `deleted_edge_uuids: []`.
+
+**Deliberately excludes:** evolution_log, current_assumption, contingency_action, contingency_escalation, ai_insights[], and persona data.
 
 Includes `exported_by: user_id` — ownership-stamped for future multi-user scoping.
 
@@ -197,7 +199,32 @@ Accepts the same JSON format. Matching priority: **(1)** UUID match — `row.uui
 - Row with unknown or absent UUID → create
 - Evolution log is always appended, never overwritten; deduped by date+note
 
-`applyImport()` re-looks up each thread by UUID at apply time, not from stored references, to avoid stale-reference bugs.
+`applyImport()` re-looks up each thread by UUID at apply time, not from stored references, to avoid stale-reference bugs. Returns `{ created, updated, closed, edges_merged }`. Processes `deleted_edge_uuids` and merges top-level `edges[]` into thread `connections[]`.
+
+---
+
+## Auto-Dependency Engine (ADE) — LIVE
+Located in `js/engine.js`. Runs automatically at boot via `_finishBoot()` and after every import.
+
+### Key Data
+- `OAD.DB.ade_suppressions[]` — `{from_uuid, to_uuid, rule}` pairs. Edges in this list are never re-created by ADE. Populated when user rejects an ADE suggestion.
+- Per-thread `connections[]`: ADE-inferred edges have `auto_generated: true`, `confirmed_by_user: false` until user reviews.
+
+### Three Rules
+- **ADE-001** `_ade001_sequential()` — Groups open threads by course prefix (`^(.*?)\bWeek\s+(\d+)\b`). Creates `Week N → blocks → Week N+1` (consecutive only). Finals (`\b(final exam|finals|final)\b`) blocked by all weeks in the group. Confidence: 0.97.
+- **ADE-002** `_ade002_parentChild()` — For every thread with `parent_uuid`: parent `enables` child. Confidence: 1.0.
+- **ADE-003** `_ade003_sharedIdentifier()` — Extracts shared identifier (`\b([A-Z]{2,5}[-\s][A-Z0-9]{2,})\b`) from titles. Prep verbs (build/draft/prepare/review/create/write/complete) block submit verbs (submit/apply/send/deliver/file/upload). Confidence: 0.92.
+
+### Key Functions
+- `OAD._adeAddEdge(from, to, edgeType, rule, confidence)` — checks suppressions + dedup before creating; returns bool
+- `OAD.runADE()` — runs all three rules, calls `saveDB()` if any edge created, returns total count
+- `OAD.confirmEdge(threadId, edgeUuid)` — sets `confirmed_by_user: true` on edge
+- `OAD.rejectEdge(threadId, edgeUuid)` — removes edge from thread, adds to `ade_suppressions`
+
+### UI
+- Graph card in detail view: "N pending" badge when unconfirmed ADE edges exist; "⚡ Review AI suggestions" button
+- `OAD.openGraphIntelligencePanel(threadId)` in `js/modals.js` — shows each unconfirmed edge with Confirm/Reject buttons
+- Rejecting an edge suppresses it permanently (won't re-appear unless suppression is manually removed)
 
 ---
 

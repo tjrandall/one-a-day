@@ -183,6 +183,13 @@ OAD.renderDetail = function (id) {
   const relatesRows   = gctx.relates.map(function (e)   { return graphRow('~', e.label, e.thread); });
 
   const allRows = blockedByRows.concat(blocksRows).concat(enablesRows).concat(relatesRows);
+  const unconfirmedCount = (t.connections || []).filter(function (c) { return c.auto_generated && !c.confirmed_by_user; }).length;
+  const unconfirmedBadge = unconfirmedCount
+    ? '<span style="display:inline-block;background:var(--accent);color:#fff;font-size:10px;font-weight:700;border-radius:10px;padding:1px 7px;margin-left:8px;vertical-align:middle">' + unconfirmedCount + ' pending</span>'
+    : '';
+  const reviewBtn = unconfirmedCount
+    ? '<button class="ghost mt-8" style="font-size:12px;padding:5px 10px;color:var(--accent);border-color:var(--accent)" onclick="OAD.openGraphIntelligencePanel(' + t.id + ')">⚡ Review AI suggestions</button>'
+    : '';
   const connectionsHtml = allRows.length
     ? '<div class="graph-legend">' +
         (blockedByRows.length  ? '<span class="graph-legend-item"><span class="graph-row-icon">←</span> blocked by</span>' : '') +
@@ -308,9 +315,12 @@ OAD.renderDetail = function (id) {
     </div>
 
     <div class="card graph-card">
-      <div class="card-title">${OAD.esc(OAD.t('graph'))}</div>
+      <div class="card-title">${OAD.esc(OAD.t('graph'))}${unconfirmedBadge}</div>
       ${connectionsHtml}
-      <button class="ghost mt-8" style="font-size:12px;padding:5px 10px" onclick="OAD.openConnectionModal(${t.id})">+ Add Connection</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="ghost mt-8" style="font-size:12px;padding:5px 10px" onclick="OAD.openConnectionModal(${t.id})">+ Add Connection</button>
+        ${reviewBtn}
+      </div>
     </div>
 
     <div class="card">
