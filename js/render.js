@@ -1225,7 +1225,7 @@ OAD.renderDailyView = function () {
           '<span class="focus-label">FOCUS NOW</span>' +
           '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
         '</div>' +
-        '<div class="focus-title">' + OAD.esc(focusThread.title) + '</div>' +
+        '<div class="focus-title">' + OAD.esc(focusThread.title.replace(new RegExp(`^\\[${OAD._demoRole.replace(/[0-9 ]/g, '').trim()}\\].*? `), '')) + '</div>' +
         '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
         '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
         (focusThread.next_action
@@ -1268,7 +1268,8 @@ OAD.renderDailyView = function () {
       var threadCount  = active.filter(function (t) { return t.next_action_date === dayStr; }).length;
       var cadenceCount = cads.filter(function (c)  { return c.next_due === dayStr; }).length;
       var total = threadCount + cadenceCount;
-      var label    = total >= 3 ? 'Heavy' : total === 2 ? 'Busy' : 'Clear';
+      var labelKey = total >= 3 ? 'heavy' : total === 2 ? 'busy' : 'clear';
+      var label    = total >= 3 ? OAD.t('heavy', 'Heavy') : total === 2 ? OAD.t('busy', 'Busy') : OAD.t('clear', 'Clear');
       var labelCls = total >= 3 ? 'load-row-heavy' : total === 2 ? 'load-row-busy' : 'load-row-clear';
       var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       
@@ -1322,9 +1323,15 @@ OAD.renderDailyView = function () {
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls = OAD.pressureClass(avgPressure);
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
-  const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
+  let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
     ? OAD.formatDate(persona.life_context.hard_deadline) 
     : '—';
+    
+  if (hardDeadlineStr === '—' && window.OAD && OAD._demoRole) {
+    const endOfQuarter = new Date();
+    endOfQuarter.setMonth(Math.floor(endOfQuarter.getMonth() / 3) * 3 + 3, 0); // Last day of current quarter
+    hardDeadlineStr = OAD.formatDate(endOfQuarter.toISOString().slice(0,10));
+  }
 
   // ── Render HTML to panel ──────────────────────────────────────────
   panel.innerHTML =
@@ -1852,7 +1859,9 @@ OAD.renderGraphView = function () {
   var activeArea = OAD._activeGraphArea || 'All Areas';
   var activeLayout = OAD._activeGraphLayout || 'cose';
   
-  var areas = ["All Areas", "Career", "Finance", "Health", "Relationships", "Education", "Housing", "Legal", "Personal Growth"];
+  var dynamicAreas = new Set();
+  (OAD.DB.threads || []).forEach(t => { if (t.life_area && t.status !== 'closed') dynamicAreas.add(t.life_area); });
+  var areas = ["All Areas"].concat(Array.from(dynamicAreas).sort());
   var areaOptionsHtml = areas.map(function (a) {
     var sel = a === activeArea ? ' selected' : '';
     return '<option value="' + a + '"' + sel + '>' + a + '</option>';

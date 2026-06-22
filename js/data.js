@@ -527,7 +527,7 @@ OAD.getDailyToat = function () {
     }
   }
 
-  const allThreads = OAD.DB.threads || [];
+  const allThreads = OAD.getVisibleThreads() || [];
   
   const stalled = allThreads.filter(t => t.status === 'stalled');
   const overdueWaiting = allThreads.filter(t => {
