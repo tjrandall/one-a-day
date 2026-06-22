@@ -1,5 +1,7 @@
-# Demo credentials — never commit real passwords
+# Demo credentials & fingerprints — never commit real passwords
 js/demo.config.js
+js/demo_boot.js
+js/supabase-client.js
 
 # OS
 .DS_Store

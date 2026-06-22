@@ -46,6 +46,18 @@
 <script src="js/supabase-client.js?v=17"></script>
 <!-- Demo credentials — gitignored, absent in prod/local dev. Silent no-op if file not present. -->
 <script>window.OAD = window.OAD || {}; OAD.DemoConfig = null;</script>
+<script src="js/demo_boot.js" onerror="void 0"></script>
+<script>
+  // Automatic Client State Wipe (Demo/Fresh Instance Detection)
+  if (typeof OAD.BootID !== 'undefined') {
+    if (localStorage.getItem('oad_boot_id') !== OAD.BootID) {
+      console.log('✨ New instance fingerprint detected. Wiping previous state.');
+      localStorage.clear();
+      sessionStorage.clear();
+      localStorage.setItem('oad_boot_id', OAD.BootID);
+    }
+  }
+</script>
 <script src="js/demo.config.js" onerror="void 0"></script>
 <script src="js/config.js?v=17"></script>
 <script src="js/data.js?v=17"></script>
