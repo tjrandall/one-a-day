@@ -380,6 +380,33 @@ OAD._acceptPersonaUpdate = function (encodedLesson) {
   OAD.closeModal();
 };
 
+OAD.openHealthPanel = function () {
+  // Phase 1 stub — UI design TBD. Badge is live; panel opens here.
+  var alerts = (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
+  if (!alerts.length) {
+    OAD.openModal('<h2>Health</h2><p class="text-muted text-sm" style="margin-top:16px">No configuration issues detected.</p><div class="modal-footer"><button class="secondary" onclick="OAD.closeModal()">Close</button></div>');
+    return;
+  }
+  // Temporary list view until full Health Panel UI is designed
+  var rows = alerts.map(function (a) {
+    var color = a.severity === 'CRITICAL' ? 'var(--danger,#e53e3e)' : a.severity === 'WARNING' ? '#d97706' : 'var(--text-muted)';
+    return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:' + color + ';margin-bottom:4px">' + OAD.esc(a.severity) + ' · ' + OAD.esc(a.type) + '</div>' +
+      '<div style="font-size:13px;font-weight:600;margin-bottom:2px">' + OAD.esc(a.thread_title) + '</div>' +
+      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + OAD.esc(a.description) + '</div>' +
+      '<div style="display:flex;gap:8px">' +
+        '<button class="ghost" style="font-size:11px;padding:3px 10px" onclick="OAD.dismissHealthAlert(\'' + a.id + '\');OAD._updateCHEBadge();OAD.openHealthPanel()">Dismiss</button>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+  OAD.openModal(
+    '<h2>Health</h2>' +
+    '<p class="text-muted text-sm" style="margin-bottom:12px">' + alerts.length + ' active issue' + (alerts.length === 1 ? '' : 's') + ' — full Health Panel UI coming in Phase 1.</p>' +
+    rows +
+    '<div class="modal-footer"><button class="secondary" onclick="OAD.closeModal()">Close</button></div>'
+  );
+};
+
 OAD.openGraphIntelligencePanel = function (threadId) {
   var t = OAD.getThread(threadId);
   if (!t) return;
@@ -970,11 +997,14 @@ OAD._confirmImport = function () {
   const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates);
   OAD._pendingImport = null;
   const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
+  const cheCount = typeof OAD.runCHE === 'function' ? OAD.runCHE() : 0;
+  OAD._updateCHEBadge();
   OAD.closeModal();
   OAD.refreshActiveView();
   var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
   if (result.edges_merged > 0) msg += ', ' + result.edges_merged + ' edges restored';
   if (adeCount > 0) msg += ', ' + adeCount + ' AI edges inferred';
+  if (cheCount > 0) msg += '. ⚠ ' + cheCount + ' configuration issue' + (cheCount === 1 ? '' : 's') + ' found — review in Health Panel';
   alert(msg + '.');
 };
 

@@ -1655,6 +1655,22 @@ OAD._dailyCheckIn = function (id, done) {
   OAD.refreshActiveView();
 };
 
+// ── CHE Badge ─────────────────────────────────────────────────────────
+
+OAD._updateCHEBadge = function () {
+  var badge = document.getElementById('che-badge');
+  if (!badge) return;
+  var alerts = (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
+  var criticals = alerts.filter(function (a) { return a.severity === 'CRITICAL'; });
+  if (!alerts.length) {
+    badge.style.display = 'none';
+    return;
+  }
+  badge.style.display = 'inline-flex';
+  badge.textContent = (criticals.length ? '⚠ ' : 'ℹ ') + alerts.length + ' issue' + (alerts.length === 1 ? '' : 's');
+  badge.style.color = criticals.length ? 'var(--danger, #e53e3e)' : 'var(--text-muted)';
+};
+
 // ── Graph Visualizer Implementation ───────────────────────────────────
 
 OAD.highlightNav = function (actionName) {

@@ -1232,6 +1232,12 @@ OAD._finishBoot = function () {
     OAD.runADE();
   }
 
+  if (typeof OAD.runCHE === 'function') {
+    OAD.runCHE();
+  }
+
+  OAD._updateCHEBadge();
+
   if (typeof OAD.checkDailyIntercept === 'function') {
     OAD.checkDailyIntercept();
   }

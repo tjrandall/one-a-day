@@ -82,6 +82,12 @@ OAD.getVisibleThreads = function() {
   return threads;
 };
 
+OAD._afterSaveCallbacks = [];
+
+OAD._runAfterSave = function (thread) {
+  OAD._afterSaveCallbacks.forEach(function (cb) { try { cb(thread); } catch (e) { console.warn('_afterSave callback error:', e); } });
+};
+
 OAD.addThread = function (thread) {
   thread.id = OAD.nextId();
   thread.evolution_log  = thread.evolution_log  || [];
@@ -89,6 +95,7 @@ OAD.addThread = function (thread) {
   thread.connections    = thread.connections    || [];
   OAD.DB.threads.push(thread);
   OAD.saveDB();
+  OAD._runAfterSave(thread);
   return thread;
 };
 
@@ -97,6 +104,7 @@ OAD.updateThread = function (id, patch) {
   if (!t) return null;
   Object.assign(t, patch);
   OAD.saveDB();
+  OAD._runAfterSave(t);
   return t;
 };
 
@@ -152,6 +160,7 @@ OAD.makeThread = function (overrides) {
     effortEstimate: null,
     weeklyCommitment: null,
     effortLogged: 0,
+    lead_time_days: null,
     connections: [],
     parent_uuid: null,
     evolution_log: [],
@@ -385,7 +394,7 @@ OAD._IMPORT_FIELDS = [
   'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
   'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
-  'connections', 'parent_uuid', 'date_push_count', 'metadata'
+  'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata'
 ];
 
 OAD.applyImport = function (results, confirmedUpdates) {
@@ -714,15 +723,17 @@ OAD.ideaOfTheWeek = function () {
 // Ensures all expected arrays exist and all threads have UUIDs.
 // Called after loading from localStorage or Supabase.
 OAD._normalizeDB = function () {
-  OAD.DB.threads         = OAD.DB.threads         || [];
-  OAD.DB.cadences        = OAD.DB.cadences        || [];
-  OAD.DB.habits          = OAD.DB.habits          || [];
-  OAD.DB.ideas           = OAD.DB.ideas           || [];
-  OAD.DB.proposals       = OAD.DB.proposals       || [];
+  OAD.DB.threads          = OAD.DB.threads          || [];
+  OAD.DB.cadences         = OAD.DB.cadences         || [];
+  OAD.DB.habits           = OAD.DB.habits           || [];
+  OAD.DB.ideas            = OAD.DB.ideas            || [];
+  OAD.DB.proposals        = OAD.DB.proposals        || [];
   OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
-  // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area
+  OAD.DB.health_alerts    = OAD.DB.health_alerts    || [];
+  // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area, null titles
   OAD.DB.threads.forEach(function (t) {
     if (!t.uuid) t.uuid = OAD._generateUUID();
+    if (!t.title) t.title = '';
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
     if (t.date_push_count == null) t.date_push_count = 0;
     t.life_area = OAD.normalizeLifeArea(t.life_area);

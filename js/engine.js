@@ -555,6 +555,7 @@ OAD._ade001_sequential = function () {
 
   var groups = {};
   open.forEach(function (t) {
+    if (!t.title) return;
     var m = t.title.match(weekPat);
     if (!m) return;
     var prefix = m[1].replace(/[-—:\s]+$/, '').trim().toLowerCase();
@@ -563,6 +564,7 @@ OAD._ade001_sequential = function () {
     groups[prefix].weeks.push({ thread: t, n: parseInt(m[2], 10) });
   });
   open.forEach(function (t) {
+    if (!t.title) return;
     if (!finalPat.test(t.title)) return;
     Object.keys(groups).forEach(function (prefix) {
       if (t.title.toLowerCase().indexOf(prefix) !== -1) {
@@ -611,6 +613,7 @@ OAD._ade003_sharedIdentifier = function () {
 
   var byId = {};
   open.forEach(function (t) {
+    if (!t.title) return;
     var re = new RegExp(ID_PAT.source, 'g'), m;
     while ((m = re.exec(t.title)) !== null) {
       var key = m[1].replace(/\s/g, '-').toUpperCase();
@@ -643,3 +646,178 @@ OAD.runADE = function () {
   if (created > 0) OAD.saveDB();
   return created;
 };
+
+// ── Configuration Health Engine (CHE) ────────────────────────────────
+// Detects thread misconfiguration silently undermining pressure/scheduling.
+// Phase 1: detection only (no auto-fix). Auto-fix is Phase 2.
+
+OAD.CHE_LEAD_DAYS = {
+  'Education':  5,
+  'Job Search': 3,
+  'Health':     2,
+  'Career':     4,
+  'Finances':   3
+};
+
+OAD._parseNaturalDate = function (str) {
+  if (!str) return null;
+  if (typeof OAD.Mailroom === 'undefined' || typeof OAD.Mailroom.parseText !== 'function') return null;
+  var results = OAD.Mailroom.parseText(str);
+  return (results.dates && results.dates[0]) || null;
+};
+
+OAD._cheLeadDays = function (thread) {
+  if (thread.lead_time_days != null) return thread.lead_time_days;
+  return OAD.CHE_LEAD_DAYS[thread.life_area] || 3;
+};
+
+OAD._cheTitleSimilarity = function (a, b) {
+  var normalize = function (s) { return s.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean); };
+  var wa = normalize(a), wb = normalize(b);
+  var setA = {}, setB = {};
+  wa.forEach(function (w) { setA[w] = true; });
+  wb.forEach(function (w) { setB[w] = true; });
+  var intersection = 0;
+  Object.keys(setA).forEach(function (w) { if (setB[w]) intersection++; });
+  var union = Object.keys(setA).length + Object.keys(setB).length - intersection;
+  return union === 0 ? 1 : intersection / union;
+};
+
+OAD._makeHealthAlert = function (thread, severity, type, description, autoFixable, suggestedFix) {
+  return {
+    id:            OAD._generateUUID(),
+    thread_uuid:   thread.uuid,
+    thread_title:  thread.title,
+    severity:      severity,
+    type:          type,
+    description:   description,
+    detected_at:   new Date().toISOString(),
+    auto_fixable:  !!autoFixable,
+    suggested_fix: suggestedFix || null,
+    dismissed:     false,
+    dismissed_at:  null
+  };
+};
+
+// CHE-001: Null deadline on thread whose closing_condition or title contains a parseable date.
+OAD._che001_nullDeadline = function (thread) {
+  if (thread.deadline || thread.status === 'closed') return null;
+  var dateStr = OAD._parseNaturalDate(thread.closing_condition) || OAD._parseNaturalDate(thread.title);
+  if (!dateStr) return null;
+  return OAD._makeHealthAlert(
+    thread, 'CRITICAL', 'CHE-001',
+    'Deadline missing — "' + dateStr + '" was found in the thread but deadline is not set. The pressure algorithm is flying blind.',
+    true,
+    { uuid: thread.uuid, fields: { deadline: dateStr }, patch_source: 'CHE_AUTO_FIX', patch_rule: 'CHE-001', patch_applied_at: null }
+  );
+};
+
+// CHE-002: next_action_date equals deadline — zero lead time.
+OAD._che002_noLeadTime = function (thread) {
+  if (!thread.deadline || thread.status === 'closed') return null;
+  if (!thread.next_action_date) return null;
+  if (thread.next_action_date !== thread.deadline) return null;
+  var leadDays = OAD._cheLeadDays(thread);
+  var dl = new Date(thread.deadline);
+  dl.setDate(dl.getDate() - leadDays);
+  var suggested = dl.toISOString().slice(0, 10);
+  return OAD._makeHealthAlert(
+    thread, 'CRITICAL', 'CHE-002',
+    'No lead time — next action is set to the deadline itself (' + thread.deadline + '). Thread will surface the day it\'s due with zero working time.',
+    true,
+    { uuid: thread.uuid, fields: { next_action_date: suggested }, patch_source: 'CHE_AUTO_FIX', patch_rule: 'CHE-002', patch_applied_at: null }
+  );
+};
+
+// CHE-006: Stale next_action_date — past date on open thread that still has a future deadline.
+OAD._che006_staleNextAction = function (thread, todayStr) {
+  if (thread.status !== 'open') return null;
+  if (!thread.next_action_date) return null;
+  if (thread.next_action_date >= todayStr) return null;
+  if (thread.deadline && thread.deadline < todayStr) return null; // CHE-003 territory
+  return OAD._makeHealthAlert(
+    thread, 'WARNING', 'CHE-006',
+    'Stale next action — "' + thread.next_action_date + '" is in the past. Thread shows as permanently overdue, eroding trust in the overdue signal.',
+    true,
+    { uuid: thread.uuid, fields: { next_action_date: todayStr }, patch_source: 'CHE_AUTO_FIX', patch_rule: 'CHE-006', patch_applied_at: null }
+  );
+};
+
+// CHE-010: Duplicate or near-duplicate open/waiting thread titles (>85% Jaccard similarity).
+OAD._che010_duplicateTitles = function (threads) {
+  var alerts = [];
+  var active = threads.filter(function (t) { return t.status === 'open' || t.status === 'waiting'; });
+  var seen = {};
+  for (var i = 0; i < active.length; i++) {
+    for (var j = i + 1; j < active.length; j++) {
+      var a = active[i], b = active[j];
+      if (!a.title || !b.title) continue;
+      if (OAD._cheTitleSimilarity(a.title, b.title) >= 0.85) {
+        var key = [a.uuid, b.uuid].sort().join('|');
+        if (seen[key]) continue;
+        seen[key] = true;
+        alerts.push(OAD._makeHealthAlert(
+          a, 'INFO', 'CHE-010',
+          'Possible duplicate — "' + a.title + '" and "' + b.title + '" are ' +
+            Math.round(OAD._cheTitleSimilarity(a.title, b.title) * 100) + '% similar. Review both: ' + b.uuid,
+          false, null
+        ));
+      }
+    }
+  }
+  return alerts;
+};
+
+OAD.runCHE = function () {
+  var threads = OAD.DB.threads || [];
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var todayStr = today.toISOString().slice(0, 10);
+
+  // Keep existing dismissed alerts; replace non-dismissed ones fresh each run.
+  var dismissed = (OAD.DB.health_alerts || []).filter(function (a) { return a.dismissed; });
+  var fresh = [];
+
+  threads.forEach(function (t) {
+    var a;
+    a = OAD._che001_nullDeadline(t);  if (a) fresh.push(a);
+    a = OAD._che002_noLeadTime(t);    if (a) fresh.push(a);
+    a = OAD._che006_staleNextAction(t, todayStr); if (a) fresh.push(a);
+  });
+
+  OAD._che010_duplicateTitles(threads).forEach(function (a) { fresh.push(a); });
+
+  OAD.DB.health_alerts = dismissed.concat(fresh);
+  OAD.saveDB();
+  return fresh.length;
+};
+
+OAD.dismissHealthAlert = function (alertId) {
+  var alert = (OAD.DB.health_alerts || []).find(function (a) { return a.id === alertId; });
+  if (!alert) return;
+  alert.dismissed = true;
+  alert.dismissed_at = new Date().toISOString();
+  OAD.saveDB();
+};
+
+OAD.applyHealthAlertFix = function (alertId) {
+  var alert = (OAD.DB.health_alerts || []).find(function (a) { return a.id === alertId; });
+  if (!alert || !alert.auto_fixable || !alert.suggested_fix) return false;
+  var fix = alert.suggested_fix;
+  var thread = OAD.DB.threads.find(function (t) { return t.uuid === fix.uuid; });
+  if (!thread) return false;
+  Object.assign(thread, fix.fields);
+  fix.patch_applied_at = new Date().toISOString();
+  OAD.addEvolution(thread.id, '[CHE auto-fix ' + alert.type + '] ' + alert.description);
+  alert.dismissed = true;
+  alert.dismissed_at = new Date().toISOString();
+  OAD.saveDB();
+  return true;
+};
+
+// Register per-thread CHE check on create/update
+OAD._afterSaveCallbacks.push(function (thread) {
+  if (typeof OAD.runCHE !== 'function') return;
+  // Debounce: defer to next tick so bulk operations don't thrash
+  clearTimeout(OAD._cheDebounce);
+  OAD._cheDebounce = setTimeout(function () { OAD.runCHE(); OAD._updateCHEBadge(); }, 50);
+});
