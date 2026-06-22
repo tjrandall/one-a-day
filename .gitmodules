@@ -1,9 +1,9 @@
 [submodule "modules/health"]
 	path = modules/health
-	url = /home/tjrandall/code/fq-health
+	url = https://github.com/tjrandall/fq-health.git
 [submodule "modules/cic"]
 	path = modules/cic
-	url = /home/tjrandall/code/fq-cic
+	url = https://github.com/tjrandall/fq-cic.git
 [submodule "modules/demo"]
 	path = modules/demo
-	url = /home/tjrandall/code/fq-demo
+	url = https://github.com/tjrandall/fq-demo.git

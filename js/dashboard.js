@@ -87,7 +87,7 @@ OAD.maskName = function(fullName, role) {
 OAD._demoRole = 'CCO';
 OAD.changeDemoRole = function(role) {
   if (role === 'Operations (CIC)') {
-    window.location.href = 'fq-cic/index.html';
+    window.location.href = 'modules/cic/index.html';
     return;
   }
   OAD._demoRole = role;
