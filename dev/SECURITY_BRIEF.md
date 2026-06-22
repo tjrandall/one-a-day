@@ -19,12 +19,11 @@ Each item has a status checkbox, severity, location, and fix direction.
 
 ## Sprint 1 — Demo-Safe (do these first)
 
-### [ ] CRIT-02: Remove hardcoded credentials
+### [x] CRIT-02: Remove hardcoded credentials ✅ DONE June 22, 2026
 **Severity:** CRITICAL  
 **File:** `js/modals.js:1752–1779`  
-**Risk:** `admin`/`gowiththeflow` and three demo account pairs (`executive`/`daboss`, `director`/`showboat`, `counselor 1`/`worker`) are in cleartext in source code served to every browser. Anyone with DevTools has permanent admin bypass. This is a reportable breach vector under HIPAA.  
-**Fix:** Delete all hardcoded credential checks. Demo accounts must be real Supabase auth users. If demo mode is needed, it should be toggled by a Supabase-managed flag on the user record, not a password string in JS.  
-**Effort:** 30 min
+**Resolution:** Credentials moved to `js/demo.config.js` (gitignored, local-only). `modals.js` now reads from `OAD.DemoConfig` — if the file is absent, login blocks silently skip and fall through to real Supabase auth. `index.html` loads the file optionally with `onerror="void 0"`.  
+**Note:** Credentials removed from HEAD but still present in git history prior to commit `8b9b38f`. See Sprint 3 item below for full history scrub.
 
 ---
 
@@ -121,6 +120,28 @@ Each item has a status checkbox, severity, location, and fix direction.
 ---
 
 ## Sprint 3 — Clinical Pilot (HIPAA minimum)
+
+### [ ] SEC-01: Scrub credential history from git
+**Severity:** HIGH (required before open-sourcing or enterprise handoff)  
+**Context:** Demo credentials (`gowiththeflow`, `daboss`, `showboat`, `worker`) were removed from source in commit `8b9b38f` (June 22, 2026) but remain in git history prior to that commit. Any `git log -p` or `git show` on earlier commits reveals them.  
+**Risk:** Low for now (demo-only passwords, local server). Becomes a compliance issue if the repo is ever open-sourced, transferred to an enterprise customer, or audited.  
+**Fix:** Use [BFG Repo Cleaner](https://rtyley.github.io/bfg-repo-cleaner/) — faster and safer than `git filter-branch`:
+```bash
+# 1. Mirror clone the repo
+git clone --mirror https://github.com/tjrandall/one-a-day.git
+
+# 2. Run BFG to strip the passwords from all history
+java -jar bfg.jar --replace-text passwords.txt one-a-day.git
+
+# 3. Clean up and force-push
+cd one-a-day.git && git reflog expire --expire=now --all && git gc --prune=now --aggressive
+git push --force
+```
+`passwords.txt` contains one password per line. All collaborators must re-clone after the force-push.  
+**Effort:** 1 hour  
+**Prerequisite:** Coordinate with any other contributors; force-push rewrites history for everyone.
+
+---
 
 ### [ ] CRIT-04: Remove PHI from localStorage
 **Severity:** CRITICAL  
