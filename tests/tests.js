@@ -1226,6 +1226,11 @@ OAD._bootAfterAuth = async function () {
 OAD._finishBoot = function () {
   const theme = (OAD.DB.persona && OAD.DB.persona.theme) || 'dark';
   document.body.setAttribute('data-theme', theme);
+  
+  if (typeof OAD.renderHeaderActions === 'function') {
+    OAD.renderHeaderActions();
+  }
+  
   OAD.renderDailyView();
 
   if (typeof OAD.runADE === 'function') {
@@ -1776,6 +1781,13 @@ OAD.test('rejectEdge: removes edge and adds to ade_suppressions', function () {
 });
 
 OAD.boot = async function () {
+  if (window.location.search.includes('reset=true')) {
+    localStorage.clear();
+    sessionStorage.clear();
+    window.location.href = window.location.pathname;
+    return;
+  }
+  
   await OAD.loadLanguage();
 
   if (location.search.includes('tests=true')) {

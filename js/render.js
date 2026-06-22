@@ -2,6 +2,43 @@ window.OAD = window.OAD || {};
 
 OAD._activeId = null;
 
+OAD.renderHeaderActions = function () {
+  const header = document.querySelector('.header-actions');
+  if (header && header.children.length === 0) {
+    header.innerHTML = `
+      <div class="nav-dropdown">
+        <button class="ghost" style="font-weight:600" data-i18n="views">Views</button>
+        <div class="nav-dropdown-content">
+          <button onclick="OAD.renderDailyView()" data-i18n="dailySummary">Daily Summary</button>
+          <button onclick="OAD.renderListView()" data-i18n="list">List</button>
+          <button onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
+          <button onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
+          <button id="nav-graph-btn" onclick="OAD.renderGraphView()" data-i18n="graph">Graph</button>
+        </div>
+      </div>
+      
+      <div class="nav-dropdown">
+        <button class="ghost" style="font-weight:600" data-i18n="queues">Queues</button>
+        <div class="nav-dropdown-content">
+          <button onclick="OAD.renderIdeaPanel()" data-i18n="ideas">Ideas</button>
+          <button onclick="OAD.renderHabitPanel()" data-i18n="habits">Habits</button>
+          <button onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
+          <button onclick="OAD.renderProposalsPanel()" data-i18n="proposals">Proposals</button>
+          <button onclick="OAD.openMailroomModal()" style="color:var(--accent);font-weight:600" data-i18n="scanMail">📥 Scan Mail</button>
+        </div>
+      </div>
+
+      <button class="ghost" onclick="OAD.renderCommandCenter()" style="font-weight:600;color:var(--primary)" data-i18n="myTeam">My Team</button>
+      <button class="ghost" onclick="OAD.openSettingsModal()" data-i18n="settings">Settings</button>
+      <button id="che-badge" class="ghost" onclick="OAD.openHealthPanel()" style="display:none;font-size:12px;padding:4px 10px;font-weight:600"></button>
+    `;
+    if (typeof OAD.translateDOM === 'function') {
+      OAD.translateDOM();
+    }
+  }
+};
+
+
 OAD.renderList = function () {
   const query   = (document.getElementById('search-input')?.value || '').toLowerCase();
   const threads = OAD.getVisibleThreads()

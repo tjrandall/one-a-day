@@ -33,8 +33,9 @@ OAD.normalizeLifeArea = function (area) {
 
 OAD.loadLanguage = async function(locale) {
   const selectedLocale = locale || OAD.Config.currentLocale || 'en';
+  const basePath = OAD.Config.basePath || '.';
   try {
-    const response = await fetch(`./locales/${selectedLocale}.json`);
+    const response = await fetch(`${basePath}/locales/${selectedLocale}.json`);
     if (!response.ok) throw new Error('Locale not found');
     OAD.TranslationCache = await response.json();
     OAD.Config.currentLocale = selectedLocale;
@@ -43,7 +44,7 @@ OAD.loadLanguage = async function(locale) {
   } catch (err) {
     console.warn(`Could not load locale "${selectedLocale}", falling back to English.`, err);
     try {
-      const fbResponse = await fetch('./locales/en.json');
+      const fbResponse = await fetch(`${basePath}/locales/en.json`);
       if (!fbResponse.ok) throw new Error('Fallback locale not found');
       OAD.TranslationCache = await fbResponse.json();
       OAD.Config.currentLocale = 'en';
@@ -66,8 +67,8 @@ OAD.translateDOM = function() {
   });
 };
 
-OAD.t = function(key) {
-  return OAD.TranslationCache[key] || key;
+OAD.t = function(key, fallback) {
+  return OAD.TranslationCache[key] || fallback || key;
 };
 
 // Check if current user is SuperAdmin

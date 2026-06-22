@@ -1199,10 +1199,19 @@ OAD._saveSettings = async function () {
 OAD._updateDemoIndicator = function() {
   const brand = document.querySelector('.fq-navbar-brand');
   if (!brand) return;
+  const existingSpan = brand.querySelector('.demo-indicator');
   if (OAD.Config.demoMode) {
-    brand.innerHTML = '<img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;"><span style="font-size: 12px; font-weight: 800; color: var(--fq-text-muted); margin-left: 12px; opacity: 0.7; padding-top:4px; letter-spacing:1px;">DEMO</span>';
+    if (!existingSpan) {
+      const span = document.createElement('span');
+      span.className = 'demo-indicator';
+      span.style.cssText = "font-size: 12px; font-weight: 800; color: var(--fq-text-muted); margin-left: 12px; opacity: 0.7; padding-top:4px; letter-spacing:1px;";
+      span.textContent = 'DEMO';
+      brand.appendChild(span);
+    }
   } else {
-    brand.innerHTML = '<img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;">';
+    if (existingSpan) {
+      existingSpan.remove();
+    }
   }
 };
 
