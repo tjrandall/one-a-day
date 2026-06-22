@@ -10,6 +10,7 @@ OAD.DB = {
   proposals: [],
   toat: [],
   ade_suppressions: [],
+  health_alerts: [],
 
   persona: {
     last_proactive_scan: null,
@@ -384,7 +385,7 @@ OAD._IMPORT_FIELDS = [
   'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
   'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
-  'connections', 'parent_uuid', 'date_push_count'
+  'connections', 'parent_uuid', 'date_push_count', 'metadata'
 ];
 
 OAD.applyImport = function (results, confirmedUpdates) {
@@ -422,6 +423,7 @@ OAD.applyImport = function (results, confirmedUpdates) {
       weeklyCommitment:         row.weeklyCommitment         || null,
       effortLogged:             row.effortLogged             || 0,
       date_push_count:          row.date_push_count          || 0,
+      metadata:                 row.metadata                 || {},
       connections:              row.connections              || []
     });
     const added = OAD.addThread(t);
@@ -579,6 +581,7 @@ OAD.exportThreads = function () {
       weeklyCommitment:         t.weeklyCommitment         || null,
       effortLogged:             t.effortLogged             || 0,
       date_push_count:          t.date_push_count          || 0,
+      metadata:                 t.metadata                 || {},
       connections:              (t.connections || []).map(function (c) {
         return {
           uuid:              c.uuid,

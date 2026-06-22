@@ -2,38 +2,7 @@ window.OAD = window.OAD || {};
 
 OAD._demoClients = null;
 
-OAD.loadDemoCsv = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const text = e.target.result;
-    const lines = text.split('\n').filter(l => l.trim() !== '');
-    if (lines.length < 2) return;
-    const headers = lines[0].split(',').map(h => h.trim());
-    const clients = [];
-    for (let i = 1; i < lines.length; i++) {
-      const parts = lines[i].split(',');
-      if (parts.length < headers.length) continue;
-      clients.push({
-        name: parts[0],
-        counselor: parts[1],
-        projected_days: parseInt(parts[2]) || 0,
-        total_planned_days: parseInt(parts[3]) || 0,
-        check_in_date: parts[4],
-        first_paperwork_due_date: parts[5],
-        first_paperwork_completed_date: parts[6],
-        checkout_date: parts[9],
-        checkout_type: parts[10],
-        total_stay_days: parseInt(parts[11]) || 0,
-        notes: parts[12] || ''
-      });
-    }
-    OAD._demoClients = clients;
-    OAD._seedDemoThreads(clients);
-  };
-  reader.readAsText(file);
-};
+// Removed CSV loader logic. Data is now loaded via Settings > Import JSON.
 
 OAD._seedDemoThreads = async function(clients) {
   try {
@@ -128,17 +97,23 @@ OAD.renderCommandCenter = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  let clients = OAD._demoClients || [];
+  let clients = (OAD.DB.threads || []).filter(t => t.life_area === 'Patient').map(t => {
+      const meta = t.metadata || {};
+      return {
+        name: t.title.replace('[Patient] ', ''),
+        counselor: meta.counselor || 'Counselor 1',
+        checkout_type: meta.checkout_type || 'Active',
+        check_in_date: meta.check_in_date || new Date().toISOString().split('T')[0],
+        total_planned_days: parseInt(meta.total_planned_days) || 28,
+        total_stay_days: parseInt(meta.total_stay_days) || 0
+      };
+  });
 
   if (clients.length === 0) {
     panel.innerHTML = `
       <div class="ds-panel" role="main" style="max-width: 900px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:60vh">
         <h2>No Demo Data Loaded</h2>
-        <p style="color:var(--text-muted); margin-bottom:24px">Please upload the demo/demo_data.csv file to view the Command Center.</p>
-        <label class="success" style="cursor:pointer; padding:12px 24px; border-radius:8px; font-weight:600">
-          Upload CSV
-          <input type="file" accept=".csv" style="display:none" onchange="OAD.loadDemoCsv(event)">
-        </label>
+        <p style="color:var(--text-muted); margin-bottom:24px">Please navigate to Data & Settings > Import Data and upload <code style="padding:4px;background:var(--surface2)">demo_data.json</code>.</p>
       </div>
     `;
     return;
