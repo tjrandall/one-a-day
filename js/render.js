@@ -1314,15 +1314,13 @@ OAD.renderDailyView = function () {
       
       var shiftStr = '';
       var isOffDay = false;
-      if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
-        var dow = dayDt.getDay();
+      if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay) {
+        isOffDay = OAD.isOffDay(dayStr, OAD._demoRole);
         if (OAD._demoRole.includes('Counselor')) {
-          // Sun-Thu shift
-          if (dow === 5 || dow === 6) { shiftStr = ' (OFF)'; isOffDay = true; }
+          if (isOffDay) shiftStr = ' (OFF)';
           else shiftStr = ' (8-4:30pm)';
         } else if (OAD._demoRole.includes('Director') || OAD._demoRole.includes('Case Manager')) {
-          // Mon-Fri shift
-          if (dow === 0 || dow === 6) { shiftStr = ' (OFF)'; isOffDay = true; }
+          if (isOffDay) shiftStr = ' (OFF)';
           else shiftStr = ' (9-5pm)';
         } else if (OAD._demoRole === 'Medical' || OAD._demoRole === 'RA') {
           shiftStr = ' (12hr Shift)';

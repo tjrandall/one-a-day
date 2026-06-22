@@ -12,9 +12,9 @@ OAD.pressure = function (thread, _inBleedUp) {
   if (!thread.assumption_verified && thread.current_assumption) score += 20;
 
   // Priority
-  if      (thread.priority === 'critical') score += 30;
-  else if (thread.priority === 'high')     score += 20;
-  else if (thread.priority === 'medium')   score += 10;
+  if      (thread.priority && thread.priority.toLowerCase() === 'critical') score += 30;
+  else if (thread.priority && thread.priority.toLowerCase() === 'high')     score += 20;
+  else if (thread.priority && thread.priority.toLowerCase() === 'medium')   score += 10;
 
   // One-hop bleed-up from blocking connections.
   // For each connection that blocks a resolvable thread: add 30% of that thread's pressure.
@@ -75,6 +75,13 @@ OAD.pressure = function (thread, _inBleedUp) {
   // getDayLoad's pressure() calls breaks the recursion at one hop.
   if (!_inBleedUp && thread.next_action_date) {
     if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
+  }
+
+  // Escalation: Shift Collision
+  if (thread.next_action_date && window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay) {
+    if (OAD.isOffDay(thread.next_action_date, OAD._demoRole)) {
+      score += 40;
+    }
   }
 
   return Math.min(score, 100);
@@ -372,6 +379,13 @@ OAD.focusReason = function (t) {
   var ds = OAD.deadlineState(t);
   if (ds && !ds.onTrack)     parts.push(ds.behindBy + ' session' + (ds.behindBy !== 1 ? 's' : '') + ' behind deadline');
   else if (ds && ds.daysRemaining <= 7) parts.push('deadline in ' + ds.daysRemaining + 'd');
+  
+  if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay && t.next_action_date) {
+    if (OAD.isOffDay(t.next_action_date, OAD._demoRole)) {
+      parts.push('⚠ SHIFT COLLISION');
+    }
+  }
+  
   return parts.join(' · ') || t.priority + ' priority';
 };
 

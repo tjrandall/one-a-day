@@ -142,6 +142,17 @@ OAD.deleteThread = function (id) {
   return true;
 };
 
+OAD.isOffDay = function(dateStr, role) {
+  if (!role || !dateStr) return false;
+  const dow = new Date(dateStr + 'T00:00:00').getDay();
+  if (role.includes('Counselor')) {
+    return dow === 5 || dow === 6; // Off Friday, Saturday
+  } else if (role.includes('Director') || role.includes('Case Manager')) {
+    return dow === 0 || dow === 6; // Off Sunday, Saturday
+  }
+  return false;
+};
+
 OAD.addEvolution = function (id, note) {
   const t = OAD.getThread(id);
   if (!t) return;
@@ -558,6 +569,10 @@ OAD.getDailyToat = function () {
 
   const allThreads = OAD.getVisibleThreads() || [];
   
+  const collisions = allThreads.filter(t => {
+    return t.status !== 'closed' && t.next_action_date && window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay(t.next_action_date, OAD._demoRole);
+  });
+  
   const stalled = allThreads.filter(t => t.status === 'stalled');
   const overdueWaiting = allThreads.filter(t => {
     return t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr;
@@ -567,7 +582,10 @@ OAD.getDailyToat = function () {
   });
 
   let selected = null;
-  if (stalled.length > 0) {
+  if (collisions.length > 0) {
+    collisions.sort((a, b) => a.id - b.id);
+    selected = collisions[0];
+  } else if (stalled.length > 0) {
     stalled.sort((a, b) => a.id - b.id);
     selected = stalled[0];
   } else if (overdueWaiting.length > 0) {
