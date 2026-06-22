@@ -1,43 +1,40 @@
-:root, [data-theme="dark"] {
-  --bg: #0f0f13;
-  --surface: #16161e;
-  --surface2: #1e1e2e;
-  --border: #313244;
-  --text: #e8e8f0;
-  --text-muted: #8888aa;
-  --accent: #6c63ff;
-  --accent-dim: #3d3880;
-  --critical: #f38ba8;
-  --high: #fab387;
-  --medium: #f9e2af;
-  --low: #a6e3a1;
-  --waiting: #89b4fa;
-  --stalled: #f5c2e7;
-  --open: #a6e3a1;
-  --closed: #555577;
-  --radius: 8px;
-  --radius-lg: 14px;
-  --font: 'Inter', system-ui, sans-serif;
-  --mono: 'JetBrains Mono', 'Fira Code', monospace;
-}
+:root {
+  /* Brand Assets & Color Channels */
+  --fq-brand-blue: #0D3B66;
+  --fq-brand-teal: #008080;
+  --fq-brand-green: #20B2AA;
 
-[data-theme="light"] {
-  --bg: #f8f9fa;
+  /* Strict WCAG AA Text Compliance Elements */
+  --fq-text-main: #0D3B66;       /* Safe for all text sizes and functional layouts */
+  --fq-text-muted: #334E68;      /* Safe for small contextual captions and sidebars */
+  --fq-bg-app: #F4F9F9;          /* Standard uniform light application background */
+
+  /* Typography Scale */
+  --fq-font-display: 'Montserrat', 'Inter', sans-serif;
+  --fq-font-ui: 'Inter', 'Roboto', sans-serif;
+  --fq-font-code: 'JetBrains Mono', 'Courier New', monospace;
+
+  /* Legacy Mapping to FQ Theme */
+  --bg: var(--fq-bg-app);
   --surface: #ffffff;
-  --surface2: #f1f3f5;
-  --border: #dee2e6;
-  --text: #212529;
-  --text-muted: #868e96;
-  --accent: #4c6ef5;
-  --accent-dim: #4c6ef51a;
+  --surface2: #e8eded;
+  --border: #d0dbdb;
+  --text: var(--fq-text-main);
+  --text-muted: var(--fq-text-muted);
+  --accent: var(--fq-brand-teal);
+  --accent-dim: #0080801a;
   --critical: #fa5252;
   --high: #fd7e14;
   --medium: #fcc419;
-  --low: #40c057;
-  --waiting: #228be6;
+  --low: var(--fq-brand-green);
+  --waiting: var(--fq-brand-teal);
   --stalled: #e64980;
-  --open: #40c057;
-  --closed: #868e96;
+  --open: var(--fq-brand-green);
+  --closed: var(--fq-text-muted);
+  --radius: 8px;
+  --radius-lg: 14px;
+  --font: var(--fq-font-ui);
+  --mono: var(--fq-font-code);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -63,9 +60,28 @@ button {
   border-radius: var(--radius);
   font-size: 14px;
   font-family: var(--font);
-  transition: opacity .15s;
+  transition: opacity .15s, box-shadow .15s, outline .15s;
 }
 button:hover { opacity: .85; }
+
+/* Custom Accessible Focus States for FlowQueue Interface Elements */
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, .stack-handoff-trigger:focus-visible {
+  outline: 3px solid var(--fq-brand-green) !important;
+  outline-offset: 2px !important;
+  box-shadow: 0 0 0 4px var(--fq-brand-blue) !important;
+}
+
+/* Base Style for Interactive Compliance Buttons */
+.stack-handoff-trigger {
+  background: linear-gradient(135deg, var(--fq-brand-teal) 0%, var(--fq-brand-blue) 100%);
+  color: #FFFFFF;
+  font-family: var(--fq-font-ui);
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 10px 20px;
+  border: none;
+  transition: box-shadow 0.2s ease-in-out;
+}
 button.secondary {
   background: var(--surface2);
   color: var(--text);
