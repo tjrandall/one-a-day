@@ -84,6 +84,7 @@ OAD.renderCommandCenter = function () {
   }
 
   const dischargedClients = clients.filter(c => c.checkout_type !== 'Active');
+  const activeCount = clients.filter(c => c.checkout_type === 'Active').length;
   
   let totalPlanned = 0;
   let totalRetained = 0;
@@ -168,9 +169,22 @@ OAD.renderCommandCenter = function () {
             </select>
           </div>
         </div>
-        <div style="background:var(--surface2); padding:12px 24px; border-radius:12px; border:1px solid var(--border); display:flex; flex-direction:column; align-items:flex-end">
-          <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; font-weight:700">${OAD._demoRole.startsWith('Counselor') ? 'Personal TRY' : 'Team TRY'}</div>
-          <div style="font-size:36px; font-weight:700; color:${tryColor}; line-height:1.2">${tryScore}%</div>
+        <div style="background:var(--surface); padding:20px 32px; border-radius:4px; border:1px solid var(--border); display:flex; flex-direction:column; align-items:center; min-width:340px">
+          <div style="font-size:20px; font-weight:800; color:var(--text-muted); text-transform:uppercase; letter-spacing:1px; line-height:1">${OAD._demoRole.startsWith('Counselor') ? 'PERSONAL TRY' : 'TEAM TRY'}</div>
+          <div style="font-size:14px; color:var(--text-muted); font-style:italic; margin-bottom:16px; font-weight:400">Total Retention Yield</div>
+          <div style="font-size:56px; font-weight:800; color:${tryColor}; line-height:1; margin-bottom:20px">${tryScore}%</div>
+          
+          <div style="display:flex; width:100%; align-items:center; justify-content:center; gap:24px">
+            <div style="text-align:center">
+              <div style="font-size:28px; font-weight:700; color:${tryColor}; line-height:1; margin-bottom:4px">${activeCount}</div>
+              <div style="font-size:16px; color:${tryColor}; font-weight:600; line-height:1">clients</div>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:flex-start; gap:6px">
+              <div style="font-size:12px; color:${tryColor}; font-weight:600">${totalRetained} Treatment Days Delivered</div>
+              <div style="width:100%; border-bottom:1px dashed ${tryColor}; opacity:0.6"></div>
+              <div style="font-size:12px; color:${tryColor}; font-weight:600">${totalPlanned} Treatment Days Contracted</div>
+            </div>
+          </div>
         </div>
       </header>
 
