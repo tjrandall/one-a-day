@@ -523,7 +523,10 @@ OAD.getDailyToat = function () {
   if (todayEntry) {
     const t = OAD.getThread(todayEntry.threadId);
     if (t && isFriction(t)) {
-      return t;
+      const allVisible = OAD.getVisibleThreads() || [];
+      if (allVisible.some(vt => vt.id === t.id)) {
+        return t;
+      }
     }
   }
 

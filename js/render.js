@@ -1077,11 +1077,15 @@ OAD.renderDailyView = function () {
     }
 
     const rowClass = 'ds-row ds-thread ds-row-' + context + (children.length ? ' ds-row-parent' : '');
+    const displayTitle = (window.OAD && OAD._demoRole) 
+      ? t.title.replace(new RegExp(`^\\[${OAD._demoRole.replace(/[0-9 ]/g, '').trim()}\\].*? `), '')
+      : t.title;
+
     return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
-          '<div class="ds-row-title">' + OAD.esc(t.title) + badge + cycleBadge + '</div>' +
+          '<div class="ds-row-title">' + OAD.esc(displayTitle) + badge + cycleBadge + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
           childSummaryHtml +
         '</div>' +
@@ -1274,19 +1278,25 @@ OAD.renderDailyView = function () {
       var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       
       var shiftStr = '';
+      var isOffDay = false;
       if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
         var dow = dayDt.getDay();
         if (OAD._demoRole.includes('Counselor')) {
           // Sun-Thu shift
-          if (dow === 5 || dow === 6) shiftStr = ' (OFF)';
+          if (dow === 5 || dow === 6) { shiftStr = ' (OFF)'; isOffDay = true; }
           else shiftStr = ' (8-4:30pm)';
         } else if (OAD._demoRole.includes('Director') || OAD._demoRole.includes('Case Manager')) {
           // Mon-Fri shift
-          if (dow === 0 || dow === 6) shiftStr = ' (OFF)';
+          if (dow === 0 || dow === 6) { shiftStr = ' (OFF)'; isOffDay = true; }
           else shiftStr = ' (9-5pm)';
         } else if (OAD._demoRole === 'Medical' || OAD._demoRole === 'RA') {
           shiftStr = ' (12hr Shift)';
         }
+      }
+      
+      if (isOffDay && total > 0) {
+        labelCls = 'load-row-danger';
+        label = OAD.t('shiftCollision', '⚠ Shift Collision');
       }
       
       const pct = Math.min((total / 4) * 100, 100);

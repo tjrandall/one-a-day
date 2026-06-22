@@ -87,6 +87,7 @@ OAD.maskName = function(fullName, role) {
 OAD._demoRole = 'CCO';
 OAD.changeDemoRole = function(role) {
   OAD._demoRole = role;
+  document.body.className = 'role-' + role.replace(/ /g, '-').toLowerCase();
   OAD.renderCommandCenter();
 };
 

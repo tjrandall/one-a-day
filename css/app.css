@@ -992,7 +992,12 @@ button.success:hover { opacity: .88; }
 
 .load-row-heavy .load-progress-fill { background: var(--critical); }
 .load-row-busy .load-progress-fill { background: var(--medium); }
-.load-row-clear .load-progress-fill { background: var(--open); }
+.load-row-clear .load-progress-fill { background: var(--success); }
+
+/* Shift Collision warning */
+.load-row-danger { background: rgba(255, 69, 58, 0.1); border: 1px solid rgba(255, 69, 58, 0.3); }
+.load-row-danger .load-label { color: #ff453a; font-weight: 700; }
+.load-row-danger .load-progress-fill { background: #ff453a; }
 
 /* Responsive adjustments */
 @media (max-width: 900px) {
