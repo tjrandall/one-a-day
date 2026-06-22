@@ -70,11 +70,16 @@ OAD.pressure = function (thread, _inBleedUp) {
     }
   }
 
-  // Day-load multiplier: +12 when this thread's date already carries > 150 pressure
-  // from peer threads. Only applied at the top level — passing _inBleedUp=true into
-  // getDayLoad's pressure() calls breaks the recursion at one hop.
+  // Day-load multiplier
   if (!_inBleedUp && thread.next_action_date) {
     if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
+  }
+
+  // Overdue next_action_date
+  var todayStr = new Date().toISOString().slice(0, 10);
+  if (thread.next_action_date && thread.next_action_date < todayStr) {
+    var daysOverdue = Math.ceil((new Date(todayStr) - new Date(thread.next_action_date + 'T00:00:00')) / 86400000);
+    score += Math.min(40, daysOverdue * 5); // +5 per day overdue, max 40
   }
 
   // Escalation: Shift Collision

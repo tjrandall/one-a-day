@@ -1109,6 +1109,7 @@ OAD.renderDailyView = function () {
         '<div class="ds-children-summary">' +
           '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
           overdueTag +
+          (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole) ? '<span class="ds-status-badge" style="background:var(--critical);color:#000;border:none">⚠ SHIFT COLLISION</span>' : '') +
           (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
         '</div>';
     }
@@ -1405,11 +1406,12 @@ OAD.renderDailyView = function () {
           '<div class="ds-metric-value ' + avgCls + '">' + avgPressure + '</div>' +
           '<div class="ds-metric-desc">Level: ' + OAD.esc(pressureLevel) + '</div>' +
         '</div>' +
+        ((window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && !['CCO', 'Director Alpha', 'Director Beta'].includes(window.OAD._demoRole)) ? '' :
         '<div class="ds-metric-card">' +
           '<div class="ds-metric-title">Hard Deadline</div>' +
           '<div class="ds-metric-value deadline">' + OAD.esc(hardDeadlineStr) + '</div>' +
           '<div class="ds-metric-desc">Target milestone</div>' +
-        '</div>' +
+        '</div>') +
       '</div>' +
 
       '<div class="ds-main-grid">' +
