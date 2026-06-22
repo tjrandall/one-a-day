@@ -30,9 +30,81 @@ OAD.loadDemoCsv = function(event) {
       });
     }
     OAD._demoClients = clients;
-    OAD.renderCommandCenter();
+    OAD._seedDemoThreads(clients);
   };
   reader.readAsText(file);
+};
+
+OAD._seedDemoThreads = async function(clients) {
+  try {
+    const res = await fetch('config/rules/hc_admission.json');
+    const payload = await res.json();
+    OAD.DB.threads = [];
+    OAD.DB.cadences = [];
+    
+    const active = clients.filter(c => c.checkout_type === 'Active');
+    active.forEach(c => {
+      const admissionDate = new Date(c.check_in_date);
+      const daysStay = 28;
+      
+      payload.triggers.forEach(trigger => {
+        if (trigger.type === 'thread' || trigger.type === 'escalation') {
+           let due = new Date(admissionDate);
+           if (trigger.anchor === 'admission') {
+             if (trigger.offset_days) due.setDate(due.getDate() + trigger.offset_days);
+             if (trigger.offset_hours) due.setHours(due.getHours() + trigger.offset_hours);
+           } else if (trigger.anchor === 'discharge') {
+             due.setDate(due.getDate() + daysStay);
+             if (trigger.offset_days) due.setDate(due.getDate() + trigger.offset_days);
+             if (trigger.offset_hours) due.setHours(due.getHours() + trigger.offset_hours);
+           }
+           
+           OAD.DB.threads.push({
+             id: OAD.nextId(),
+             uuid: 'u-' + Math.random().toString(36).substr(2, 9),
+             title: `[${trigger.owner_role}] ${trigger.name} - ${c.name}`,
+             status: 'open',
+             priority: trigger.priority || 'Normal',
+             life_area: trigger.owner_role,
+             pressure: trigger.priority === 'High' ? 8 : 5,
+             next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
+             next_action_date: due.toISOString().split('T')[0],
+             closing_condition: 'Documentation submitted.',
+             evolution_log: [],
+             created_at: admissionDate.toISOString(),
+             updated_at: admissionDate.toISOString()
+           });
+        } else if (trigger.type === 'cadence' && trigger.interval_days) {
+           let iteration = 1;
+           for (let i = trigger.interval_days; i <= daysStay; i += trigger.interval_days) {
+             let due = new Date(admissionDate);
+             due.setDate(due.getDate() + i);
+             
+             OAD.DB.threads.push({
+               id: OAD.nextId(),
+               uuid: 'u-' + Math.random().toString(36).substr(2, 9),
+               title: `[${trigger.owner_role}] ${trigger.name} (Part ${iteration}) - ${c.name}`,
+               status: 'open',
+               priority: trigger.priority || 'Normal',
+               life_area: trigger.owner_role,
+               pressure: trigger.priority === 'High' ? 8 : 5,
+               next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
+               next_action_date: due.toISOString().split('T')[0],
+               closing_condition: 'Documentation submitted.',
+               evolution_log: [],
+               created_at: admissionDate.toISOString(),
+               updated_at: admissionDate.toISOString()
+             });
+             iteration++;
+           }
+        }
+      });
+    });
+    OAD.saveData();
+    OAD.renderCommandCenter();
+  } catch (e) {
+    console.error('Failed to auto-seed threads:', e);
+  }
 };
 
 OAD.maskName = function(fullName, role) {
@@ -73,14 +145,12 @@ OAD.renderCommandCenter = function () {
   }
 
   // Filter based on demo role
-  if (OAD._demoRole === 'Director A') {
-    clients = clients.filter(c => c.counselor === 'Sarah Jenkins' || c.counselor === 'David Kim');
-  } else if (OAD._demoRole === 'Director B') {
-    clients = clients.filter(c => c.counselor === 'Emma Clark');
-  } else if (OAD._demoRole === 'Counselor Jenkins') {
-    clients = clients.filter(c => c.counselor === 'Sarah Jenkins');
-  } else if (OAD._demoRole === 'Counselor Kim') {
-    clients = clients.filter(c => c.counselor === 'David Kim');
+  if (OAD._demoRole === 'Director Alpha') {
+    clients = clients.filter(c => ['Counselor 1', 'Counselor 2', 'Counselor 3', 'Counselor 4', 'Counselor 5'].includes(c.counselor));
+  } else if (OAD._demoRole === 'Director Beta') {
+    clients = clients.filter(c => ['Counselor 6', 'Counselor 7', 'Counselor 8', 'Counselor 9', 'Counselor 10'].includes(c.counselor));
+  } else if (OAD._demoRole.startsWith('Counselor')) {
+    clients = clients.filter(c => c.counselor === OAD._demoRole);
   }
 
   const dischargedClients = clients.filter(c => c.checkout_type !== 'Active');
@@ -103,7 +173,7 @@ OAD.renderCommandCenter = function () {
   clients.forEach(c => {
     let groupName = c.counselor;
     if (OAD._demoRole === 'CCO') {
-      groupName = (c.counselor === 'Emma Clark') ? 'Director B (Clark)' : 'Director A (Jenkins & Kim)';
+      groupName = ['Counselor 1', 'Counselor 2', 'Counselor 3', 'Counselor 4', 'Counselor 5'].includes(c.counselor) ? 'Director Alpha' : 'Director Beta';
     }
 
     if (!breakdown[groupName]) breakdown[groupName] = { active: 0, planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
@@ -162,10 +232,18 @@ OAD.renderCommandCenter = function () {
             <span class="ds-date" style="margin:0">Demo Role:</span>
             <select style="font-size:13px; padding:4px 8px; border-radius:4px; background:var(--surface2); color:var(--text-main); border:1px solid var(--border)" onchange="OAD.changeDemoRole(this.value)">
               <option value="CCO" ${OAD._demoRole === 'CCO' ? 'selected' : ''}>CCO (All Staff)</option>
-              <option value="Director A" ${OAD._demoRole === 'Director A' ? 'selected' : ''}>Director A (Jenkins & Kim)</option>
-              <option value="Director B" ${OAD._demoRole === 'Director B' ? 'selected' : ''}>Director B (Clark)</option>
-              <option value="Counselor Jenkins" ${OAD._demoRole === 'Counselor Jenkins' ? 'selected' : ''}>Counselor (Sarah Jenkins)</option>
-              <option value="Counselor Kim" ${OAD._demoRole === 'Counselor Kim' ? 'selected' : ''}>Counselor (David Kim)</option>
+              <option value="Director Alpha" ${OAD._demoRole === 'Director Alpha' ? 'selected' : ''}>Director Alpha (Counselors 1-5)</option>
+              <option value="Director Beta" ${OAD._demoRole === 'Director Beta' ? 'selected' : ''}>Director Beta (Counselors 6-10)</option>
+              <option value="Counselor 1" ${OAD._demoRole === 'Counselor 1' ? 'selected' : ''}>Counselor 1</option>
+              <option value="Counselor 2" ${OAD._demoRole === 'Counselor 2' ? 'selected' : ''}>Counselor 2</option>
+              <option value="Counselor 3" ${OAD._demoRole === 'Counselor 3' ? 'selected' : ''}>Counselor 3</option>
+              <option value="Counselor 4" ${OAD._demoRole === 'Counselor 4' ? 'selected' : ''}>Counselor 4</option>
+              <option value="Counselor 5" ${OAD._demoRole === 'Counselor 5' ? 'selected' : ''}>Counselor 5</option>
+              <option value="Counselor 6" ${OAD._demoRole === 'Counselor 6' ? 'selected' : ''}>Counselor 6</option>
+              <option value="Counselor 7" ${OAD._demoRole === 'Counselor 7' ? 'selected' : ''}>Counselor 7</option>
+              <option value="Counselor 8" ${OAD._demoRole === 'Counselor 8' ? 'selected' : ''}>Counselor 8</option>
+              <option value="Counselor 9" ${OAD._demoRole === 'Counselor 9' ? 'selected' : ''}>Counselor 9</option>
+              <option value="Counselor 10" ${OAD._demoRole === 'Counselor 10' ? 'selected' : ''}>Counselor 10</option>
             </select>
           </div>
         </div>
