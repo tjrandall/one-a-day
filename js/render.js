@@ -1376,7 +1376,7 @@ OAD.renderDailyView = function () {
   const salutationKey = hours < 12 ? 'goodMorning' : hours < 18 ? 'goodAfternoon' : 'goodEvening';
   const salutation = OAD.t(salutationKey);
   const persona = OAD.DB.persona;
-  const userName = OAD.Config.userGreetingTitle || (persona && persona.name) || 'Chief';
+  const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
   const scores = active.map(t => t._score);
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;

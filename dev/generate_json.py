@@ -17,7 +17,7 @@ def add_days(d, days):
 def make_uuid():
     return 'u-' + str(uuid.uuid4())[:9].replace('-', '')
 
-def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_active):
+def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_active, loc=None):
     p_uuid = make_uuid()
     check_in_date = add_days(now, -check_in_days_ago)
     
@@ -33,6 +33,8 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
             "counselor": counselor,
             "checkout_type": checkout_type,
             "check_in_date": check_in_date.strftime("%Y-%m-%d"),
+            "discharge_date": add_days(check_in_date, stay).strftime("%Y-%m-%d"),
+            "discharge_location": loc,
             "total_planned_days": 28,
             "total_stay_days": stay
         }
@@ -94,11 +96,25 @@ for i in range(24):
     add_patient(f'Standard Client {i+1}', random.choice(counselors), 'Standard', days_ago, 28, False)
 
 # 4. 20 Active
+locations = [
+    "Cape Heritage Rehabilitation & Health Care Center",
+    "Plymouth Rehabilitation & Health Care Center",
+    "Spaulding Rehabilitation Hospital (Boston)",
+    "Quaboag Rehabilitation & Skilled Care Center"
+]
 for i in range(20):
-    days_ago = random.randint(0, 27)
-    if i < 10:
-        days_ago = random.randint(14, 16)
-    add_patient(f'Active Client {i+1}', counselors[i % 10], 'Active', days_ago, days_ago, True)
+    if i < 4:
+        # Force 4 discharges to happen in exactly 2 days (+2 days)
+        # stay is 28, so check_in_days_ago must be 26 (28 - 2 = 26)
+        days_ago = 26
+        loc = locations[i]
+    else:
+        days_ago = random.randint(0, 27)
+        if i < 10:
+            days_ago = random.randint(14, 16)
+        loc = random.choice(locations) if random.random() > 0.5 else None
+    
+    add_patient(f'Active Client {i+1}', counselors[i % 10], 'Active', days_ago, 28, True, loc)
 
 # Add Training threads for 70% of counselors
 training_counselors = random.sample(counselors, 7)
@@ -124,7 +140,7 @@ output = {
     "edges": []
 }
 
-with open('demo/demo_data.json', 'w') as f:
+with open('modules/demo/demo_data.json', 'w') as f:
     json.dump(output, f, indent=2)
 
 print(f"Generated demo_data.json with {len(threads)} threads!")

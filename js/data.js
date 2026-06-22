@@ -93,10 +93,19 @@ OAD.formatDisplayTitle = function (title) {
 OAD.getVisibleThreads = function() {
   let threads = OAD.DB.threads || [];
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
-    if (OAD._demoRole.includes('Counselor')) {
-      threads = threads.filter(t => t.life_area === 'Counselor');
+    if (OAD._demoRole.startsWith('Counselor')) {
+      const validPatientUuids = threads
+        .filter(t => t.life_area === 'Patient' && t.metadata && t.metadata.counselor === OAD._demoRole)
+        .map(t => t.uuid);
+      
+      threads = threads.filter(t => {
+        if (t.life_area === 'Counselor' && t.metadata && t.metadata.counselor === OAD._demoRole) return true;
+        if (t.life_area === 'Patient' && validPatientUuids.includes(t.uuid)) return true;
+        if (t.parent_uuid && validPatientUuids.includes(t.parent_uuid) && t.life_area === 'Counselor') return true;
+        return false;
+      });
     } else if (OAD._demoRole.includes('Director')) {
-      threads = threads.filter(t => t.life_area === 'Director' || t.life_area === 'Counselor');
+      threads = threads.filter(t => t.life_area === 'Director' || t.life_area === 'Counselor' || t.life_area === 'Patient');
     } else if (OAD._demoRole === 'RA') {
       threads = threads.filter(t => t.life_area === 'RA');
     } else if (OAD._demoRole === 'Case Manager') {

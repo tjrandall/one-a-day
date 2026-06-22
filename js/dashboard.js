@@ -125,11 +125,7 @@ OAD.renderCommandCenter = function () {
   }
 
   // Filter based on demo role
-  if (OAD._demoRole === 'Director Alpha') {
-    clients = clients.filter(c => ['Counselor 1', 'Counselor 2', 'Counselor 3', 'Counselor 4', 'Counselor 5'].includes(c.counselor));
-  } else if (OAD._demoRole === 'Director Beta') {
-    clients = clients.filter(c => ['Counselor 6', 'Counselor 7', 'Counselor 8', 'Counselor 9', 'Counselor 10'].includes(c.counselor));
-  } else if (OAD._demoRole.startsWith('Counselor')) {
+  if (OAD._demoRole && OAD._demoRole.startsWith('Counselor')) {
     clients = clients.filter(c => c.counselor === OAD._demoRole);
   }
 
@@ -153,7 +149,7 @@ OAD.renderCommandCenter = function () {
   clients.forEach(c => {
     let groupName = c.counselor;
     if (OAD._demoRole === 'CCO') {
-      groupName = ['Counselor 1', 'Counselor 2', 'Counselor 3', 'Counselor 4', 'Counselor 5'].includes(c.counselor) ? 'Director Alpha' : 'Director Beta';
+      groupName = 'Director Alpha';
     }
 
     if (!breakdown[groupName]) breakdown[groupName] = { active: 0, planned: 0, retained: 0, aca: 0, bnc: 0, standard: 0 };
@@ -197,10 +193,6 @@ OAD.renderCommandCenter = function () {
         <div>
           <h2 style="display:flex; align-items:center; gap:16px; margin-bottom:8px">
             My Team Command Center
-            <label class="ghost" style="cursor:pointer; font-size:12px; padding:4px 8px; border:1px solid var(--border); font-weight:normal; border-radius:4px">
-              ↻ Load new CSV
-              <input type="file" accept=".csv" style="display:none" onchange="OAD.loadDemoCsv(event)">
-            </label>
             <button class="ghost" style="cursor:pointer; font-size:12px; padding:4px 8px; border:1px solid var(--border); font-weight:normal; border-radius:4px; margin-left:8px" onclick="OAD.openSchedulesModal()">
               📅 Schedules
             </button>
@@ -210,10 +202,9 @@ OAD.renderCommandCenter = function () {
           </h2>
           <div style="display:flex; align-items:center; gap:12px">
             <span class="ds-date" style="margin:0">Demo Role:</span>
-            <select style="font-size:13px; padding:4px 8px; border-radius:4px; background:var(--surface2); color:var(--text-main); border:1px solid var(--border)" onchange="OAD.changeDemoRole(this.value)">
-              <option value="CCO" ${OAD._demoRole === 'CCO' ? 'selected' : ''}>CCO (All Staff)</option>
-              <option value="Director Alpha" ${OAD._demoRole === 'Director Alpha' ? 'selected' : ''}>Director Alpha (Counselors 1-5)</option>
-              <option value="Director Beta" ${OAD._demoRole === 'Director Beta' ? 'selected' : ''}>Director Beta (Counselors 6-10)</option>
+            <select id="role-select" onchange="OAD.changeDemoRole(this.value)" style="padding:4px; border-radius:4px; border:1px solid var(--border); font-size:12px; background:var(--surface2); color:var(--text)">
+              <option value="CCO" ${OAD._demoRole === 'CCO' ? 'selected' : ''}>CCO (All Data)</option>
+              <option value="Director Alpha" ${OAD._demoRole === 'Director Alpha' ? 'selected' : ''}>Director Alpha (All Counselors)</option>
               <option value="Counselor 1" ${OAD._demoRole === 'Counselor 1' ? 'selected' : ''}>Counselor 1</option>
               <option value="Counselor 2" ${OAD._demoRole === 'Counselor 2' ? 'selected' : ''}>Counselor 2</option>
               <option value="Counselor 3" ${OAD._demoRole === 'Counselor 3' ? 'selected' : ''}>Counselor 3</option>
