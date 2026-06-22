@@ -905,7 +905,7 @@ button.success:hover { opacity: .88; }
   font-size: 11px;
   padding: 2px 7px;
   border-radius: 4px;
-  background: rgba(0,0,0,0.2);
+  background: rgba(0,0,0,0.05);
 }
 
 .area-stalled {

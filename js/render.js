@@ -841,6 +841,10 @@ OAD.renderTodayView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">TODAY</span>';
 
+    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+      badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
+    }
+
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
       ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
@@ -1085,6 +1089,10 @@ OAD.renderDailyView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
     
+    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+      badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
+    }
+    
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
       ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
@@ -1109,7 +1117,6 @@ OAD.renderDailyView = function () {
         '<div class="ds-children-summary">' +
           '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
           overdueTag +
-          (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole) ? '<span class="ds-status-badge" style="background:var(--critical);color:#000;border:none">⚠ SHIFT COLLISION</span>' : '') +
           (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
         '</div>';
     }
@@ -1521,6 +1528,10 @@ OAD.renderMatrixView = function () {
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
+
+    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+      badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
+    }
 
     const inCycle = cycleThreadIds.has(t.id);
     const cycleBadge = inCycle 
