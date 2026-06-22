@@ -1,0 +1,9 @@
+[submodule "fq-health"]
+	path = fq-health
+	url = ../fq-health
+[submodule "fq-cic"]
+	path = fq-cic
+	url = /home/tjrandall/code/fq-cic
+[submodule "fq-demo"]
+	path = fq-demo
+	url = /home/tjrandall/code/fq-demo
