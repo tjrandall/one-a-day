@@ -31,8 +31,8 @@ OAD.renderHeaderActions = function () {
       <div class="nav-dropdown">
         <button class="ghost" style="font-weight:600">Operations</button>
         <div class="nav-dropdown-content">
-          <button onclick="window.location.href='cic/index.html'">Map View</button>
-          <button onclick="window.location.href='cic/index.html'">Bed Scan View</button>
+          <button onclick="window.location.href='fq-cic/index.html'">Map View</button>
+          <button onclick="window.location.href='fq-cic/index.html'">Bed Scan View</button>
         </div>
       </div>
 
