@@ -288,7 +288,7 @@ OAD.renderDetail = function (id) {
   panel.innerHTML = `
     <div class="detail-header">
       <div>
-        <div class="detail-title">${OAD.esc(t.title)}</div>
+        <div class="detail-title">${OAD.esc(OAD.formatDisplayTitle(t.title))}</div>
         <div class="detail-badges">
           <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
           <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
@@ -977,7 +977,7 @@ OAD.renderTodayView = function () {
           '<span class="focus-label">FOCUS NOW</span>' +
           '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
         '</div>' +
-        '<div class="focus-title">' + OAD.esc(focusThread.title) + '</div>' +
+        '<div class="focus-title">' + OAD.esc(OAD.formatDisplayTitle(focusThread.title)) + '</div>' +
         '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
         '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
         (focusThread.next_action
@@ -1114,9 +1114,7 @@ OAD.renderDailyView = function () {
     }
 
     const rowClass = 'ds-row ds-thread ds-row-' + context + (children.length ? ' ds-row-parent' : '');
-    const displayTitle = (window.OAD && OAD._demoRole) 
-      ? t.title.replace(new RegExp(`^\\[${OAD._demoRole.replace(/[0-9 ]/g, '').trim()}\\].*? `), '')
-      : t.title;
+    const displayTitle = OAD.formatDisplayTitle(t.title);
 
     return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
       '<div class="ds-row-main">' +
@@ -1229,7 +1227,7 @@ OAD.renderDailyView = function () {
           '<span style="font-size:11px;font-weight:700;color:orange;letter-spacing:1px;text-transform:uppercase">⚠️ THE ONE ANNOYING THING (TOAT)</span>' +
           '<span class="pressure-badge ' + tpc + '" style="font-size:11px;padding:2px 6px">' + OAD.pressure(toatThread) + '</span>' +
         '</div>' +
-        '<div style="font-size:15px;font-weight:600;color:var(--text-main)">' + OAD.esc(toatThread.title) + '</div>' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text-main)">' + OAD.esc(OAD.formatDisplayTitle(toatThread.title)) + '</div>' +
         '<div style="font-size:12px;color:var(--text-muted);line-height:1.4">' + explanation + '</div>' +
         '<div style="display:flex;gap:8px;margin-top:4px">' +
           '<button class="success btn-sm" style="font-size:11px;padding:4px 10px" onclick="OAD.selectThread(' + toatThread.id + ')">View Details</button>' +
@@ -1266,7 +1264,7 @@ OAD.renderDailyView = function () {
           '<span class="focus-label">FOCUS NOW</span>' +
           '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
         '</div>' +
-        '<div class="focus-title">' + OAD.esc(focusThread.title.replace(new RegExp(`^\\[${OAD._demoRole.replace(/[0-9 ]/g, '').trim()}\\].*? `), '')) + '</div>' +
+        '<div class="focus-title">' + OAD.esc(OAD.formatDisplayTitle(focusThread.title)) + '</div>' +
         '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
         '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
         (focusThread.next_action
@@ -1674,7 +1672,7 @@ OAD.renderMatrixView = function () {
           '<span class="focus-label">FOCUS NOW</span>' +
           '<span class="pressure-badge ' + fpc + ' focus-pressure">' + focusThread._score + '</span>' +
         '</div>' +
-        '<div class="focus-title">' + OAD.esc(focusThread.title) + '</div>' +
+        '<div class="focus-title">' + OAD.esc(OAD.formatDisplayTitle(focusThread.title)) + '</div>' +
         '<div class="focus-meta">' + OAD.esc(focusThread.life_area) + ' · ' + OAD.esc(focusThread.priority) + '</div>' +
         '<div class="focus-reason">' + OAD.esc(freason) + '</div>' +
         (focusThread.next_action
@@ -2421,7 +2419,7 @@ OAD.filterListTab = function () {
     return `
       <div class="list-tab-card" onclick="OAD.selectThread(${t.id})">
         <div class="list-tab-card-header">
-          <div class="list-tab-card-title">${OAD.esc(t.title)}</div>
+          <div class="list-tab-card-title">${OAD.esc(OAD.formatDisplayTitle(t.title))}</div>
           <div class="pressure-badge ${pc}">${t._score}</div>
         </div>
         <div class="list-tab-card-meta">

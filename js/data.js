@@ -64,6 +64,32 @@ OAD.getThreadByUUID = function (uuid) {
   return OAD.DB.threads.find(t => t.uuid === uuid) || null;
 };
 
+OAD.formatDisplayTitle = function (title) {
+  if (!title) return '';
+  let display = title;
+  
+  if (window.OAD && OAD.Config && OAD.Config.demoMode) {
+    if (display.startsWith('[Patient] ')) {
+      display = display.substring(10);
+    } else if (OAD._demoRole) {
+      const roleName = OAD._demoRole.replace(/[0-9 ]/g, '').trim();
+      const rolePrefix = `[${roleName}] `;
+      if (display.startsWith(rolePrefix)) {
+        display = display.substring(rolePrefix.length);
+      }
+    }
+    
+    // Format as <clientName> | <threadTitle>
+    const parts = display.split(' - ');
+    if (parts.length > 1) {
+      const clientName = parts.pop().trim();
+      display = `${clientName} | ${parts.join(' - ').trim()}`;
+    }
+  }
+  
+  return display;
+};
+
 OAD.getVisibleThreads = function() {
   let threads = OAD.DB.threads || [];
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
