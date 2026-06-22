@@ -18,16 +18,28 @@
       <img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;">
     </div>
     <div class="header-actions">
-      <button class="ghost" onclick="OAD.renderDailyView()" data-i18n="dailySummary" style="font-weight:600">Daily Summary</button>
-      <button class="ghost" onclick="OAD.renderListView()" data-i18n="list">List</button>
-      <button class="ghost" onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
-      <button class="ghost" onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
-      <button class="ghost" id="nav-graph-btn" onclick="OAD.renderGraphView()" data-i18n="graph">Graph</button>
-      <button class="ghost" onclick="OAD.renderIdeaPanel()" data-i18n="ideas">Ideas</button>
-      <button class="ghost" onclick="OAD.renderHabitPanel()" data-i18n="habits">Habits</button>
-      <button class="ghost" onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
-      <button class="ghost" onclick="OAD.renderProposalsPanel()" data-i18n="proposals">Proposals</button>
-      <button class="ghost" onclick="OAD.openMailroomModal()" style="color:var(--accent);font-weight:600" data-i18n="scanMail">📥 Scan Mail</button>
+      <div class="nav-dropdown">
+        <button class="ghost" style="font-weight:600">Views</button>
+        <div class="nav-dropdown-content">
+          <button onclick="OAD.renderDailyView()" data-i18n="dailySummary">Daily Summary</button>
+          <button onclick="OAD.renderListView()" data-i18n="list">List</button>
+          <button onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
+          <button onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
+          <button id="nav-graph-btn" onclick="OAD.renderGraphView()" data-i18n="graph">Graph</button>
+        </div>
+      </div>
+      
+      <div class="nav-dropdown">
+        <button class="ghost" style="font-weight:600">Queues</button>
+        <div class="nav-dropdown-content">
+          <button onclick="OAD.renderIdeaPanel()" data-i18n="ideas">Ideas</button>
+          <button onclick="OAD.renderHabitPanel()" data-i18n="habits">Habits</button>
+          <button onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
+          <button onclick="OAD.renderProposalsPanel()" data-i18n="proposals">Proposals</button>
+          <button onclick="OAD.openMailroomModal()" style="color:var(--accent);font-weight:600" data-i18n="scanMail">📥 Scan Mail</button>
+        </div>
+      </div>
+
       <button class="ghost" onclick="OAD.renderCommandCenter()" style="font-weight:600;color:var(--primary)" data-i18n="myTeam">My Team</button>
       <button class="ghost" onclick="OAD.openSettingsModal()" data-i18n="settings">Settings</button>
       <button id="che-badge" class="ghost" onclick="OAD.openHealthPanel()" style="display:none;font-size:12px;padding:4px 10px;font-weight:600"></button>
