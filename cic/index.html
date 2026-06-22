@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <title>FlowQueue CIC (Ops & Logistics)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+  <link rel="stylesheet" href="../css/normalize.css">
+  <link rel="stylesheet" href="../css/app.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 1000;
+    }
+    .brand { font-weight: 800; color: var(--accent); font-size: 18px; letter-spacing: -0.5px; }
+    
+    .cic-layout {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+    
+    .cic-sidebar {
+      width: 400px;
+      background: var(--surface2);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    
+    .cic-map-area {
+      flex: 1;
+      position: relative;
+    }
+    
+    #cic-map {
+      width: 100%;
+      height: 100%;
+      background: #e5e5e5;
+    }
+    
+    .sidebar-header {
+      padding: 20px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .sidebar-header h2 { margin: 0; font-size: 18px; }
+    
+    .bed-check-list {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .bed-check-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    .bed-check-card h3 { margin: 0; font-size: 15px; }
+    .bed-check-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+    
+    .scan-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      padding: 12px;
+      border-radius: var(--radius);
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .scan-btn:hover { opacity: 0.9; }
+    
+    .scan-btn.success {
+      background: var(--open);
+      color: #000;
+      pointer-events: none;
+    }
+    
+    .day-selector {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .day-btn {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .day-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+    
+    .toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      background: var(--text);
+      color: var(--surface);
+      padding: 12px 24px;
+      border-radius: 99px;
+      font-weight: 600;
+      font-size: 14px;
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 9999;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    }
+    .toast.show {
+      transform: translateX(-50%) translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">FlowQueue CIC</div>
+    <div style="display:flex; gap:16px; align-items:center;">
+      <a href="../index.html" style="text-decoration:none; color:var(--accent); font-size:13px; font-weight:700; background:var(--surface2); padding:6px 12px; border-radius:6px;">← Back to Health OS</a>
+      <div class="user-role" style="font-size:13px; font-weight:600; color:var(--text-muted);">Ops & Logistics</div>
+    </div>
+  </header>
+  
+  <div class="cic-layout">
+    <div class="cic-sidebar">
+      <div class="sidebar-header">
+        <h2>Discharge Routing</h2>
+        <div class="day-selector">
+          <button class="day-btn active" onclick="CIC.setDayOffset(0)">Today</button>
+          <button class="day-btn" onclick="CIC.setDayOffset(1)">Tomorrow</button>
+          <button class="day-btn" onclick="CIC.setDayOffset(2)">+2 Days</button>
+          <button class="day-btn" onclick="CIC.setDayOffset(5)">+5 Days (Escalations)</button>
+        </div>
+      </div>
+      
+      <div class="sidebar-header" style="border-top: 1px solid var(--border);">
+        <h2>Active Bed Checks</h2>
+      </div>
+      <div class="bed-check-list" id="bed-check-container">
+        <!-- populated by cic-render.js -->
+      </div>
+    </div>
+    
+    <div class="cic-map-area">
+      <div id="cic-map"></div>
+    </div>
+  </div>
+  
+  <div id="toast" class="toast">Wristband scan logged in MyEvolv</div>
+
+  <!-- Load dependencies -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  
+  <!-- Load Core Engine -->
+  <script src="../js/utils.js"></script>
+  <script src="../js/config.js"></script>
+  
+  <!-- Load CIC Configuration Overlay -->
+  <script src="js/cic-config.js"></script>
+  
+  <!-- Initialize DB -->
+  <script src="../demo/demo_data.json" type="application/json" id="demo_data"></script>
+  <script src="../js/data.js"></script>
+  <script src="../js/engine.js"></script>
+  
+  <!-- CIC Renderer -->
+  <script src="js/cic-render.js"></script>
+</body>
+</html>

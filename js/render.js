@@ -28,6 +28,14 @@ OAD.renderHeaderActions = function () {
         </div>
       </div>
 
+      <div class="nav-dropdown">
+        <button class="ghost" style="font-weight:600">Operations</button>
+        <div class="nav-dropdown-content">
+          <button onclick="window.location.href='cic/index.html'">Map View</button>
+          <button onclick="window.location.href='cic/index.html'">Bed Scan View</button>
+        </div>
+      </div>
+
       <button class="ghost" onclick="OAD.renderCommandCenter()" style="font-weight:600;color:var(--primary)" data-i18n="myTeam">My Team</button>
       <button class="ghost" onclick="OAD.openSettingsModal()" data-i18n="settings">Settings</button>
       <button id="che-badge" class="ghost" onclick="OAD.openHealthPanel()" style="display:none;font-size:12px;padding:4px 10px;font-weight:600"></button>
