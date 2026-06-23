@@ -138,9 +138,18 @@ OAD.renderCommandCenter = function () {
   
   let totalPlanned = 0;
   let totalRetained = 0;
-  dischargedClients.forEach(c => {
-    totalPlanned += c.total_planned_days;
-    if (c.checkout_type === 'Standard') {
+  clients.forEach(c => {
+    if (c.checkout_type === 'Active') {
+      const checkInDt = new Date(c.check_in_date + "T00:00:00");
+      const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+      let currentDay = Math.round((todayDt - checkInDt) / 86400000) + 1;
+      if (currentDay < 1) currentDay = 1;
+      if (currentDay > c.total_planned_days) currentDay = c.total_planned_days;
+      
+      totalPlanned += currentDay;
+      totalRetained += currentDay;
+    } else {
+      totalPlanned += c.total_planned_days;
       totalRetained += c.total_stay_days;
     }
   });
@@ -160,10 +169,18 @@ OAD.renderCommandCenter = function () {
     
     if (c.checkout_type === 'Active') {
       breakdown[groupName].active++;
+      const checkInDt = new Date(c.check_in_date + "T00:00:00");
+      const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+      let currentDay = Math.round((todayDt - checkInDt) / 86400000) + 1;
+      if (currentDay < 1) currentDay = 1;
+      if (currentDay > c.total_planned_days) currentDay = c.total_planned_days;
+      
+      breakdown[groupName].planned += currentDay;
+      breakdown[groupName].retained += currentDay;
     } else {
       breakdown[groupName].planned += c.total_planned_days;
+      breakdown[groupName].retained += c.total_stay_days;
       if (c.checkout_type === 'Standard') {
-        breakdown[groupName].retained += c.total_stay_days;
         breakdown[groupName].standard++;
       } else if (c.checkout_type === 'ACA') {
         breakdown[groupName].aca++;
