@@ -1082,7 +1082,8 @@ OAD._userId     = null;  // set on successful Supabase sign-in
 // ── localStorage (sync, used by tests and as local cache) ──────────────
 
 OAD.isEnterpriseMode = function () {
-  return localStorage.getItem('oad_enterprise_mode') === 'true';
+  const isDemo = window.OAD && window.OAD.Config && window.OAD.Config.demoMode;
+  return isDemo || localStorage.getItem('oad_enterprise_mode') === 'true';
 };
 
 OAD.saveDB = function () {
@@ -1101,15 +1102,15 @@ OAD.saveDB = function () {
 };
 
 OAD.loadDB = function () {
+  if (OAD.isEnterpriseMode()) {
+    localStorage.removeItem(OAD._DB_KEY);
+    return false; // Force re-hydration from secure source
+  }
   try {
     var raw = localStorage.getItem(OAD._DB_KEY);
     if (!raw) return false;
     var data = JSON.parse(raw);
     if (!data || !Array.isArray(data.threads)) return false;
-    if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode && data.threads.length === 0) {
-      console.log('[OAD] Local data is empty in demo mode. Forcing re-seed...');
-      return false;
-    }
     OAD.DB = data;
     OAD._normalizeDB();
     return true;
