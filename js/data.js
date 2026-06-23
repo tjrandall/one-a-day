@@ -799,8 +799,11 @@ OAD._normalizeDB = function () {
   OAD.DB.proposals        = OAD.DB.proposals        || [];
   OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
   OAD.DB.health_alerts    = OAD.DB.health_alerts    || [];
+  let _maxId = 0;
+  OAD.DB.threads.forEach(function(t) { if (t.id && t.id > _maxId) _maxId = t.id; });
   // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area, null titles
   OAD.DB.threads.forEach(function (t) {
+    if (!t.id) { _maxId++; t.id = _maxId; }
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!t.title) t.title = '';
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;

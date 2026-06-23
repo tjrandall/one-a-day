@@ -73,7 +73,7 @@ OAD.t = function(key, fallback) {
 
 // Check if current user is SuperAdmin
 OAD.isSuperAdmin = function() {
-  if (OAD._userId === 'local-superadmin-id') return true;
+  if (OAD._userId === 'demo-superadmin-id') return true;
   // Always true for this environment, ensuring no lockouts.
   return true;
 };

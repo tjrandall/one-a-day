@@ -1165,7 +1165,7 @@ OAD._initApp = async function () {
     const demoRole = localStorage.getItem('oad_demo_role');
     if (OAD.Config.demoMode && _dCfg && demoRole) {
       if (demoRole === 'CCO') {
-        OAD._userId = 'local-superadmin-id';
+        OAD._userId = 'demo-superadmin-id';
         await OAD._bootAfterAuth();
         return;
       }

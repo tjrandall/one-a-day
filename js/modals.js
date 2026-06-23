@@ -1100,7 +1100,7 @@ OAD.openSettingsModal = function () {
           </div>
         </label>
       </div>
-      ${OAD._userId === 'local-superadmin-id' ? `
+      ${OAD._userId === 'demo-superadmin-id' ? `
       <div class="field" style="margin-bottom:0">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="f-demo-mode" ${OAD.Config.demoMode ? 'checked' : ''}>
@@ -1761,7 +1761,7 @@ OAD._signIn = async function () {
   // If demo.config.js is absent (prod/local dev), this block never matches.
   const _dCfg = (typeof OAD.DemoConfig !== 'undefined') ? OAD.DemoConfig : null;
   if (_dCfg && _dCfg.superAdmin && email === _dCfg.superAdmin.email && password === _dCfg.superAdmin.password) {
-    OAD._userId = 'local-superadmin-id';
+    OAD._userId = 'demo-superadmin-id';
     OAD.closeModal();
     await OAD._bootAfterAuth();
     return;
