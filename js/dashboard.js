@@ -338,17 +338,17 @@ OAD.renderCommandCenter = function () {
             const isEarly = lostDays > 0;
             const reasonColor = c.checkout_type === 'Standard' ? 'var(--text-muted)' : (c.checkout_type === 'ACA' ? 'var(--critical)' : 'orange');
             const impactHtml = isEarly 
-              ? \`<span style="color:var(--critical); font-weight:600; display:flex; align-items:center; gap:4px; justify-content:flex-end">⚠ \${lostDays} days lost</span>\`
-              : \`<span style="color:var(--text-muted)">0 days lost</span>\`;
+              ? `<span style="color:var(--critical); font-weight:600; display:flex; align-items:center; gap:4px; justify-content:flex-end">⚠ ${lostDays} days lost</span>`
+              : `<span style="color:var(--text-muted)">0 days lost</span>`;
             
-            return \`
+            return `
           <tr style="border-bottom:1px solid var(--border)">
-            <td style="padding:16px 0; font-family:var(--mono); color:var(--text-main); font-weight:500">\${OAD.esc(OAD.maskName(c.name, OAD._demoRole))}</td>
-            <td style="padding:16px 0; color:var(--text-main)">\${OAD.formatDate(c.discharge_date)}</td>
-            <td style="padding:16px 0; color:\${reasonColor}; font-weight:600">\${OAD.esc(c.checkout_type)}</td>
-            <td style="padding:16px 0; text-align:right">\${impactHtml}</td>
+            <td style="padding:16px 0; font-family:var(--mono); color:var(--text-main); font-weight:500">${OAD.esc(OAD.maskName(c.name, OAD._demoRole))}</td>
+            <td style="padding:16px 0; color:var(--text-main)">${OAD.formatDate(c.discharge_date)}</td>
+            <td style="padding:16px 0; color:${reasonColor}; font-weight:600">${OAD.esc(c.checkout_type)}</td>
+            <td style="padding:16px 0; text-align:right">${impactHtml}</td>
           </tr>
-          \`;
+          `;
           }).join('') || '<tr style="border-bottom:1px solid var(--border)"><td colspan="4" style="padding:16px 0; color:var(--text-muted); text-align:center">No recent discharges</td></tr>'}
         </table>
       </div>
