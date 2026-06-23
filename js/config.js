@@ -11,8 +11,28 @@ OAD.Config = {
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
     'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
   ],
-  demoMode: localStorage.getItem('oad_demo_mode') === 'true' || (typeof OAD !== 'undefined' && !!OAD.DemoConfig)
+  demoMode: window.location.port === '8081' || window.location.pathname.includes('demo')
 };
+
+// --- SELF-HEALING HACK ---
+// If we are NOT in demo mode (e.g. running on port 8080) but the browser cached the demo user session
+// or the massive demo payload, forcefully wipe it out so the user gets a clean slate.
+if (!OAD.Config.demoMode) {
+  const cachedUser = localStorage.getItem('supabase.auth.token');
+  const cachedDb = localStorage.getItem('oad_db');
+  if (
+    (cachedUser && cachedUser.includes('demo-superadmin-id')) || 
+    (cachedDb && cachedDb.includes('[Patient]')) ||
+    localStorage.getItem('oad_demo_role')
+  ) {
+    console.log('[OAD] Self-healing: Purging leaked demo data from standard environment.');
+    localStorage.clear();
+    sessionStorage.clear();
+    // Force reload to completely reset state
+    window.location.href = window.location.pathname;
+  }
+}
+
 
 OAD.normalizeLifeArea = function (area) {
   if (!area) return 'Other';
