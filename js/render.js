@@ -2690,19 +2690,27 @@ OAD.renderJourneyMap = function() {
             let bg = 'var(--bg-surface)';
             let color = 'var(--text-main)';
             let border = '1px solid var(--border)';
+            let icon = '';
+            let srStatus = '';
             
             if (t.status === 'closed') {
               bg = 'rgba(46, 160, 67, 0.15)'; // Green
               border = '1px solid rgba(46, 160, 67, 0.4)';
               color = '#2ea043';
+              icon = '<span aria-hidden="true" style="font-size:12px;margin-right:2px">✓</span>';
+              srStatus = 'Completed';
             } else if (t.next_action_date < todayStr) {
               bg = 'rgba(248, 81, 73, 0.15)'; // Red
               border = '1px solid rgba(248, 81, 73, 0.4)';
               color = '#f85149';
+              icon = '<span aria-hidden="true" style="font-size:10px;margin-right:2px">⚠</span>';
+              srStatus = 'Overdue';
             } else {
               bg = 'var(--bg-surface-hover)'; // Gray
               border = '1px solid var(--border-hover)';
               color = 'var(--text-muted)';
+              icon = '<span aria-hidden="true" style="font-size:10px;margin-right:2px">○</span>';
+              srStatus = 'Pending';
             }
             
             // Extract a short label from the title (first 2-3 words)
@@ -2710,8 +2718,8 @@ OAD.renderJourneyMap = function() {
             shortTitle = shortTitle.split(' - ')[0]; // Remove patient suffix
             
             cellContent += `
-              <div onclick="OAD.selectThread(${t.id})" title="${OAD.esc(t.title)}\\nStatus: ${t.status}" style="background:${bg}; border:${border}; color:${color}; padding:4px 6px; border-radius:4px; font-size:10px; font-weight:600; line-height:1.2; text-align:center; cursor:pointer; word-wrap:break-word; overflow:hidden; max-height:48px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
-                ${OAD.esc(shortTitle)}
+              <div onclick="OAD.selectThread(${t.id})" role="button" tabindex="0" aria-label="${srStatus}: ${OAD.esc(shortTitle)}" title="${OAD.esc(t.title)}\\nStatus: ${t.status}" style="background:${bg}; border:${border}; color:${color}; padding:4px 6px; border-radius:4px; font-size:10px; font-weight:600; line-height:1.2; text-align:center; cursor:pointer; word-wrap:break-word; overflow:hidden; max-height:48px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                ${icon}<span aria-hidden="true">${OAD.esc(shortTitle)}</span>
               </div>
             `;
           });
