@@ -27,6 +27,8 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
         "status": "open" if is_active else "closed",
         "priority": "Medium",
         "life_area": "Patient",
+        "next_action": "Discharge patient.",
+        "next_action_date": add_days(check_in_date, stay).strftime("%Y-%m-%d"),
         "closing_condition": "Patient discharged.",
         "closing_condition_met": not is_active,
         "evolution_log": [{"date": check_in_date.strftime("%Y-%m-%d"), "note": "Created"}],
@@ -52,11 +54,26 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
                 elif trigger.get('anchor') == 'discharge':
                     due = add_days(due, 28 + trigger.get('offset_days', 0))
                 
+                is_past = due < now
+                days_ago = (now - due).days
+                if is_active:
+                    if is_past:
+                        if days_ago > 5:
+                            status = "closed"
+                        else:
+                            status = "stalled" if random.random() < 0.3 else "open"
+                            if random.random() < 0.4:
+                                status = "closed"
+                    else:
+                        status = "stalled" if random.random() < 0.15 else "open"
+                else:
+                    status = "closed"
+                
                 threads.append({
                     "uuid": make_uuid(),
                     "parent_uuid": p_uuid,
                     "title": f"[{trigger.get('owner_role')}] {trigger.get('name')} - {name}",
-                    "status": "stalled" if is_active and random.random() < 0.15 else "open",
+                    "status": status,
                     "priority": trigger.get('priority', 'Medium'),
                     "life_area": trigger.get('owner_role'),
                     "next_action": "Complete mandatory requirement." if trigger.get('mandatory') else "Complete task.",
@@ -71,11 +88,26 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
                     iteration = 1
                     for i in range(interval, 29, interval):
                         due = add_days(check_in_date, i)
+                        is_past = due < now
+                        days_ago = (now - due).days
+                        if is_active:
+                            if is_past:
+                                if days_ago > 5:
+                                    status = "closed"
+                                else:
+                                    status = "stalled" if random.random() < 0.3 else "open"
+                                    if random.random() < 0.4:
+                                        status = "closed"
+                            else:
+                                status = "stalled" if random.random() < 0.15 else "open"
+                        else:
+                            status = "closed"
+                            
                         threads.append({
                             "uuid": make_uuid(),
                             "parent_uuid": p_uuid,
                             "title": f"[{trigger.get('owner_role')}] {trigger.get('name')} (Part {iteration}) - {name}",
-                            "status": "stalled" if is_active and random.random() < 0.15 else "open",
+                            "status": status,
                             "priority": trigger.get('priority', 'Medium'),
                             "life_area": trigger.get('owner_role'),
                             "next_action": "Complete mandatory requirement." if trigger.get('mandatory') else "Complete task.",

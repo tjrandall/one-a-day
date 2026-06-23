@@ -852,7 +852,7 @@ OAD.renderTodayView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">TODAY</span>';
 
-    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+    if (!isOverdue && t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
       badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
     }
 
@@ -1102,7 +1102,7 @@ OAD.renderDailyView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
     
-    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+    if (!isOverdue && t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
       badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
     }
     
@@ -1544,7 +1544,7 @@ OAD.renderMatrixView = function () {
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
 
-    if (t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
+    if (!isOverdue && t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
       badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
     }
 

@@ -2327,6 +2327,8 @@ OAD._executeAdmission = async function() {
          status: 'open',
          priority: 'Medium',
          life_area: 'Patient',
+         next_action: 'Discharge patient.',
+         next_action_date: dischargeDate.toISOString().split('T')[0],
          closing_condition: 'Patient discharged.',
          evolution_log: [{date: now.toISOString().split('T')[0], note: 'Created'}],
          metadata: {
