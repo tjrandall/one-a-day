@@ -814,17 +814,6 @@ OAD._normalizeDB = function () {
   OAD.DB.cadences.forEach(function (c) {
     if (!Array.isArray(c.days_of_week)) c.days_of_week = [];
   });
-
-  // Hotfix for stale local data: silently close any tasks that are > 5 days overdue
-  var todayStr = new Date().toISOString().slice(0, 10);
-  OAD.DB.threads.forEach(function (t) {
-    if (t.status !== 'closed' && t.next_action_date && t.next_action_date < todayStr) {
-      var daysOver = Math.round((new Date(todayStr) - new Date(t.next_action_date + 'T00:00:00')) / 86400000);
-      if (daysOver > 5) {
-        t.status = 'closed';
-      }
-    }
-  });
 };
 
 // For threads where the closing condition IS the action (closing_condition_type === 'action'),

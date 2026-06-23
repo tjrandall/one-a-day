@@ -118,7 +118,6 @@ OAD.renderCommandCenter = function () {
     panel.innerHTML = `
       <div class="ds-panel" role="main" style="max-width: 900px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:60vh">
         <h2>No Demo Data Loaded</h2>
-        <p style="color:var(--text-muted); margin-bottom:24px">Please navigate to Data & Settings > Import Data and upload <code style="padding:4px;background:var(--surface2)">demo_data.json</code>.</p>
       </div>
     `;
     return;

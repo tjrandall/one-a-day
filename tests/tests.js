@@ -1193,11 +1193,26 @@ OAD._initApp = async function () {
     return;
   }
   if (!loadResult) {
-    // Provide an empty database for new accounts instead of mock data
-    OAD.DB = {
-      threads: [], cadences: [], habits: [], ideas: [],
-      persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
-    };
+    if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
+      try {
+        const res = await fetch('modules/demo/demo_data.json');
+        if (res.ok) {
+          OAD.DB = await res.json();
+          OAD._normalizeDB();
+        } else {
+          throw new Error('demo_data.json not found');
+        }
+      } catch (err) {
+        console.error("Demo data auto-load failed", err);
+        OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
+      }
+    } else {
+      // Provide an empty database for new accounts instead of mock data
+      OAD.DB = {
+        threads: [], cadences: [], habits: [], ideas: [],
+        persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
+      };
+    }
   }
   if (OAD._migrateActionDeadlines() > 0) OAD.saveDB();
   OAD._finishBoot();
@@ -1217,11 +1232,26 @@ OAD._bootAfterAuth = async function () {
       return;
     }
     if (!localResult) {
-      // Provide an empty database for new accounts instead of mock data
-      OAD.DB = {
-        threads: [], cadences: [], habits: [], ideas: [],
-        persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
-      };
+      if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
+        try {
+          const res = await fetch('modules/demo/demo_data.json');
+          if (res.ok) {
+            OAD.DB = await res.json();
+            OAD._normalizeDB();
+          } else {
+            throw new Error('demo_data.json not found');
+          }
+        } catch (err) {
+          console.error("Demo data auto-load failed", err);
+          OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
+        }
+      } else {
+        // Provide an empty database for new accounts instead of mock data
+        OAD.DB = {
+          threads: [], cadences: [], habits: [], ideas: [],
+          persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
+        };
+      }
     }
     await OAD._saveToCloud();
   } else {
