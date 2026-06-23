@@ -105,7 +105,8 @@ OAD.getVisibleThreads = function() {
         return false;
       });
     } else if (OAD._demoRole.includes('Director')) {
-      threads = threads.filter(t => t.life_area === 'Director' || t.life_area === 'Counselor' || t.life_area === 'Patient');
+      const clinicalAreas = ['Director', 'Counselor', 'Patient', 'Case Manager', 'Medical', 'RA', 'Transportation'];
+      threads = threads.filter(t => clinicalAreas.includes(t.life_area));
     } else if (OAD._demoRole === 'RA') {
       threads = threads.filter(t => t.life_area === 'RA');
     } else if (OAD._demoRole === 'Case Manager') {

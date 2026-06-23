@@ -2269,9 +2269,9 @@ OAD.openAdmitClientModal = function() {
       <div class="input-group" style="margin-top:16px;">
         <label>Primary Counselor</label>
         <select id="f-client-counselor">
-          <option value="Sarah Jenkins">Sarah Jenkins</option>
-          <option value="David Kim">David Kim</option>
-          <option value="Emma Clark">Emma Clark</option>
+          <option value="Counselor 1">Counselor 1</option>
+          <option value="Counselor 2">Counselor 2</option>
+          <option value="Counselor 3">Counselor 3</option>
         </select>
       </div>
       <div class="input-group" style="margin-top:16px;">
@@ -2316,6 +2316,27 @@ OAD._executeAdmission = async function() {
       const now = new Date();
       let threadsAdded = 0;
       
+      const pUuid = 'u-' + Math.random().toString(36).substr(2, 9);
+      const dischargeDate = new Date(now);
+      dischargeDate.setDate(dischargeDate.getDate() + days);
+
+      OAD.DB.threads.push({
+         id: OAD.nextId(),
+         uuid: pUuid,
+         title: `[Patient] ${name}`,
+         status: 'open',
+         priority: 'Medium',
+         life_area: 'Patient',
+         closing_condition: 'Patient discharged.',
+         evolution_log: [{date: now.toISOString().split('T')[0], note: 'Created'}],
+         metadata: {
+           counselor: counselor,
+           check_in_date: today,
+           discharge_date: dischargeDate.toISOString().split('T')[0],
+           total_stay_days: days
+         }
+      });
+
       payload.triggers.forEach(trigger => {
         if (trigger.type === 'thread' || trigger.type === 'escalation') {
            let due = new Date(now);
@@ -2331,6 +2352,7 @@ OAD._executeAdmission = async function() {
            OAD.DB.threads.push({
              id: OAD.nextId(),
              uuid: 'u-' + Math.random().toString(36).substr(2, 9),
+             parent_uuid: pUuid,
              title: `[${trigger.owner_role}] ${trigger.name} - ${name}`,
              status: 'open',
              priority: trigger.priority || 'Normal',
@@ -2339,7 +2361,8 @@ OAD._executeAdmission = async function() {
              next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
              next_action_date: due.toISOString().split('T')[0],
              closing_condition: 'Documentation submitted.',
-             evolution_log: [],
+             evolution_log: [{date: now.toISOString().split('T')[0], note: 'Created'}],
+             metadata: { counselor: counselor },
              created_at: now.toISOString(),
              updated_at: now.toISOString()
            });
@@ -2354,6 +2377,7 @@ OAD._executeAdmission = async function() {
                OAD.DB.threads.push({
                  id: OAD.nextId(),
                  uuid: 'u-' + Math.random().toString(36).substr(2, 9),
+                 parent_uuid: pUuid,
                  title: `[${trigger.owner_role}] ${trigger.name} (Part ${iteration}) - ${name}`,
                  status: 'open',
                  priority: trigger.priority || 'Normal',
@@ -2362,7 +2386,8 @@ OAD._executeAdmission = async function() {
                  next_action: trigger.mandatory ? 'Complete mandatory requirement.' : 'Complete task.',
                  next_action_date: due.toISOString().split('T')[0],
                  closing_condition: 'Documentation submitted.',
-                 evolution_log: [],
+                 evolution_log: [{date: now.toISOString().split('T')[0], note: 'Created'}],
+                 metadata: { counselor: counselor },
                  created_at: now.toISOString(),
                  updated_at: now.toISOString()
                });
