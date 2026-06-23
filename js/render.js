@@ -10,6 +10,7 @@ OAD.renderHeaderActions = function () {
         <button class="ghost" style="font-weight:600" data-i18n="views">Views</button>
         <div class="nav-dropdown-content">
           <button onclick="OAD.renderDailyView()" data-i18n="dailySummary">Daily Summary</button>
+          <button onclick="OAD.renderReportsView()" data-i18n="reportsView">Reports View</button>
           <button onclick="OAD.renderListView()" data-i18n="list">List</button>
           <button onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
           <button onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
@@ -2455,4 +2456,132 @@ OAD.filterListTab = function () {
       </div>
     `;
   }).join('');
+};
+
+OAD.renderReportsView = function() {
+  OAD._lastView = 'Reports';
+  OAD.highlightNav('renderReportsView');
+  OAD._activeId = null;
+  OAD.renderList();
+
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+  const todayStr = todayDt.toISOString().slice(0, 10);
+  const yesterdayDt = new Date(todayDt); yesterdayDt.setDate(yesterdayDt.getDate() - 1);
+  const yesterdayStr = yesterdayDt.toISOString().slice(0, 10);
+  
+  const in3Dt = new Date(todayDt); in3Dt.setDate(in3Dt.getDate() + 3);
+  const in3Str = in3Dt.toISOString().slice(0, 10);
+  
+  const in5Dt = new Date(todayDt); in5Dt.setDate(in5Dt.getDate() + 5);
+  const in5Str = in5Dt.toISOString().slice(0, 10);
+
+  const threads = OAD.getVisibleThreads() || [];
+  
+  // 1. New issues (last 24 hours). Check evolution_log for "Created" note with date >= yesterday
+  const newIssues = threads.filter(t => {
+    if (t.life_area === 'Patient') return false;
+    if (!t.evolution_log || t.evolution_log.length === 0) return false;
+    const createdLog = t.evolution_log[0]; // First entry is creation
+    return createdLog && createdLog.date >= yesterdayStr && (t.status === 'open' || t.status === 'stalled' || t.status === 'waiting');
+  });
+
+  // 2. Open Blockers / Overdue Issues
+  const blockersAndOverdue = threads.filter(t => {
+    if (t.status === 'closed') return false;
+    if (t.life_area === 'Patient') return false;
+    
+    let isOverdue = t.next_action_date && t.next_action_date < todayStr;
+    let isBlocker = t.connections && t.connections.some(c => c.edge_type === 'blocks');
+    let isStalled = t.status === 'stalled';
+    
+    return isOverdue || isBlocker || isStalled;
+  });
+
+  // Patient queries
+  const patients = threads.filter(t => t.life_area === 'Patient' && t.status !== 'closed' && t.metadata && t.metadata.discharge_date);
+  
+  // 3. Next 3d patients checking out (due >= today && due <= in3Str)
+  const next3d = patients.filter(t => t.metadata.discharge_date >= todayStr && t.metadata.discharge_date <= in3Str)
+                         .sort((a,b) => a.metadata.discharge_date.localeCompare(b.metadata.discharge_date));
+
+  // 4. Next 5d patients checking out (due > in3Str && due <= in5Str)
+  const next5d = patients.filter(t => t.metadata.discharge_date > in3Str && t.metadata.discharge_date <= in5Str)
+                         .sort((a,b) => a.metadata.discharge_date.localeCompare(b.metadata.discharge_date));
+
+  // 5. Remaining clients (due > in5Str)
+  const remaining = patients.filter(t => t.metadata.discharge_date > in5Str)
+                            .sort((a,b) => a.metadata.discharge_date.localeCompare(b.metadata.discharge_date));
+
+  const renderThreadItems = (arr, emptyMsg) => {
+    if (!arr.length) return `<div class="empty-state" style="padding:10px;color:var(--text-muted);font-size:14px;background:var(--bg-surface);border-radius:4px;">${emptyMsg}</div>`;
+    return '<div class="thread-list">' + arr.map(t => {
+      let dischargeStr = '';
+      if (t.life_area === 'Patient' && t.metadata && t.metadata.discharge_date) {
+        dischargeStr = `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Discharge: <b>${t.metadata.discharge_date}</b></div>`;
+      }
+      return `
+        <div class="list-tab-card" onclick="OAD.selectThread(${t.id})" style="margin-bottom:8px;padding:12px;cursor:pointer;">
+          <div style="font-weight:600;font-size:14px;color:var(--text-main);">${OAD.esc(OAD.formatDisplayTitle(t.title))}</div>
+          <div style="margin-top:4px;display:flex;gap:8px;font-size:12px;">
+            <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
+            <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
+            ${t.next_action_date ? `<span style="color:${t.next_action_date < todayStr ? 'var(--critical)' : 'var(--text-muted)'}">Due: ${t.next_action_date}</span>` : ''}
+          </div>
+          ${dischargeStr}
+        </div>
+      `;
+    }).join('') + '</div>';
+  };
+
+  const html = `
+    <div class="ds-dashboard" style="max-width:800px; margin: 0 auto; padding-bottom: 40px;">
+      <header class="ds-header" style="margin-bottom: 24px;">
+        <div>
+          <h1>Daily Reports</h1>
+          <p class="ds-subtitle">Structured morning walkthrough</p>
+        </div>
+      </header>
+
+      <div class="reports-section" style="margin-bottom: 32px;">
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-main);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px">🆕</span> New Issues (Last 24h)
+        </h2>
+        ${renderThreadItems(newIssues, 'No new issues reported.')}
+      </div>
+
+      <div class="reports-section" style="margin-bottom: 32px;">
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-main);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px">🛑</span> Open Blockers & Overdue Issues
+        </h2>
+        ${renderThreadItems(blockersAndOverdue, 'All clear — no blockers or overdue issues.')}
+      </div>
+
+      <div class="reports-section" style="margin-bottom: 32px;">
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-main);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px">⚡</span> Discharges: Next 3 Days
+        </h2>
+        ${renderThreadItems(next3d, 'No discharges in the next 3 days.')}
+      </div>
+
+      <div class="reports-section" style="margin-bottom: 32px;">
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-main);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px">⏳</span> Discharges: 3-5 Days Out
+        </h2>
+        ${renderThreadItems(next5d, 'No discharges in the 3-5 day window.')}
+      </div>
+
+      <div class="reports-section" style="margin-bottom: 32px;">
+        <h2 style="font-size:16px;font-weight:600;margin-bottom:12px;color:var(--text-main);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:18px">📋</span> Remaining Roster
+        </h2>
+        ${renderThreadItems(remaining, 'No other active patients.')}
+      </div>
+
+    </div>
+  `;
+
+  panel.innerHTML = html;
 };

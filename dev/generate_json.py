@@ -29,6 +29,7 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
         "life_area": "Patient",
         "closing_condition": "Patient discharged.",
         "closing_condition_met": not is_active,
+        "evolution_log": [{"date": check_in_date.strftime("%Y-%m-%d"), "note": "Created"}],
         "metadata": {
             "counselor": counselor,
             "checkout_type": checkout_type,
@@ -61,6 +62,7 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
                     "next_action": "Complete mandatory requirement." if trigger.get('mandatory') else "Complete task.",
                     "next_action_date": due.strftime("%Y-%m-%d"),
                     "closing_condition": "Documentation submitted.",
+                    "evolution_log": [{"date": check_in_date.strftime("%Y-%m-%d"), "note": "Created"}],
                     "metadata": {}
                 })
             elif trigger.get('type') == 'cadence':
@@ -79,6 +81,7 @@ def add_patient(name, counselor, checkout_type, check_in_days_ago, stay, is_acti
                             "next_action": "Complete mandatory requirement." if trigger.get('mandatory') else "Complete task.",
                             "next_action_date": due.strftime("%Y-%m-%d"),
                             "closing_condition": "Documentation submitted.",
+                            "evolution_log": [{"date": check_in_date.strftime("%Y-%m-%d"), "note": "Created"}],
                             "metadata": {}
                         })
                         iteration += 1
