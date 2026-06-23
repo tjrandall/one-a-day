@@ -1256,13 +1256,14 @@ OAD._bootAfterAuth = async function () {
         } catch (err) {
           console.error("Demo data auto-load failed", err);
           alert("Demo data auto-load failed: " + err.message + "\\nPlease take a screenshot of this error and show it to the developer.");
-          OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
+          OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }, lastError: err.stack || err.message };
         }
       } else {
         // Provide an empty database for new accounts instead of mock data
         OAD.DB = {
           threads: [], cadences: [], habits: [], ideas: [],
-          persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} }
+          persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} },
+          lastError: 'HIT_ELSE_BLOCK_DEMO_MODE_FALSE'
         };
       }
     }

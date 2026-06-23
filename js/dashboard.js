@@ -121,6 +121,7 @@ OAD.renderCommandCenter = function () {
         <p style="margin-top: 1rem; color: var(--text-muted);">Total Threads in memory: ${OAD.DB.threads ? OAD.DB.threads.length : 'undefined'}</p>
         <p style="color: var(--text-muted);">OAD.DB keys: ${Object.keys(OAD.DB || {}).join(', ')}</p>
         <p style="color: var(--text-muted);">Demo Role: ${OAD._demoRole || 'undefined'}</p>
+        ${OAD.DB.lastError ? `<div style="background: rgba(255,0,0,0.1); border: 1px solid red; color: red; padding: 10px; margin-top: 20px; max-width: 800px; text-align: left; overflow-x: auto;"><pre>${OAD.DB.lastError}</pre></div>` : ''}
       </div>
     `;
     return;

@@ -1150,6 +1150,7 @@ OAD._loadFromCloud = async function () {
         return false;
       }
       OAD.DB = data.db;
+      OAD.DB.lastError = 'LOADED_FROM_CLOUD';
       OAD._normalizeDB();
       // Keep localStorage in sync as local cache
       OAD.saveDB();
