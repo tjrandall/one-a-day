@@ -799,7 +799,8 @@ OAD._normalizeDB = function () {
   OAD.DB.proposals        = OAD.DB.proposals        || [];
   OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
   OAD.DB.health_alerts    = OAD.DB.health_alerts    || [];
-  OAD.DB.persona          = OAD.DB.persona          || { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} };
+  OAD.DB.persona          = OAD.DB.persona          || {};
+  OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
   let _maxId = 0;
   OAD.DB.threads.forEach(function(t) { if (t.id && t.id > _maxId) _maxId = t.id; });
   // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area, null titles
