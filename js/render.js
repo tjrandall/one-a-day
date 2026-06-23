@@ -1231,7 +1231,14 @@ OAD.renderDailyView = function () {
     openThreads.sort((a, b) => a.id - b.id);
 
     let explanation = '';
-    if (toatThread.status === 'stalled') {
+    const isCollision = toatThread.next_action_date && window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay(toatThread.next_action_date, OAD._demoRole);
+
+    if (isCollision) {
+      const collisionThreads = openThreads.filter(t => t.next_action_date && OAD.isOffDay(t.next_action_date, OAD._demoRole));
+      collisionThreads.sort((a, b) => a.id - b.id);
+      const idx = collisionThreads.findIndex(t => t.id === toatThread.id) + 1;
+      explanation = 'Selected because it has a <strong style="color:var(--critical)">SHIFT COLLISION</strong> and is the oldest of ' + collisionThreads.length + ' such tasks (Rank ' + idx + '/' + collisionThreads.length + ' by creation age).';
+    } else if (toatThread.status === 'stalled') {
       const stalledThreads = openThreads.filter(t => t.status === 'stalled');
       stalledThreads.sort((a, b) => a.id - b.id);
       const idx = stalledThreads.findIndex(t => t.id === toatThread.id) + 1;
