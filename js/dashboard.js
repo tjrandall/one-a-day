@@ -119,6 +119,7 @@ OAD.renderCommandCenter = function () {
       <div class="ds-panel" role="main" style="max-width: 900px; display:flex; flex-direction:column; align-items:center; justify-content:center; height:60vh">
         <h2>No Demo Data Loaded</h2>
         <p style="margin-top: 1rem; color: var(--text-muted);">Total Threads in memory: ${OAD.DB.threads ? OAD.DB.threads.length : 'undefined'}</p>
+        <p style="color: var(--text-muted);">OAD.DB keys: ${Object.keys(OAD.DB || {}).join(', ')}</p>
         <p style="color: var(--text-muted);">Demo Role: ${OAD._demoRole || 'undefined'}</p>
       </div>
     `;

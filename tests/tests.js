@@ -1242,16 +1242,20 @@ OAD._bootAfterAuth = async function () {
     if (!localResult) {
       if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
         try {
-          const res = await fetch('/modules/demo/demo_data.json');
+          const url = '/modules/demo/demo_data.json?v=' + Date.now();
+          console.log('[OAD] Fetching demo data from:', url);
+          const res = await fetch(url);
           if (res.ok) {
             OAD.DB = await res.json();
             OAD._normalizeDB();
             OAD.saveDB(); // Persist auto-loaded demo data to localStorage
+            console.log('[OAD] Demo data auto-loaded successfully. Threads:', OAD.DB.threads.length);
           } else {
-            throw new Error('demo_data.json not found');
+            throw new Error('HTTP ' + res.status + ' ' + res.statusText);
           }
         } catch (err) {
           console.error("Demo data auto-load failed", err);
+          alert("Demo data auto-load failed: " + err.message + "\\nPlease take a screenshot of this error and show it to the developer.");
           OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
         }
       } else {
