@@ -1221,7 +1221,14 @@ OAD._initApp = async function () {
 
 // Called after successful auth to load cloud data (or seed if none), then render.
 OAD._bootAfterAuth = async function () {
-  const cloudLoaded = await OAD._loadFromCloud();
+  let cloudLoaded = false;
+  if (sessionStorage.getItem('oad_fresh_demo_seed_required')) {
+    console.log('[OAD] Fresh demo seed required. Bypassing cloud load to force re-hydration.');
+    sessionStorage.removeItem('oad_fresh_demo_seed_required');
+  } else {
+    cloudLoaded = await OAD._loadFromCloud();
+  }
+
   if (!cloudLoaded) {
     // New user or cloud empty: try migrating localStorage, otherwise seed fresh.
     const localResult = OAD.loadDB();
