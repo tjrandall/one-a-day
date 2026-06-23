@@ -101,7 +101,6 @@ OAD.getVisibleThreads = function() {
       
       threads = threads.filter(t => {
         if (t.life_area === 'Counselor' && t.metadata && t.metadata.counselor === OAD._demoRole) return true;
-        if (t.life_area === 'Patient' && validPatientUuids.includes(t.uuid)) return true;
         if (t.parent_uuid && validPatientUuids.includes(t.parent_uuid) && t.life_area === 'Counselor') return true;
         return false;
       });
@@ -592,10 +591,6 @@ OAD.getDailyToat = function () {
 
   const allThreads = OAD.getVisibleThreads() || [];
   
-  const collisions = allThreads.filter(t => {
-    return t.status !== 'closed' && t.next_action_date && window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay(t.next_action_date, OAD._demoRole);
-  });
-  
   const stalled = allThreads.filter(t => t.status === 'stalled');
   const overdueWaiting = allThreads.filter(t => {
     return t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr;
@@ -605,18 +600,15 @@ OAD.getDailyToat = function () {
   });
 
   let selected = null;
-  if (collisions.length > 0) {
-    collisions.sort((a, b) => a.id - b.id);
-    selected = collisions[0];
-  } else if (stalled.length > 0) {
+  if (stalled.length > 0) {
     stalled.sort((a, b) => a.id - b.id);
     selected = stalled[0];
-  } else if (overdueWaiting.length > 0) {
-    overdueWaiting.sort((a, b) => a.id - b.id);
-    selected = overdueWaiting[0];
   } else if (overdueOpen.length > 0) {
     overdueOpen.sort((a, b) => a.id - b.id);
     selected = overdueOpen[0];
+  } else if (overdueWaiting.length > 0) {
+    overdueWaiting.sort((a, b) => a.id - b.id);
+    selected = overdueWaiting[0];
   }
 
   if (selected) {
