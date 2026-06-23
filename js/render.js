@@ -399,7 +399,7 @@ OAD.generateInsight = async function (id) {
 };
 
 OAD.renderOverdueBanner = function () {
-  const overdue = OAD.DB.cadences.filter(function (c) { return OAD.cadenceOverdue(c); });
+  const overdue = OAD.getVisibleCadences().filter(function (c) { return OAD.cadenceOverdue(c); });
   let banner = document.getElementById('overdue-banner');
 
   if (!overdue.length) {
@@ -445,7 +445,7 @@ OAD.renderCadencePanel = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  const cadences = OAD.DB.cadences;
+  const cadences = OAD.getVisibleCadences();
   const today    = new Date().toISOString().slice(0, 10);
 
   const items = cadences.length ? cadences.map(function (c) {
@@ -810,7 +810,7 @@ OAD.renderTodayView = function () {
   const q4Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
 
   // ── Cadences ───────────────────────────────────────────────────────
-  const cads = OAD.DB.cadences || [];
+  const cads = OAD.getVisibleCadences() || [];
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
   
@@ -1061,7 +1061,7 @@ OAD.renderDailyView = function () {
   const cycleThreadIds = new Set(cycles.flat());
 
   // ── Cadences ───────────────────────────────────────────────────────
-  const cads = OAD.DB.cadences || [];
+  const cads = OAD.getVisibleCadences() || [];
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
@@ -1433,8 +1433,8 @@ OAD.renderDailyView = function () {
         '<div class="ds-col-left">' +
           toatWidgetHtml +
           focusCardHtml +
-          heatMapHtml +
           weekLoadHtml +
+          heatMapHtml +
         '</div>' +
         '<div class="ds-col-right">' +
           bucket('overdue', '⚠', 'Overdue Tasks', overdueItems) +
@@ -1496,7 +1496,7 @@ OAD.renderMatrixView = function () {
   const q4Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
 
   // ── Cadences ───────────────────────────────────────────────────────
-  const cads = OAD.DB.cadences || [];
+  const cads = OAD.getVisibleCadences() || [];
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
   

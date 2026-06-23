@@ -1159,6 +1159,24 @@ OAD._initApp = async function () {
       await OAD._bootAfterAuth();
       return;
     }
+    
+    // Auto-login logic for demo mode
+    const _dCfg = (typeof window.OAD !== 'undefined' && typeof window.OAD.DemoConfig !== 'undefined') ? window.OAD.DemoConfig : null;
+    const demoRole = localStorage.getItem('oad_demo_role');
+    if (OAD.Config.demoMode && _dCfg && demoRole) {
+      if (demoRole === 'CCO') {
+        OAD._userId = 'local-superadmin-id';
+        await OAD._bootAfterAuth();
+        return;
+      }
+      const match = _dCfg.roles.find(r => r.role === demoRole);
+      if (match) {
+        OAD._userId = match.userId;
+        await OAD._bootAfterAuth();
+        return;
+      }
+    }
+
     // No session — show sign-in modal, boot continues after successful auth
     OAD.openSignInModal();
     return;

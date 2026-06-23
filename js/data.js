@@ -117,6 +117,18 @@ OAD.getVisibleThreads = function() {
   return threads;
 };
 
+OAD.getVisibleCadences = function() {
+  let cadences = OAD.DB.cadences || [];
+  if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
+    if (OAD._demoRole.startsWith('Counselor')) {
+      cadences = cadences.filter(c => c.metadata && c.metadata.counselor === OAD._demoRole);
+    } else if (OAD._demoRole === 'Director Alpha') {
+      cadences = cadences.filter(c => c.metadata && ['Counselor 1','Counselor 2','Counselor 3','Counselor 4','Counselor 5','Counselor 6','Counselor 7','Counselor 8','Counselor 9','Counselor 10'].includes(c.metadata.counselor));
+    }
+  }
+  return cadences;
+};
+
 OAD._afterSaveCallbacks = [];
 
 OAD._runAfterSave = function (thread) {

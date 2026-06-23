@@ -1171,7 +1171,7 @@ OAD._saveSettings = async function () {
 
   const greetingInput = document.getElementById('f-greeting-title');
   if (greetingInput && !greetingInput.disabled) {
-    OAD.Config.userGreetingTitle = greetingInput.value.trim() || 'Chief';
+    OAD.Config.userGreetingTitle = greetingInput.value.trim();
     localStorage.setItem('oad_greeting_title', OAD.Config.userGreetingTitle);
   }
 

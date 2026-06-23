@@ -132,11 +132,55 @@ for c in training_counselors:
         "metadata": {"counselor": c}
     })
 
+# Director Alpha tasks
+threads.append({
+    "uuid": make_uuid(),
+    "title": "[Director Alpha] Q3 Operations Budget Review",
+    "status": "open",
+    "priority": "High",
+    "life_area": "Director",
+    "next_action": "Consolidate counselor variance reports.",
+    "next_action_date": add_days(now, -2).strftime("%Y-%m-%d"), # Overdue
+    "closing_condition": "Budget approved.",
+    "metadata": {"counselor": "Director Alpha"}
+})
+threads.append({
+    "uuid": make_uuid(),
+    "title": "[Director Alpha] Executive Steering Committee",
+    "status": "stalled",
+    "priority": "Critical",
+    "life_area": "Director",
+    "next_action": "Draft slides for board deck.",
+    "next_action_date": add_days(now, 1).strftime("%Y-%m-%d"),
+    "closing_condition": "Slides submitted.",
+    "metadata": {"counselor": "Director Alpha"}
+})
+
+cadences = []
+group_meetings = [
+    {"title": "Release Prevention Build History", "days": [1, 2, 3, 4, 5]},
+    {"title": "Seeking Safety", "days": [0, 1, 2, 3, 4]},
+    {"title": "Mindfulness & Grounding", "days": [1, 3, 5]},
+    {"title": "Family Systems Therapy", "days": [2, 4]}
+]
+c_id = 1
+for idx, c in enumerate(counselors):
+    meeting = group_meetings[idx % len(group_meetings)]
+    cadences.append({
+        "id": c_id,
+        "title": f"[Group] {meeting['title']}",
+        "recurrence": "weekly-days",
+        "days_of_week": meeting['days'],
+        "next_due": "2026-06-22",
+        "metadata": {"counselor": c}
+    })
+    c_id += 1
+
 output = {
     "version": 1,
     "export_date": now.isoformat() + "Z",
     "threads": threads,
-    "cadences": [],
+    "cadences": cadences,
     "edges": []
 }
 
