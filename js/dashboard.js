@@ -272,11 +272,16 @@ OAD.renderCommandCenter = function () {
             <th style="padding-bottom:12px; font-weight:600">Timeline</th>
             <th style="padding-bottom:12px; text-align:right; font-weight:600">Action</th>
           </tr>
-          ${clients.filter(c => c.checkout_type === 'Active').map(c => `
+          ${clients.filter(c => c.checkout_type === 'Active').map(c => {
+            const checkInDt = new Date(c.check_in_date + "T00:00:00");
+            const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+            let currentDay = Math.round((todayDt - checkInDt) / 86400000) + 1;
+            if (currentDay < 1) currentDay = 1;
+            return `
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:16px 0; font-family:var(--mono); color:var(--text-main); font-weight:500">${OAD.esc(OAD.maskName(c.name, OAD._demoRole))}</td>
             <td style="padding:16px 0; color:var(--text-main)">${OAD.esc(c.counselor)}</td>
-            <td style="padding:16px 0; color:var(--text-main)">Day ${c.total_stay_days} of ${c.total_planned_days}</td>
+            <td style="padding:16px 0; color:var(--text-main)">Day ${currentDay} of ${c.total_planned_days}</td>
             <td style="padding:16px 0; text-align:right">
               ${OAD._demoRole.startsWith('Counselor') 
                 ? `<button class="ghost" style="font-size:12px; padding:6px 12px; color:var(--primary); font-weight:600; border:1px solid rgba(var(--primary-rgb), 0.2)" onclick="alert('Loading clinical workspace for ${OAD.esc(c.name)}... (Full EHR integration arriving in Q3)')">View Details</button>`
@@ -284,7 +289,8 @@ OAD.renderCommandCenter = function () {
               }
             </td>
           </tr>
-          `).join('')}
+          `;
+          }).join('')}
         </table>
       </div>
     </div>
