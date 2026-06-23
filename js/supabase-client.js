@@ -6,7 +6,7 @@
 window.OAD = window.OAD || {};
 
 (function () {
-  var url = 'https://hzgecxrfystpesrelqee.supabase.co';
-  var key = 'sb_publishable_mOjvEOFrBZsVCAdEWDQ48Q_Plug540w';
+  var url = 'https://hypddwbncupihqfhwiwb.supabase.co';
+  var key = 'sb_publishable_CC_pPMBcknXHEYlqkORohw_M5hB7WKS';
   OAD.supabase = window.supabase.createClient(url, key);
 }());
