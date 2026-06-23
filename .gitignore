@@ -7,3 +7,4 @@ js/supabase-client.js
 .DS_Store
 Thumbs.db
 js/supabase-client.js
+js/module.config.js
