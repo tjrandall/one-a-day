@@ -1242,17 +1242,22 @@ OAD._bootAfterAuth = async function () {
     if (!localResult) {
       if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
         try {
-          const url = '/modules/demo/demo_data.json?v=' + Date.now();
-          console.log('[OAD] Fetching demo data from:', url);
-          const res = await fetch(url);
-          if (res.ok) {
-            OAD.DB = await res.json();
-            OAD._normalizeDB();
-            OAD.saveDB(); // Persist auto-loaded demo data to localStorage
-            console.log('[OAD] Demo data auto-loaded successfully. Threads:', OAD.DB.threads.length);
+          let dataObj;
+          if (window.OAD_DEMO_DATA) {
+            console.log('[OAD] Loading demo data synchronously from injected script');
+            dataObj = window.OAD_DEMO_DATA;
           } else {
-            throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+            const url = '/modules/demo/demo_data.json?v=' + Date.now();
+            console.log('[OAD] Fetching demo data from:', url);
+            const res = await fetch(url);
+            if (!res.ok) throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+            dataObj = await res.json();
           }
+          OAD.DB = JSON.parse(JSON.stringify(dataObj));
+          OAD.DB.lastError = "FETCH SUCCESS. Parsed threads array length: " + (OAD.DB.threads ? OAD.DB.threads.length : 'null');
+          OAD._normalizeDB();
+          OAD.saveDB(); // Persist auto-loaded demo data to localStorage
+          console.log('[OAD] Demo data auto-loaded successfully. Threads:', OAD.DB.threads.length);
         } catch (err) {
           console.error("Demo data auto-load failed", err);
           alert("Demo data auto-load failed: " + err.message + "\\nPlease take a screenshot of this error and show it to the developer.");
