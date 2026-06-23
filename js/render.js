@@ -11,6 +11,7 @@ OAD.renderHeaderActions = function () {
         <div class="nav-dropdown-content">
           <button onclick="OAD.renderDailyView()" data-i18n="dailySummary">Daily Summary</button>
           <button onclick="OAD.renderReportsView()" data-i18n="reportsView">Reports View</button>
+          <button onclick="OAD.renderJourneyMap()">Client Journey</button>
           <button onclick="OAD.renderListView()" data-i18n="list">List</button>
           <button onclick="OAD.renderTodayView()" data-i18n="today">Today</button>
           <button onclick="OAD.renderMatrixView()" data-i18n="matrix">Matrix</button>
@@ -2589,5 +2590,175 @@ OAD.renderReportsView = function() {
     </div>
   `;
 
+  panel.innerHTML = html;
+};
+
+OAD.renderJourneyMap = function() {
+  OAD._lastView = 'Journey';
+  OAD.highlightNav('renderJourneyMap');
+  OAD._activeId = null;
+  OAD.renderList();
+
+  const panel = document.getElementById('detail-content');
+  if (!panel) return;
+
+  const threads = OAD.getVisibleThreads() || [];
+  const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+  const todayStr = todayDt.toISOString().slice(0, 10);
+
+  // Find all active patients with a check-in date
+  const patients = threads.filter(t => t.life_area === 'Patient' && t.status !== 'closed' && t.metadata && t.metadata.check_in_date);
+  
+  // Find all child tasks
+  const allTasks = threads.filter(t => t.parent_uuid);
+
+  // Group patients by counselor
+  const byCounselor = {};
+  patients.forEach(p => {
+    const c = p.metadata.counselor || 'Unassigned Counselor';
+    if (!byCounselor[c]) byCounselor[c] = [];
+    byCounselor[c].push(p);
+  });
+
+  const counselorNames = Object.keys(byCounselor).sort();
+
+  let html = `
+    <div class="ds-dashboard" style="max-width:1400px; margin: 0 auto; padding-bottom: 60px;">
+      <header class="ds-header" style="margin-bottom: 32px;">
+        <div>
+          <h1>Client Journey</h1>
+          <p class="ds-subtitle">28-Day audit of clinical and operational tasks</p>
+        </div>
+      </header>
+  `;
+
+  if (counselorNames.length === 0) {
+    html += `<div class="empty-state" style="padding:20px;color:var(--text-muted);background:var(--bg-surface);border-radius:8px;">No active patients found with a check-in date.</div></div>`;
+    panel.innerHTML = html;
+    return;
+  }
+
+  counselorNames.forEach(counselor => {
+    html += `
+      <div class="reports-section" style="margin-bottom: 48px; overflow: hidden;">
+        <h2 style="font-size:18px;font-weight:700;margin-bottom:20px;color:var(--text-main);border-bottom:2px solid var(--border);padding-bottom:8px;">
+          ${OAD.esc(counselor)}'s Clients
+        </h2>
+    `;
+
+    byCounselor[counselor].forEach(p => {
+      // Calculate current day for patient
+      const checkInDt = new Date(p.metadata.check_in_date + "T00:00:00");
+      let currentDay = Math.round((todayDt - checkInDt) / 86400000) + 1;
+      if (currentDay < 1) currentDay = 1;
+
+      // Find tasks for this patient
+      const pTasks = allTasks.filter(t => t.parent_uuid === p.uuid && t.next_action_date);
+      
+      // Build cells for days 1 to 28
+      const maxDay = Math.max(28, currentDay, ...pTasks.map(t => {
+        return Math.round((new Date(t.next_action_date + "T00:00:00") - checkInDt) / 86400000) + 1;
+      }));
+
+      // Render Timeline Header once per patient (or we could do it once per counselor, but once per patient makes it easy to read if scrolling)
+      let headerCells = '';
+      for (let d = 1; d <= maxDay; d++) {
+        let label = '';
+        if (d === 1 || d === 3 || d === 5 || d === 7 || d === 10 || d === 14 || d === 20 || d === 28 || d === currentDay) {
+          label = `Day ${d}`;
+        }
+        headerCells += `
+          <div style="grid-column: ${d}; position:relative; height: 20px;">
+            ${label ? `<div style="position:absolute; bottom:4px; left:50%; transform:translateX(-50%); font-size:10px; color:var(--text-muted); white-space:nowrap; font-weight:600;">${label}</div><div style="position:absolute; bottom:0; left:50%; width:1px; height:4px; background:var(--text-muted);"></div>` : ''}
+          </div>
+        `;
+      }
+
+      let gridCells = '';
+      const tasksByDay = {};
+      pTasks.forEach(t => {
+        let d = Math.round((new Date(t.next_action_date + "T00:00:00") - checkInDt) / 86400000) + 1;
+        if (d < 1) d = 1;
+        if (!tasksByDay[d]) tasksByDay[d] = [];
+        tasksByDay[d].push(t);
+      });
+
+      for (let d = 1; d <= maxDay; d++) {
+        let cellContent = '';
+        if (tasksByDay[d]) {
+          tasksByDay[d].sort((a,b) => a.id - b.id).forEach(t => {
+            let bg = 'var(--bg-surface)';
+            let color = 'var(--text-main)';
+            let border = '1px solid var(--border)';
+            
+            if (t.status === 'closed') {
+              bg = 'rgba(46, 160, 67, 0.15)'; // Green
+              border = '1px solid rgba(46, 160, 67, 0.4)';
+              color = '#2ea043';
+            } else if (t.next_action_date < todayStr) {
+              bg = 'rgba(248, 81, 73, 0.15)'; // Red
+              border = '1px solid rgba(248, 81, 73, 0.4)';
+              color = '#f85149';
+            } else {
+              bg = 'var(--bg-surface-hover)'; // Gray
+              border = '1px solid var(--border-hover)';
+              color = 'var(--text-muted)';
+            }
+            
+            // Extract a short label from the title (first 2-3 words)
+            let shortTitle = t.title.replace(/^\[.*?\]\s*/, ''); // Remove tag
+            shortTitle = shortTitle.split(' - ')[0]; // Remove patient suffix
+            
+            cellContent += `
+              <div onclick="OAD.selectThread(${t.id})" title="${OAD.esc(t.title)}\\nStatus: ${t.status}" style="background:${bg}; border:${border}; color:${color}; padding:4px 6px; border-radius:4px; font-size:10px; font-weight:600; line-height:1.2; text-align:center; cursor:pointer; word-wrap:break-word; overflow:hidden; max-height:48px; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;">
+                ${OAD.esc(shortTitle)}
+              </div>
+            `;
+          });
+        }
+        
+        let todayIndicator = '';
+        if (d === currentDay) {
+          todayIndicator = `<div style="position:absolute; top:0; bottom:0; left:50%; width:2px; background:rgba(88,166,255,0.4); z-index:0; pointer-events:none;"></div>`;
+        }
+
+        gridCells += `
+          <div style="grid-column: ${d}; position:relative; min-height: 60px; display:flex; flex-direction:column; gap:4px; padding-top:8px;">
+            ${todayIndicator}
+            <div style="position:relative; z-index:1; display:flex; flex-direction:column; gap:4px;">
+              ${cellContent}
+            </div>
+          </div>
+        `;
+      }
+
+      html += `
+        <div class="journey-row" style="display: flex; margin-bottom: 32px;">
+          <div class="journey-client-info" style="width: 180px; flex-shrink: 0; padding-right: 16px; display:flex; flex-direction:column; justify-content:center;">
+            <div style="font-weight: 700; font-size:14px; color:var(--text-main); cursor:pointer;" onclick="OAD.selectThread(${p.id})">
+              ${OAD.esc(p.title.replace('[Patient] ', ''))}
+            </div>
+            <div style="font-size: 12px; color: var(--text-muted); margin-top:4px;">
+              Day ${currentDay}
+            </div>
+          </div>
+          <div style="flex-grow: 1; overflow-x: auto; padding-bottom: 8px;">
+            <div style="min-width: 900px; padding-right: 20px;">
+              <div class="journey-timeline-header" style="display: grid; grid-template-columns: repeat(${maxDay}, minmax(40px, 1fr)); gap: 4px; border-bottom: 2px solid var(--border);">
+                ${headerCells}
+              </div>
+              <div class="journey-timeline" style="display: grid; grid-template-columns: repeat(${maxDay}, minmax(40px, 1fr)); gap: 4px;">
+                ${gridCells}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += `</div>`;
+  });
+
+  html += `</div>`;
   panel.innerHTML = html;
 };
