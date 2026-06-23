@@ -800,6 +800,8 @@ OAD.renderTodayView = function () {
   });
   const suppressedUUIDs = new Set();
   Object.keys(childrenByParentUUID).forEach(function (puuid) {
+    const parent = activeByUUID[puuid];
+    if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
   });
 
@@ -1044,6 +1046,8 @@ OAD.renderDailyView = function () {
   });
   const suppressedUUIDs = new Set();
   Object.keys(childrenByParentUUID).forEach(function (puuid) {
+    const parent = activeByUUID[puuid];
+    if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
   });
 
@@ -1485,6 +1489,8 @@ OAD.renderMatrixView = function () {
   });
   const suppressedUUIDs = new Set();
   Object.keys(childrenByParentUUID).forEach(function (puuid) {
+    const parent = activeByUUID[puuid];
+    if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
   });
 

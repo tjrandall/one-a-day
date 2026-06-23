@@ -273,7 +273,7 @@ OAD.renderCommandCenter = function () {
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:16px 0; font-family:var(--mono); color:var(--text-main); font-weight:500">${OAD.esc(OAD.maskName(c.name, OAD._demoRole))}</td>
             <td style="padding:16px 0; color:var(--text-main)">${OAD.esc(c.counselor)}</td>
-            <td style="padding:16px 0; color:var(--text-main)">Day ${c.total_stay_days} of ${c.projected_days}</td>
+            <td style="padding:16px 0; color:var(--text-main)">Day ${c.total_stay_days} of ${c.total_planned_days}</td>
             <td style="padding:16px 0; text-align:right">
               ${OAD._demoRole.startsWith('Counselor') 
                 ? `<button class="ghost" style="font-size:12px; padding:6px 12px; color:var(--primary); font-weight:600; border:1px solid rgba(var(--primary-rgb), 0.2)" onclick="alert('Loading clinical workspace for ${OAD.esc(c.name)}... (Full EHR integration arriving in Q3)')">View Details</button>`
