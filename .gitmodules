@@ -7,3 +7,6 @@
 [submodule "modules/demo"]
 	path = modules/demo
 	url = https://github.com/tjrandall/fq-demo.git
+[submodule "modules/personal"]
+	path = modules/personal
+	url = https://github.com/tjrandall/fq-personal.git
