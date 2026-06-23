@@ -2694,22 +2694,22 @@ OAD.renderJourneyMap = function() {
             let srStatus = '';
             
             if (t.status === 'closed') {
-              bg = 'rgba(46, 160, 67, 0.15)'; // Green
-              border = '1px solid rgba(46, 160, 67, 0.4)';
-              color = '#2ea043';
-              icon = '<span aria-hidden="true" style="font-size:12px;margin-right:2px">✓</span>';
+              bg = 'rgba(46, 160, 67, 0.08)'; // Very light green
+              border = '1px solid rgba(46, 160, 67, 0.4); border-left: 4px solid #2ea043';
+              color = 'var(--text-main)';
+              icon = '<span aria-hidden="true" style="font-size:12px;margin-right:4px;color:#2ea043">✓</span>';
               srStatus = 'Completed';
             } else if (t.next_action_date < todayStr) {
-              bg = 'rgba(248, 81, 73, 0.15)'; // Red
-              border = '1px solid rgba(248, 81, 73, 0.4)';
-              color = '#f85149';
-              icon = '<span aria-hidden="true" style="font-size:10px;margin-right:2px">⚠</span>';
+              bg = 'rgba(248, 81, 73, 0.05)'; // Very light red
+              border = '1px dashed #f85149; border-left: 4px solid #f85149';
+              color = 'var(--text-main)';
+              icon = '<span aria-hidden="true" style="font-size:12px;margin-right:4px;color:#f85149">⚠</span>';
               srStatus = 'Overdue';
             } else {
-              bg = 'var(--bg-surface-hover)'; // Gray
-              border = '1px solid var(--border-hover)';
+              bg = 'transparent'; 
+              border = '1px dotted var(--border); border-left: 4px solid var(--text-muted)';
               color = 'var(--text-muted)';
-              icon = '<span aria-hidden="true" style="font-size:10px;margin-right:2px">○</span>';
+              icon = '<span aria-hidden="true" style="font-size:12px;margin-right:4px">○</span>';
               srStatus = 'Pending';
             }
             
