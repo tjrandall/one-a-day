@@ -84,13 +84,14 @@ OAD.maskName = function(fullName, role) {
   return parts[0] + ' ' + parts[parts.length-1].substring(0, 2) + "*****";
 };
 
-OAD._demoRole = 'CCO';
+OAD._demoRole = localStorage.getItem('oad_demo_role') || 'CCO';
 OAD.changeDemoRole = function(role) {
   if (role === 'Operations (CIC)') {
     window.location.href = 'modules/cic/index.html';
     return;
   }
   OAD._demoRole = role;
+  localStorage.setItem('oad_demo_role', role);
   document.body.className = 'role-' + role.replace(/ /g, '-').toLowerCase();
   OAD.renderCommandCenter();
 };

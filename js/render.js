@@ -820,7 +820,7 @@ OAD.renderTodayView = function () {
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1059,7 +1059,7 @@ OAD.renderDailyView = function () {
   const todayThreads   = filteredActive.filter(t => t.next_action_date === todayStr);
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
-  const weekThreads    = filteredActive.filter(t => t.next_action_date > todayStr && t.next_action_date <= in7Str);
+  const weekThreads    = filteredActive.filter(t => t.next_action_date > todayStr && t.next_action_date <= in7Str).sort((a, b) => a.next_action_date.localeCompare(b.next_action_date));
   const activeThreads  = filteredActive.filter(t => !t.next_action_date);
 
   // Cycle detection
@@ -1071,7 +1071,7 @@ OAD.renderDailyView = function () {
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1510,7 +1510,7 @@ OAD.renderMatrixView = function () {
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); });
+  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });

@@ -90,6 +90,7 @@ OAD.formatDisplayTitle = function (title) {
   return display;
 };
 
+OAD._demoRole = localStorage.getItem('oad_demo_role') || 'CCO';
 OAD.getVisibleThreads = function() {
   let threads = OAD.DB.threads || [];
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
