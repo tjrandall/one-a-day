@@ -1104,7 +1104,11 @@ OAD.saveDB = function () {
 
 OAD.loadDB = function () {
   if (OAD.isEnterpriseMode()) {
-    localStorage.removeItem(OAD._DB_KEY);
+    if (window.OAD_DEMO_DATA) {
+      OAD.DB = window.OAD_DEMO_DATA;
+      OAD._normalizeDB();
+      return true;
+    }
     return false; // Force re-hydration from secure source
   }
   try {
