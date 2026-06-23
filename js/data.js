@@ -1101,6 +1101,10 @@ OAD.loadDB = function () {
     if (!raw) return false;
     var data = JSON.parse(raw);
     if (!data || !Array.isArray(data.threads)) return false;
+    if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode && data.threads.length === 0) {
+      console.log('[OAD] Local data is empty in demo mode. Forcing re-seed...');
+      return false;
+    }
     OAD.DB = data;
     OAD._normalizeDB();
     return true;
@@ -1141,6 +1145,10 @@ OAD._loadFromCloud = async function () {
       return false;
     }
     if (data && data.db && Array.isArray(data.db.threads)) {
+      if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode && data.db.threads.length === 0) {
+        console.log('[OAD] Cloud data is empty in demo mode. Forcing re-seed...');
+        return false;
+      }
       OAD.DB = data.db;
       OAD._normalizeDB();
       // Keep localStorage in sync as local cache

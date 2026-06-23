@@ -1195,10 +1195,11 @@ OAD._initApp = async function () {
   if (!loadResult) {
     if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
       try {
-        const res = await fetch('modules/demo/demo_data.json');
+        const res = await fetch('/modules/demo/demo_data.json');
         if (res.ok) {
           OAD.DB = await res.json();
           OAD._normalizeDB();
+          OAD.saveDB();
         } else {
           throw new Error('demo_data.json not found');
         }
@@ -1234,10 +1235,11 @@ OAD._bootAfterAuth = async function () {
     if (!localResult) {
       if (window.OAD && window.OAD.Config && window.OAD.Config.demoMode) {
         try {
-          const res = await fetch('modules/demo/demo_data.json');
+          const res = await fetch('/modules/demo/demo_data.json');
           if (res.ok) {
             OAD.DB = await res.json();
             OAD._normalizeDB();
+            OAD.saveDB(); // Persist auto-loaded demo data to localStorage
           } else {
             throw new Error('demo_data.json not found');
           }
