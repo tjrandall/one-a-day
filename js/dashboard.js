@@ -110,6 +110,7 @@ OAD.renderCommandCenter = function () {
         counselor: meta.counselor || 'Counselor 1',
         checkout_type: meta.checkout_type || 'Active',
         check_in_date: meta.check_in_date || new Date().toISOString().split('T')[0],
+        discharge_date: meta.discharge_date,
         total_planned_days: parseInt(meta.total_planned_days) || 28,
         total_stay_days: parseInt(meta.total_stay_days) || 0
       };
@@ -311,6 +312,47 @@ OAD.renderCommandCenter = function () {
           }).join('')}
         </table>
       </div>
+
+      <div style="margin-top:24px; padding:24px; background:var(--surface); border:1px solid var(--border); border-radius:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+          <h3 style="margin:0; font-size:18px; display:flex; align-items:center; gap:8px">
+            ⏳ Recently Discharged (Last 30 Days)
+          </h3>
+        </div>
+        
+        <table style="width:100%; border-collapse:collapse; font-size:14px;">
+          <tr style="text-align:left; border-bottom:1px solid var(--border); color:var(--text-muted)">
+            <th style="padding-bottom:12px; font-weight:600">Patient</th>
+            <th style="padding-bottom:12px; font-weight:600">Discharged On</th>
+            <th style="padding-bottom:12px; font-weight:600">Reason</th>
+            <th style="padding-bottom:12px; text-align:right; font-weight:600">Impact</th>
+          </tr>
+          ${clients.filter(c => {
+            if (c.checkout_type === 'Active' || !c.discharge_date) return false;
+            const dischargeDt = new Date(c.discharge_date + "T00:00:00");
+            const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+            const daysAgo = Math.round((todayDt - dischargeDt) / 86400000);
+            return daysAgo >= 0 && daysAgo <= 30;
+          }).sort((a, b) => b.discharge_date.localeCompare(a.discharge_date)).map(c => {
+            const lostDays = c.total_planned_days - c.total_stay_days;
+            const isEarly = lostDays > 0;
+            const reasonColor = c.checkout_type === 'Standard' ? 'var(--text-muted)' : (c.checkout_type === 'ACA' ? 'var(--critical)' : 'orange');
+            const impactHtml = isEarly 
+              ? \`<span style="color:var(--critical); font-weight:600; display:flex; align-items:center; gap:4px; justify-content:flex-end">⚠ \${lostDays} days lost</span>\`
+              : \`<span style="color:var(--text-muted)">0 days lost</span>\`;
+            
+            return \`
+          <tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:16px 0; font-family:var(--mono); color:var(--text-main); font-weight:500">\${OAD.esc(OAD.maskName(c.name, OAD._demoRole))}</td>
+            <td style="padding:16px 0; color:var(--text-main)">\${OAD.formatDate(c.discharge_date)}</td>
+            <td style="padding:16px 0; color:\${reasonColor}; font-weight:600">\${OAD.esc(c.checkout_type)}</td>
+            <td style="padding:16px 0; text-align:right">\${impactHtml}</td>
+          </tr>
+          \`;
+          }).join('') || '<tr style="border-bottom:1px solid var(--border)"><td colspan="4" style="padding:16px 0; color:var(--text-muted); text-align:center">No recent discharges</td></tr>'}
+        </table>
+      </div>
+
     </div>
   `;
 };
