@@ -1109,8 +1109,15 @@ OAD.loadDB = function () {
   }
   try {
     var raw = localStorage.getItem(OAD._DB_KEY);
-    if (!raw) return false;
-    var data = JSON.parse(raw);
+    var data = null;
+    if (raw) {
+      data = JSON.parse(raw);
+    } else if (window.OAD_DEMO_DATA) {
+      data = window.OAD_DEMO_DATA;
+      OAD.DB = data;
+      OAD._normalizeDB();
+      OAD.saveDB(); // save to localStorage for next time
+    }
     if (!data || !Array.isArray(data.threads)) return false;
     OAD.DB = data;
     OAD._normalizeDB();
