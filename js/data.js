@@ -11,6 +11,7 @@ OAD.DB = {
   toat: [],
   ade_suppressions: [],
   health_alerts: [],
+  saved_views: [],
 
   persona: {
     last_proactive_scan: null,
@@ -37,7 +38,7 @@ OAD.RECURRENCES = [
   'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'weekly-days', 'custom'
 ];
 
-OAD.STATUSES   = ['open', 'waiting', 'stalled', 'closed'];
+OAD.STATUSES   = ['open', 'waiting', 'dormant', 'stalled', 'closed'];
 OAD.PRIORITIES = ['critical', 'high', 'medium', 'low'];
 OAD.EDGE_TYPES = ['blocks', 'blocked_by', 'enables', 'relates'];
 
@@ -224,7 +225,9 @@ OAD.makeThread = function (overrides) {
     parent_uuid: null,
     evolution_log: [],
     ai_insights: [],
-    date_push_count: 0
+    date_push_count: 0,
+    dormant_trigger: '',
+    user_action_complete: false
   }, overrides);
 };
 
@@ -270,6 +273,53 @@ OAD.deleteCadence = function (id) {
   const idx = OAD.DB.cadences.findIndex(function (c) { return c.id === id; });
   if (idx === -1) return false;
   OAD.DB.cadences.splice(idx, 1);
+  OAD.saveDB();
+  return true;
+};
+
+// Saved Views — named, persisted filter+sort predicates over the thread list.
+OAD.nextSavedViewId = function () {
+  const ids = OAD.DB.saved_views.map(function (v) { return v.id; });
+  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+};
+
+OAD.makeSavedView = function (overrides) {
+  return Object.assign({
+    id: null,
+    name: '',
+    statuses: [],
+    priorities: [],
+    life_areas: [],
+    edge_rule: null,
+    sort_field: 'pressure',
+    sort_dir: 'desc',
+    created_at: new Date().toISOString()
+  }, overrides);
+};
+
+OAD.addSavedView = function (view) {
+  view.id = OAD.nextSavedViewId();
+  OAD.DB.saved_views.push(view);
+  OAD.saveDB();
+  return view;
+};
+
+OAD.getSavedView = function (id) {
+  return OAD.DB.saved_views.find(function (v) { return v.id === id; }) || null;
+};
+
+OAD.updateSavedView = function (id, patch) {
+  const v = OAD.getSavedView(id);
+  if (!v) return null;
+  Object.assign(v, patch);
+  OAD.saveDB();
+  return v;
+};
+
+OAD.deleteSavedView = function (id) {
+  const idx = OAD.DB.saved_views.findIndex(function (v) { return v.id === id; });
+  if (idx === -1) return false;
+  OAD.DB.saved_views.splice(idx, 1);
   OAD.saveDB();
   return true;
 };
@@ -453,7 +503,8 @@ OAD._IMPORT_FIELDS = [
   'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
   'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
-  'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata'
+  'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata',
+  'dormant_trigger', 'user_action_complete'
 ];
 
 OAD.applyImport = function (results, confirmedUpdates) {
@@ -492,7 +543,9 @@ OAD.applyImport = function (results, confirmedUpdates) {
       effortLogged:             row.effortLogged             || 0,
       date_push_count:          row.date_push_count          || 0,
       metadata:                 row.metadata                 || {},
-      connections:              row.connections              || []
+      connections:              row.connections              || [],
+      dormant_trigger:          row.dormant_trigger          || '',
+      user_action_complete:     row.user_action_complete     || false
     });
     const added = OAD.addThread(t);
     (row.evolution_log || []).forEach(function (e) {
@@ -571,7 +624,7 @@ OAD.getDailyToat = function () {
   OAD.DB.toat = OAD.DB.toat || [];
 
   function isFriction(t) {
-    if (!t || t.status === 'closed') return false;
+    if (!t || t.status === 'closed' || t.status === 'dormant') return false;
     if (t.status === 'stalled') return true;
     if (t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr) return true;
     if (t.status === 'open' && t.next_action_date && t.next_action_date < todayStr) return true;
@@ -593,7 +646,7 @@ OAD.getDailyToat = function () {
   
   const stalled = allThreads.filter(t => t.status === 'stalled');
   const overdueWaiting = allThreads.filter(t => {
-    return t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr;
+    return t.status === 'waiting' && !t.user_action_complete && t.next_action_date && t.next_action_date < todayStr;
   });
   const overdueOpen = allThreads.filter(t => {
     return t.status === 'open' && t.next_action_date && t.next_action_date < todayStr;
@@ -792,6 +845,7 @@ OAD._normalizeDB = function () {
   OAD.DB.proposals        = OAD.DB.proposals        || [];
   OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
   OAD.DB.health_alerts    = OAD.DB.health_alerts    || [];
+  OAD.DB.saved_views      = OAD.DB.saved_views      || [];
   OAD.DB.persona          = OAD.DB.persona          || {};
   OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
   let _maxId = 0;
@@ -803,6 +857,8 @@ OAD._normalizeDB = function () {
     if (!t.title) t.title = '';
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
     if (t.date_push_count == null) t.date_push_count = 0;
+    if (!Object.prototype.hasOwnProperty.call(t, 'dormant_trigger')) t.dormant_trigger = '';
+    if (!Object.prototype.hasOwnProperty.call(t, 'user_action_complete')) t.user_action_complete = false;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();

@@ -293,6 +293,135 @@ OAD.test('deleteCadence: removes from DB', function () {
   OAD._assertEqual(OAD.getCadence(c.id), null, 'not findable after delete');
 });
 
+// ── Tests: Saved Views (Graph Views) ─────────────────────────────────
+
+OAD.test('makeSavedView: defaults are valid', function () {
+  const v = OAD.makeSavedView({});
+  OAD._assertEqual(v.statuses.length, 0, 'statuses defaults to empty array');
+  OAD._assertEqual(v.priorities.length, 0, 'priorities defaults to empty array');
+  OAD._assertEqual(v.life_areas.length, 0, 'life_areas defaults to empty array');
+  OAD._assertEqual(v.edge_rule, null, 'edge_rule defaults to null');
+  OAD._assertEqual(v.sort_field, 'pressure', 'sort_field defaults to pressure');
+  OAD._assertEqual(v.sort_dir, 'desc', 'sort_dir defaults to desc');
+});
+
+OAD.test('addSavedView: assigns id and appends to DB', function () {
+  const before = OAD.DB.saved_views.length;
+  const v = OAD.addSavedView(OAD.makeSavedView({ name: 'Test view' }));
+  OAD._assert(v.id != null, 'id assigned');
+  OAD._assertEqual(OAD.DB.saved_views.length, before + 1, 'count increased');
+  OAD._assertEqual(OAD.getSavedView(v.id).name, 'Test view', 'findable by id');
+});
+
+OAD.test('updateSavedView: merges patch fields', function () {
+  const v = OAD.addSavedView(OAD.makeSavedView({ name: 'Original name', sort_field: 'pressure' }));
+  OAD.updateSavedView(v.id, { name: 'Updated name', sort_field: 'title' });
+  const updated = OAD.getSavedView(v.id);
+  OAD._assertEqual(updated.name, 'Updated name', 'name updated');
+  OAD._assertEqual(updated.sort_field, 'title', 'sort_field updated');
+});
+
+OAD.test('deleteSavedView: removes from DB', function () {
+  const v = OAD.addSavedView(OAD.makeSavedView({ name: 'Delete me view' }));
+  const before = OAD.DB.saved_views.length;
+  OAD.deleteSavedView(v.id);
+  OAD._assertEqual(OAD.DB.saved_views.length, before - 1, 'count decreased');
+  OAD._assertEqual(OAD.getSavedView(v.id), null, 'not findable after delete');
+});
+
+OAD.test('matchesSavedView: empty filters match everything', function () {
+  const t = OAD.makeThread({ status: 'open', priority: 'low', life_area: 'Finances', connections: [] });
+  const v = OAD.makeSavedView({});
+  OAD._assert(OAD.matchesSavedView(t, v), 'empty-filter view should match any thread');
+});
+
+OAD.test('matchesSavedView: status include list excludes non-matching status', function () {
+  const tOpen = OAD.makeThread({ status: 'open', connections: [] });
+  const tClosed = OAD.makeThread({ status: 'closed', connections: [] });
+  const v = OAD.makeSavedView({ statuses: ['open', 'stalled'] });
+  OAD._assert(OAD.matchesSavedView(tOpen, v), 'open thread matches');
+  OAD._assert(!OAD.matchesSavedView(tClosed, v), 'closed thread excluded');
+});
+
+OAD.test('matchesSavedView: priority include list excludes non-matching priority', function () {
+  const tCrit = OAD.makeThread({ priority: 'critical', connections: [] });
+  const tLow = OAD.makeThread({ priority: 'low', connections: [] });
+  const v = OAD.makeSavedView({ priorities: ['critical', 'high'] });
+  OAD._assert(OAD.matchesSavedView(tCrit, v), 'critical thread matches');
+  OAD._assert(!OAD.matchesSavedView(tLow, v), 'low priority thread excluded');
+});
+
+OAD.test('matchesSavedView: life_area include list excludes non-matching area', function () {
+  const tFin = OAD.makeThread({ life_area: 'Finances', connections: [] });
+  const tHealth = OAD.makeThread({ life_area: 'Health', connections: [] });
+  const v = OAD.makeSavedView({ life_areas: ['Finances'] });
+  OAD._assert(OAD.matchesSavedView(tFin, v), 'Finances thread matches');
+  OAD._assert(!OAD.matchesSavedView(tHealth, v), 'Health thread excluded');
+});
+
+OAD.test('matchesSavedView: edge_rule "blocked_by_open" true when blockedBy contains a non-closed thread', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const threadA = { id: 201, uuid: 'sv-uuid-a', title: 'Task A', status: 'open', priority: 'low', life_area: 'Work', connections: [{ to_uuid: 'sv-uuid-b', edge_type: 'blocked_by' }] };
+    const threadB = { id: 202, uuid: 'sv-uuid-b', title: 'Task B', status: 'open', priority: 'low', life_area: 'Work', connections: [] };
+    OAD.DB.threads = [threadA, threadB];
+    const v = OAD.makeSavedView({ edge_rule: { type: 'blocked_by_open' } });
+    OAD._assert(OAD.matchesSavedView(threadA, v), 'Task A is blocked by open Task B');
+    OAD._assert(!OAD.matchesSavedView(threadB, v), 'Task B has no blockers');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('matchesSavedView: edge_rule "blocked_by_open" false when all blockers are closed', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const threadA = { id: 203, uuid: 'sv-uuid-c', title: 'Task C', status: 'open', priority: 'low', life_area: 'Work', connections: [{ to_uuid: 'sv-uuid-d', edge_type: 'blocked_by' }] };
+    const threadB = { id: 204, uuid: 'sv-uuid-d', title: 'Task D', status: 'closed', priority: 'low', life_area: 'Work', connections: [] };
+    OAD.DB.threads = [threadA, threadB];
+    const v = OAD.makeSavedView({ edge_rule: { type: 'blocked_by_open' } });
+    OAD._assert(!OAD.matchesSavedView(threadA, v), 'Task C only blocked by a closed thread, should not match');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('matchesSavedView: edge_rule "no_blockers" true when blockedBy is empty', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const threadA = { id: 205, uuid: 'sv-uuid-e', title: 'Task E', status: 'open', priority: 'low', life_area: 'Work', connections: [] };
+    OAD.DB.threads = [threadA];
+    const v = OAD.makeSavedView({ edge_rule: { type: 'no_blockers' } });
+    OAD._assert(OAD.matchesSavedView(threadA, v), 'Task E has no blockers, should match no_blockers');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('applySavedView: sorts by pressure desc by default', function () {
+  const low = OAD.makeThread({ status: 'open', priority: 'low', connections: [] });
+  const high = OAD.makeThread({ status: 'stalled', priority: 'critical', connections: [] });
+  const v = OAD.makeSavedView({});
+  const result = OAD.applySavedView([low, high], v);
+  OAD._assert(OAD.pressure(result[0]) >= OAD.pressure(result[1]), 'higher pressure thread sorts first');
+});
+
+OAD.test('applySavedView: sort_dir "asc" reverses order', function () {
+  const low = OAD.makeThread({ status: 'open', priority: 'low', connections: [] });
+  const high = OAD.makeThread({ status: 'stalled', priority: 'critical', connections: [] });
+  const v = OAD.makeSavedView({ sort_field: 'pressure', sort_dir: 'asc' });
+  const result = OAD.applySavedView([high, low], v);
+  OAD._assert(OAD.pressure(result[0]) <= OAD.pressure(result[1]), 'lower pressure thread sorts first when asc');
+});
+
+OAD.test('applySavedView: sort_field "title" sorts alphabetically case-insensitively', function () {
+  const zebra = OAD.makeThread({ title: 'Zebra task', connections: [] });
+  const apple = OAD.makeThread({ title: 'apple task', connections: [] });
+  const v = OAD.makeSavedView({ sort_field: 'title', sort_dir: 'asc' });
+  const result = OAD.applySavedView([zebra, apple], v);
+  OAD._assertEqual(result[0].title, 'apple task', 'case-insensitive alphabetical sort, apple first');
+});
+
 OAD.test('LIFE_AREAS: includes App Dev', function () {
   OAD._assert(OAD.LIFE_AREAS.includes('App Dev'), 'App Dev should be in LIFE_AREAS');
 });
@@ -1844,6 +1973,99 @@ OAD.test('rejectEdge: removes edge and adds to ade_suppressions', function () {
   } finally {
     OAD.DB.threads = orig;
     OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+// ── Tests: Dormant status (Issue 1) ──────────────────────────────────
+
+OAD.test('pressure: dormant thread returns 0', function () {
+  const t = OAD.makeThread({ status: 'dormant', priority: 'critical', current_assumption: 'x', assumption_verified: false, connections: [] });
+  OAD._assertEqual(OAD.pressure(t), 0, 'dormant thread must have pressure 0');
+});
+
+OAD.test('makeThread: dormant_trigger defaults to empty string', function () {
+  const t = OAD.makeThread({});
+  OAD._assert(Object.prototype.hasOwnProperty.call(t, 'dormant_trigger'), 'dormant_trigger field exists');
+  OAD._assertEqual(t.dormant_trigger, '', 'dormant_trigger defaults to empty string');
+});
+
+OAD.test('makeThread: user_action_complete defaults to false', function () {
+  const t = OAD.makeThread({});
+  OAD._assert(Object.prototype.hasOwnProperty.call(t, 'user_action_complete'), 'user_action_complete field exists');
+  OAD._assertEqual(t.user_action_complete, false, 'user_action_complete defaults to false');
+});
+
+OAD.test('getDailyToat: dormant thread is never selected', function () {
+  const orig = OAD.DB.threads;
+  const origToat = OAD.DB.toat;
+  try {
+    const pastDate = '2020-01-01';
+    OAD.DB.toat = [];
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Dormant stalled', status: 'dormant', next_action_date: pastDate }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open overdue', status: 'open', next_action_date: pastDate })
+    ];
+    const toat = OAD.getDailyToat();
+    OAD._assert(!!toat, 'TOAT should return a thread');
+    OAD._assertEqual(toat.id, 2, 'TOAT should select the open overdue thread, not the dormant one');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.toat = origToat;
+  }
+});
+
+OAD.test('selectFocusThread: dormant thread is never returned', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Dormant high priority', status: 'dormant', priority: 'critical', next_action: 'do something' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something else' })
+    ];
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'focus should return a thread');
+    OAD._assertEqual(focus.id, 2, 'focus should select the open thread, not the dormant one');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+// ── Tests: Actioned Waiting / user_action_complete (Issue 2) ─────────
+
+OAD.test('pressure: waiting+actioned pressure is 35% of base', function () {
+  const base = OAD.makeThread({ status: 'waiting', priority: 'critical', current_assumption: 'x', assumption_verified: false, connections: [], user_action_complete: false });
+  const actioned = OAD.makeThread({ status: 'waiting', priority: 'critical', current_assumption: 'x', assumption_verified: false, connections: [], user_action_complete: true });
+  const baseScore = OAD.pressure(base);
+  const actionedScore = OAD.pressure(actioned);
+  OAD._assert(baseScore > 0, 'base waiting thread should have nonzero pressure');
+  OAD._assertEqual(actionedScore, Math.round(baseScore * 0.35), 'actioned waiting pressure should be 35% of base');
+});
+
+OAD.test('selectFocusThread: waiting+actioned excluded when alternatives exist', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Actioned waiting', status: 'waiting', priority: 'critical', user_action_complete: true, next_action: 'sent email' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open thread', status: 'open', priority: 'medium', next_action: 'do something' })
+    ];
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'focus should return a thread');
+    OAD._assertEqual(focus.id, 2, 'focus should prefer the open thread over waiting+actioned');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('selectFocusThread: waiting+actioned returned as last resort when nothing else', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Only actioned waiting', status: 'waiting', priority: 'high', user_action_complete: true, next_action: 'waiting for reply' })
+    ];
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'focus should still return a thread as last resort');
+    OAD._assertEqual(focus.id, 1, 'waiting+actioned returned when nothing else qualifies');
+  } finally {
+    OAD.DB.threads = orig;
   }
 });
 

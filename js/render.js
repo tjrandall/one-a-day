@@ -113,9 +113,10 @@ OAD.renderPersonaBar = function () {
   if (!bar) return;
 
   const threads = OAD.getVisibleThreads();
-  const open    = threads.filter(t => t.status !== 'closed').length;
+  const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').length;
   const stalled = threads.filter(t => t.status === 'stalled').length;
-  const scores  = threads.map(t => OAD.pressure(t));
+  const dormant = threads.filter(t => t.status === 'dormant').length;
+  const scores  = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').map(t => OAD.pressure(t));
   const avg     = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls  = avg >= 60 ? 'pressure-high' : avg >= 30 ? 'pressure-mid' : 'pressure-low';
   const p = OAD.DB.persona;
@@ -124,6 +125,7 @@ OAD.renderPersonaBar = function () {
   bar.innerHTML = `
     <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${open}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalled}</span></div>
+    ${dormant ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormant}</span></div>` : ''}
     <div class="persona-stat"><span class="text-muted text-sm">Avg Pressure</span><span class="val ${avgCls}">${avg}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(p.life_context.pressure_level)}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(dl)}</span></div>
@@ -314,6 +316,19 @@ OAD.renderDetail = function (id) {
         <button onclick="OAD.generateInsight(${t.id})" id="insight-btn-${t.id}">${OAD.esc(OAD.t('insight'))}</button>
       </div>
     </div>
+
+    ${t.status === 'dormant' ? `
+    <div class="card" style="border-left:3px solid #8855dd;background:rgba(136,85,221,0.04)">
+      <div class="card-title" style="color:#8855dd">Dormant — Re-engagement Trigger</div>
+      <div class="dormant-trigger-text">${t.dormant_trigger ? OAD.esc(t.dormant_trigger) : '<span class="text-muted">No trigger defined — set one when editing</span>'}</div>
+      <div class="text-muted text-sm mt-8">This thread contributes zero pressure and will not surface in Focus Now or TOAT until reactivated.</div>
+    </div>` : ''}
+
+    ${t.status === 'waiting' && t.user_action_complete ? `
+    <div class="card" style="border-left:3px solid var(--waiting);background:rgba(76,201,240,0.04)">
+      <div class="card-title" style="color:var(--waiting)">Ball in Their Court</div>
+      <div class="text-sm">You've done everything possible. This thread is suppressed from Focus Now until they respond or the contingency date is reached.</div>
+    </div>` : ''}
 
     <div class="card next-action-card">
       <div class="card-title">${OAD.esc(OAD.t('nextAction'))}</div>
@@ -785,9 +800,11 @@ OAD.renderTodayView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
+
+  const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
 
   const activeByUUID = {};
   active.forEach(function (t) { activeByUUID[t.uuid] = t; });
@@ -968,12 +985,34 @@ OAD.renderTodayView = function () {
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
   const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
   
+  const dormantBucketHtml = dormantThreads.length
+    ? '<section class="ds-bucket ds-bucket-dormant" aria-label="Dormant" style="opacity:0.7">' +
+        '<h3 class="ds-bucket-header">' +
+          '<span class="ds-bucket-icon" aria-hidden="true">💤</span>' +
+          '<span class="ds-bucket-label">Dormant — Parked Until Trigger</span>' +
+          '<span class="ds-bucket-count">' + dormantThreads.length + '</span>' +
+        '</h3>' +
+        dormantThreads.map(function(t) {
+          return '<div class="ds-row ds-thread ds-row-dormant" role="button" onclick="OAD.selectThread(' + t.id + ')">' +
+            '<div class="ds-row-main">' +
+              '<span class="pill dormant" style="font-size:10px;padding:2px 6px;flex-shrink:0">dormant</span>' +
+              '<div class="ds-row-text">' +
+                '<div class="ds-row-title">' + OAD.esc(t.title) + '</div>' +
+                (t.dormant_trigger ? '<div class="ds-row-sub" style="color:#8855dd">' + OAD.esc(t.dormant_trigger) + '</div>' : '') +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        }).join('') +
+      '</section>'
+    : '';
+
   const bottomBucketsHtml = bucket('q1', '🔥', 'Do First (Q1)', q1Items) +
                             bucket('q2', '📅', 'Schedule (Q2)', q2Items) +
                             bucket('q3', '🗣️', 'Delegate (Q3)', q3Items) +
                             bucket('q4', '🗑️', 'Eliminate (Q4)', q4Items) +
                             bucket('habits', '✦', 'Active Habits', habitItems) +
-                            bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems);
+                            bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems) +
+                            dormantBucketHtml;
 
   const focusThread = OAD.selectFocusThread();
   var focusCardHtml = '';
@@ -1031,9 +1070,11 @@ OAD.renderDailyView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
+
+  const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
 
   const activeByUUID = {};
   active.forEach(function (t) { activeByUUID[t.uuid] = t; });
@@ -1459,6 +1500,26 @@ OAD.renderDailyView = function () {
           (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length && !habitItems.length && !cadenceItems.length
             ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, due today, or active.</div>'
             : '') +
+          (dormantThreads.length
+            ? '<section class="ds-bucket ds-bucket-dormant" aria-label="Dormant" style="opacity:0.7">' +
+                '<h3 class="ds-bucket-header">' +
+                  '<span class="ds-bucket-icon" aria-hidden="true">💤</span>' +
+                  '<span class="ds-bucket-label">Dormant — Parked Until Trigger</span>' +
+                  '<span class="ds-bucket-count">' + dormantThreads.length + '</span>' +
+                '</h3>' +
+                dormantThreads.map(function(t) {
+                  return '<div class="ds-row ds-thread ds-row-dormant" role="button" onclick="OAD.selectThread(' + t.id + ')">' +
+                    '<div class="ds-row-main">' +
+                      '<span class="pill dormant" style="font-size:10px;padding:2px 6px;flex-shrink:0">dormant</span>' +
+                      '<div class="ds-row-text">' +
+                        '<div class="ds-row-title">' + OAD.esc(t.title) + '</div>' +
+                        (t.dormant_trigger ? '<div class="ds-row-sub" style="color:#8855dd">' + OAD.esc(t.dormant_trigger) + '</div>' : '') +
+                      '</div>' +
+                    '</div>' +
+                  '</div>';
+                }).join('') +
+              '</section>'
+            : '') +
         '</div>' +
       '</div>' +
     '</div>';
@@ -1481,7 +1542,7 @@ OAD.renderMatrixView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
@@ -2341,11 +2402,13 @@ OAD.renderListView = function () {
 
   if (OAD._activeListSearch === undefined) OAD._activeListSearch = '';
   if (OAD._activeListStatus === undefined) OAD._activeListStatus = 'all';
+  if (OAD._activeSavedViewId === undefined) OAD._activeSavedViewId = null;
 
   const threads = OAD.getVisibleThreads();
-  const openCount = threads.filter(t => t.status !== 'closed').length;
+  const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').length;
   const stalledCount = threads.filter(t => t.status === 'stalled').length;
-  const scores = threads.map(t => OAD.pressure(t));
+  const dormantCount = threads.filter(t => t.status === 'dormant').length;
+  const scores = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').map(t => OAD.pressure(t));
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls = avgPressure >= 60 ? 'pressure-high' : avgPressure >= 30 ? 'pressure-mid' : 'pressure-low';
   const persona = OAD.DB.persona;
@@ -2354,7 +2417,7 @@ OAD.renderListView = function () {
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
 
-  const statusOptions = ['all', 'open', 'stalled', 'waiting', 'closed'].map(s => {
+  const statusOptions = ['all', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
     const label = s === 'all' ? 'All States' : s.charAt(0).toUpperCase() + s.slice(1);
     const selected = s === OAD._activeListStatus ? 'selected' : '';
     return `<option value="${s}" ${selected}>${label}</option>`;
@@ -2367,6 +2430,7 @@ OAD.renderListView = function () {
         <div id="list-tab-persona-bar" class="persona-bar" style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px 16px; margin:0; width:100%; box-sizing:border-box;">
           <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${openCount}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalledCount}</span></div>
+          ${dormantCount ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormantCount}</span></div>` : ''}
           <div class="persona-stat"><span class="text-muted text-sm">Avg Pressure</span><span class="val ${avgCls}">${avgPressure}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(pressureLevel)}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(hardDeadlineStr)}</span></div>
@@ -2378,9 +2442,14 @@ OAD.renderListView = function () {
 
       <div class="list-tab-toolbar">
         <input type="text" id="list-tab-search" placeholder="Search tasks by title or life area…" value="${OAD.esc(OAD._activeListSearch)}" oninput="OAD.filterListTab()">
-        <select id="list-tab-status" onchange="OAD.filterListTab()">
+        <select id="list-tab-status" ${OAD._activeSavedViewId ? 'disabled title="Status is controlled by the active Graph View"' : ''} onchange="OAD.filterListTab()">
           ${statusOptions}
         </select>
+        <select id="list-tab-saved-view" onchange="OAD.applySavedViewFromToolbar()">
+          <option value="">— No Saved View —</option>
+          ${OAD.DB.saved_views.map(v => `<option value="${v.id}" ${v.id === OAD._activeSavedViewId ? 'selected' : ''}>${OAD.esc(v.name)}</option>`).join('')}
+        </select>
+        <button class="ghost" onclick="OAD.openManageSavedViewsModal()">Manage Views</button>
         <button onclick="OAD.openNewThreadModal()">+ New Thread</button>
       </div>
 
@@ -2391,12 +2460,19 @@ OAD.renderListView = function () {
   OAD.filterListTab();
 };
 
+OAD.applySavedViewFromToolbar = function () {
+  const select = document.getElementById('list-tab-saved-view');
+  const id = select ? parseInt(select.value, 10) : NaN;
+  OAD._activeSavedViewId = isNaN(id) ? null : id;
+  OAD.renderListView();
+};
+
 OAD.filterListTab = function () {
   const searchInput = document.getElementById('list-tab-search');
   const statusSelect = document.getElementById('list-tab-status');
-  
+
   if (searchInput) OAD._activeListSearch = searchInput.value;
-  if (statusSelect) OAD._activeListStatus = statusSelect.value;
+  if (statusSelect && !OAD._activeSavedViewId) OAD._activeListStatus = statusSelect.value;
 
   const query = (OAD._activeListSearch || '').toLowerCase();
   const statusFilter = OAD._activeListStatus || 'all';
@@ -2404,14 +2480,20 @@ OAD.filterListTab = function () {
   const cycles = OAD.detectCycles();
   const cycleThreadIds = new Set(cycles.flat());
 
-  const threads = OAD.getVisibleThreads()
-    .filter(t => {
-      const matchesSearch = !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query);
-      const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    })
-    .map(t => ({ ...t, _score: OAD.pressure(t) }))
-    .sort((a, b) => b._score - a._score);
+  const activeSavedView = OAD._activeSavedViewId ? OAD.getSavedView(OAD._activeSavedViewId) : null;
+
+  const threads = (activeSavedView
+    ? OAD.applySavedView(OAD.getVisibleThreads(), activeSavedView)
+    : OAD.getVisibleThreads()
+        .filter(t => {
+          const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
+          return matchesStatus;
+        })
+        .map(t => ({ ...t, _score: OAD.pressure(t) }))
+        .sort((a, b) => b._score - a._score)
+  )
+    .map(t => ({ ...t, _score: t._score != null ? t._score : OAD.pressure(t) }))
+    .filter(t => !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query));
 
   const container = document.getElementById('list-tab-threads');
   if (!container) return;

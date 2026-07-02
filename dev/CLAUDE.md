@@ -3,6 +3,8 @@
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
+**Last updated: July 1, 2026** — Graph Views (saved filter+sort predicates over the thread graph, including graph-edge rules) shipped (149 tests passing).
+
 ---
 
 ## Long-Term Target: Published Mobile App
@@ -87,7 +89,7 @@ localStorage is a temporary bridge only — do not build new features on top of 
 Every thread has:
 - **uuid** — stable UUID assigned at creation (`crypto.randomUUID()`). Used for export/import matching. Never changes. Backfilled by `_normalizeDB()` for threads that predate this field.
 - id — sequential integer, internal use only
-- title, life_area, status (open|waiting|stalled|closed), priority (critical|high|medium|low)
+- title, life_area, status (`open|waiting|dormant|stalled|closed`), priority (critical|high|medium|low)
 - closing_condition (string) — what verified OUTCOME closes this, not what action
 - closing_condition_type (outcome|action), closing_condition_met (boolean)
 - current_assumption (string), assumption_verified (boolean)
@@ -98,6 +100,19 @@ Every thread has:
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
 - date_push_count (integer) — tracks how many times the next_action_date has been pushed back
+- **dormant_trigger** (string) — condition-based re-engagement trigger, e.g. "Re-engage when SDVOSB certified". Only meaningful when status = dormant. Set in Edit Thread modal.
+- **user_action_complete** (boolean, default false) — "I've done my part / ball in their court." Only meaningful when status = waiting. Auto-resets to false when status changes away from waiting. Set via checkbox in Edit Thread modal.
+
+**Status semantics (ordered: open → waiting → dormant → stalled → closed):**
+- `open` — actively being worked
+- `waiting` — action sent, waiting on someone else's response
+- `dormant` — deliberately parked; no current value to offer; milestone-gated re-engagement. Contributes **zero pressure**. Never appears in TOAT or Focus Now.
+- `stalled` — friction state; something is blocking this from moving
+- `closed` — done
+
+**Dormant vs Waiting distinction:** dormant = "I'm choosing not to engage yet" (self-imposed, milestone-gated). Waiting = "I've acted and am awaiting response" (time-sensitive, someone else has the ball).
+
+**user_action_complete effect:** when `status = waiting` AND `user_action_complete = true`, pressure is multiplied by 0.35. Thread is excluded from Focus Now primary/secondary candidate pools — only surfaced as absolute last resort if nothing else qualifies. Thread detail shows "Ball in Their Court" info card.
 
 ## Data Model — Deadline-Driven Prioritization (LIVE)
 
@@ -293,6 +308,24 @@ UI behavior:
 - Overdue cadences surface as a hard banner in the detail panel
 - Completed cadences show ✓; reset automatically on next trigger date
 - No pressure score — binary: done or not done
+
+## Data Model — Saved View / Graph Views (LIVE)
+Named, persisted filter+sort predicates over the thread list, stored in `OAD.DB.saved_views[]` (rides the same whole-DB JSONB blob as everything else — no schema/Supabase changes needed). FlowQueue's answer to Super Productivity's "Boards," but able to filter on graph-edge conditions SP structurally can't express (no dependency concept in SP's data model).
+
+Every saved view has:
+- id, name
+- statuses[], priorities[], life_areas[] — include-lists; empty array = no restriction (matches everything), not "match nothing"
+- edge_rule — `null`, or `{ type: 'blocked_by_open' | 'has_blocks' | 'no_blockers' }`. Fixed enum, not a query DSL — evaluated in `OAD.matchesSavedView()` (`engine.js`) by reusing `OAD.getGraphContext()`, the existing bidirectional edge-resolution helper.
+- sort_field (`pressure` | `deadline` | `next_action_date` | `title`), sort_dir (`asc` | `desc`)
+
+Key functions:
+- `OAD.matchesSavedView(thread, view)` / `OAD.applySavedView(threads, view)` (`engine.js`) — pure filter+sort, no DOM
+- `OAD.addSavedView` / `getSavedView` / `updateSavedView` / `deleteSavedView` (`js/data.js`) — CRUD, mirrors Cadence pattern
+- `OAD.openManageSavedViewsModal` / `openNewSavedViewModal` / `openEditSavedViewModal` (`js/modals.js`) — create/edit/delete UI
+
+UI behavior:
+- Lives inside the existing List Tab (`OAD.renderListView()`/`filterListTab()`, `js/render.js`) — no new nav panel. A "— No Saved View —" selector plus "Manage Views" button sit in the list toolbar; selecting a view supersedes the ad hoc status filter (disabled while a view is active) and composes with the free-text search box, same as SP's board+search interaction.
+- No Kanban/column UI — a saved view renders as a filtered, sorted list, consistent with how the rest of FlowQueue presents threads.
 
 ## Calendar Sync & OAuth SSO
 - **OAuth Providers:** Google (`google`) and Microsoft (`azure`) are implemented in the `OAD._signInWithProvider` flow (`js/modals.js`).

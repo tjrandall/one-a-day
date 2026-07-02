@@ -287,6 +287,7 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 }
 .pill.open    { background: #06d6a018; color: var(--open); }
 .pill.waiting { background: #4cc9f018; color: var(--waiting); }
+.pill.dormant { background: #8855dd18; color: #8855dd; }
 .pill.stalled { background: #f7258518; color: var(--stalled); }
 .pill.closed  { background: #55557718; color: var(--closed); }
 .pill.critical { background: #ff4d6d18; color: var(--critical); }

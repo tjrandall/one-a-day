@@ -2,6 +2,8 @@ window.OAD = window.OAD || {};
 
 // _inBleedUp: true when called recursively for bleed-up, suppresses second-hop bleed-up
 OAD.pressure = function (thread, _inBleedUp) {
+  if (thread.status === 'dormant') return 0;
+
   var score = 0;
 
   // Status
@@ -99,7 +101,11 @@ OAD.pressure = function (thread, _inBleedUp) {
     }
   }
 
-  return Math.min(score, 100);
+  var capped = Math.min(score, 100);
+  if (thread.status === 'waiting' && thread.user_action_complete) {
+    capped = Math.round(capped * 0.35);
+  }
+  return capped;
 };
 
 OAD.getEisenhowerQuadrant = function (thread) {
@@ -338,7 +344,7 @@ OAD.getGraphContext = function (threadId) {
 OAD.getLifeAreaHeat = function () {
   var map = {};
   (OAD.DB.threads || []).forEach(function (t) {
-    if (t.status === 'closed') return;
+    if (t.status === 'closed' || t.status === 'dormant') return;
     var a = t.life_area || 'Other';
     if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
     map[a].count++;
@@ -359,17 +365,73 @@ OAD.isBlocked = function (thread) {
   return ctx.blockedBy.length > 0;
 };
 
+// Graph Views — pure predicate matching a thread against a saved view's field filters + optional edge rule.
+OAD.matchesSavedView = function (thread, view) {
+  if (!thread || !view) return false;
+  if (view.statuses && view.statuses.length && view.statuses.indexOf(thread.status) === -1) return false;
+  if (view.priorities && view.priorities.length && view.priorities.indexOf(thread.priority) === -1) return false;
+  if (view.life_areas && view.life_areas.length && view.life_areas.indexOf(thread.life_area) === -1) return false;
+  if (view.edge_rule && view.edge_rule.type) {
+    var ctx = OAD.getGraphContext(thread.id);
+    switch (view.edge_rule.type) {
+      case 'blocked_by_open':
+        // ctx.blockedBy holds raw Thread objects (unlike ctx.blocks/enables/relates, which are wrapped {label,uuid,thread}).
+        if (!(ctx.blockedBy || []).some(function (b) { return b.status !== 'closed'; })) return false;
+        break;
+      case 'has_blocks':
+        if (!(ctx.blocks || []).length) return false;
+        break;
+      case 'no_blockers':
+        if ((ctx.blockedBy || []).length) return false;
+        break;
+    }
+  }
+  return true;
+};
+
+// Graph Views — filters threads against a saved view, then sorts by its sort_field/sort_dir.
+OAD.applySavedView = function (threads, view) {
+  var list = (threads || []).filter(function (t) { return OAD.matchesSavedView(t, view); });
+  var field = (view && view.sort_field) || 'pressure';
+  var dir = (view && view.sort_dir === 'asc') ? 1 : -1;
+  list.sort(function (a, b) {
+    var av, bv;
+    if (field === 'pressure') { av = OAD.pressure(a); bv = OAD.pressure(b); }
+    else if (field === 'deadline' || field === 'next_action_date') { av = a[field] || '9999-99-99'; bv = b[field] || '9999-99-99'; }
+    else { av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase(); }
+    if (av < bv) return -dir;
+    if (av > bv) return dir;
+    return 0;
+  });
+  return list;
+};
+
 OAD.selectFocusThread = function () {
-  var candidates = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && !OAD.isBlocked(t); })
+  var isWaitingActioned = function (t) { return t.status === 'waiting' && t.user_action_complete; };
+  var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; });
+
+  // Primary: not blocked, not waiting+actioned
+  var candidates = allActive
+    .filter(function (t) { return !OAD.isBlocked(t) && !isWaitingActioned(t); })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
+
+  // Secondary: allow blocked threads (still excludes waiting+actioned)
   if (!candidates.length) {
-    candidates = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-      .filter(function (t) { return t.status !== 'closed'; })
+    candidates = allActive
+      .filter(function (t) { return !isWaitingActioned(t); })
       .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
       .sort(function (a, b) { return b._score - a._score; });
   }
+
+  // Last resort: include waiting+actioned threads if nothing else qualifies
+  if (!candidates.length) {
+    candidates = allActive
+      .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
+      .sort(function (a, b) { return b._score - a._score; });
+  }
+
   if (!candidates.length) return null;
   var actionable = candidates.filter(function (t) { return t.next_action || t.next_action_date; });
   return actionable.length ? actionable[0] : candidates[0];
@@ -380,7 +442,8 @@ OAD.focusReason = function (t) {
   var todayStr = new Date().toISOString().slice(0, 10);
   var parts = [];
   if (t.status === 'stalled')  parts.push('stalled');
-  if (t.status === 'waiting')  parts.push('waiting on response');
+  if (t.status === 'waiting' && t.user_action_complete) parts.push('ball in their court');
+  else if (t.status === 'waiting') parts.push('waiting on response');
   if (t.next_action_date && t.next_action_date < todayStr) {
     var daysOver = Math.round((new Date(todayStr) - new Date(t.next_action_date + 'T00:00:00')) / 86400000);
     parts.push(daysOver + 'd overdue');

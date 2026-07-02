@@ -125,6 +125,17 @@ OAD._threadForm = function (t) {
       <input id="f-ctg-escalation" type="text" value="${OAD.esc(t.contingency_escalation)}" placeholder="Who or what is the escalation path?">
     </div>
 
+    <div class="field">
+      <label>Dormant Re-engagement Trigger <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(set when status is Dormant)</span></label>
+      <input id="f-dormant-trigger" type="text" value="${OAD.esc(t.dormant_trigger || '')}" placeholder="e.g. Re-engage when SDVOSB certified or APEX contract won">
+    </div>
+    <div class="field" style="align-self:end">
+      <label style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;margin:0">
+        <input type="checkbox" id="f-user-action-complete" ${t.user_action_complete ? 'checked' : ''} style="width:auto">
+        I've done my part — ball in their court <span class="text-muted" style="font-size:12px">(suppresses Focus Now; only applies when status is Waiting)</span>
+      </label>
+    </div>
+
     <div class="field-section-label">Deadline Tracking <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
     <div class="field-row">
       <div class="field">
@@ -166,7 +177,11 @@ OAD._readThreadForm = function (base) {
     effortEstimate:    document.getElementById('f-effort-estimate')?.value !== ''
                          ? parseInt(document.getElementById('f-effort-estimate').value, 10) : null,
     weeklyCommitment:  document.getElementById('f-weekly-commitment')?.value !== ''
-                         ? parseInt(document.getElementById('f-weekly-commitment').value, 10) : null
+                         ? parseInt(document.getElementById('f-weekly-commitment').value, 10) : null,
+    dormant_trigger:   document.getElementById('f-dormant-trigger')?.value.trim() || '',
+    user_action_complete: (document.getElementById('f-status')?.value === 'waiting')
+                         ? (document.getElementById('f-user-action-complete')?.checked || false)
+                         : false
   });
 };
 
@@ -240,7 +255,12 @@ OAD._saveEditThread = function (id) {
   const isClosing = (data.status === 'closed' || data.closing_condition_met);
   const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified, next_action_date: t.next_action_date };
   const notes = [];
-  if (prev.status !== data.status) notes.push(`Status → ${data.status}`);
+  if (prev.status !== data.status) {
+    notes.push(`Status → ${data.status}`);
+    if (prev.status === 'dormant' && data.status !== 'dormant') {
+      notes.push('Re-activated from dormant' + (data.dormant_trigger ? ' (trigger: ' + data.dormant_trigger + ')' : ''));
+    }
+  }
   if (prev.priority !== data.priority) notes.push(`Priority → ${data.priority}`);
   if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
 
@@ -881,6 +901,170 @@ OAD._deleteCadence = function (id) {
   OAD.deleteCadence(id);
   OAD.closeModal();
   OAD.renderCadencePanel();
+};
+
+// ── Saved Views (Graph Views) ────────────────────────────────────────
+
+OAD._SAVED_VIEW_EDGE_RULES = [
+  { value: '', label: '— No edge rule —' },
+  { value: 'blocked_by_open', label: 'Blocked by anything still open' },
+  { value: 'has_blocks', label: 'Blocks other threads' },
+  { value: 'no_blockers', label: 'Nothing blocking it' }
+];
+
+OAD._SAVED_VIEW_SORT_FIELDS = [
+  { value: 'pressure', label: 'Pressure' },
+  { value: 'deadline', label: 'Deadline' },
+  { value: 'next_action_date', label: 'Next Action Date' },
+  { value: 'title', label: 'Title' }
+];
+
+OAD._savedViewForm = function (v) {
+  const statusOpts = OAD.STATUSES.map(function (s) {
+    const checked = (v.statuses || []).indexOf(s) !== -1 ? 'checked' : '';
+    return '<label class="dow-checkbox"><input type="checkbox" class="sv-status" value="' + s + '" ' + checked + '> ' + s + '</label>';
+  }).join('');
+  const priorityOpts = OAD.PRIORITIES.map(function (p) {
+    const checked = (v.priorities || []).indexOf(p) !== -1 ? 'checked' : '';
+    return '<label class="dow-checkbox"><input type="checkbox" class="sv-priority" value="' + p + '" ' + checked + '> ' + p + '</label>';
+  }).join('');
+  const areaOpts = OAD.LIFE_AREAS.map(function (a) {
+    const checked = (v.life_areas || []).indexOf(a) !== -1 ? 'checked' : '';
+    return '<label class="dow-checkbox"><input type="checkbox" class="sv-life-area" value="' + OAD.esc(a) + '" ' + checked + '> ' + OAD.esc(a) + '</label>';
+  }).join('');
+  const edgeRuleOpts = OAD._SAVED_VIEW_EDGE_RULES.map(function (r) {
+    const selected = (v.edge_rule && v.edge_rule.type) === r.value ? 'selected' : (!v.edge_rule && r.value === '' ? 'selected' : '');
+    return '<option value="' + r.value + '" ' + selected + '>' + r.label + '</option>';
+  }).join('');
+  const sortFieldOpts = OAD._SAVED_VIEW_SORT_FIELDS.map(function (f) {
+    return '<option value="' + f.value + '" ' + (v.sort_field === f.value ? 'selected' : '') + '>' + f.label + '</option>';
+  }).join('');
+  return `
+    <div class="field">
+      <label>Name <span style="color:var(--critical)">*</span></label>
+      <input id="sv-name" type="text" value="${OAD.esc(v.name)}" placeholder="e.g. Blocked & Critical">
+    </div>
+    <div class="field">
+      <label>Status</label>
+      <div class="dow-picker">${statusOpts}</div>
+    </div>
+    <div class="field">
+      <label>Priority</label>
+      <div class="dow-picker">${priorityOpts}</div>
+    </div>
+    <div class="field">
+      <label>Life Area</label>
+      <div class="dow-picker">${areaOpts}</div>
+    </div>
+    <div class="field">
+      <label>Graph Rule</label>
+      <select id="sv-edge-rule">${edgeRuleOpts}</select>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Sort By</label>
+        <select id="sv-sort-field">${sortFieldOpts}</select>
+      </div>
+      <div class="field">
+        <label>Direction</label>
+        <select id="sv-sort-dir">
+          <option value="desc" ${v.sort_dir === 'desc' ? 'selected' : ''}>Descending</option>
+          <option value="asc" ${v.sort_dir === 'asc' ? 'selected' : ''}>Ascending</option>
+        </select>
+      </div>
+    </div>`;
+};
+
+OAD._readSavedViewForm = function (base) {
+  const name = document.getElementById('sv-name')?.value.trim();
+  if (!name) { alert('Name is required.'); return null; }
+  const statuses = Array.from(document.querySelectorAll('.sv-status:checked')).map(function (el) { return el.value; });
+  const priorities = Array.from(document.querySelectorAll('.sv-priority:checked')).map(function (el) { return el.value; });
+  const life_areas = Array.from(document.querySelectorAll('.sv-life-area:checked')).map(function (el) { return el.value; });
+  const edgeRuleType = document.getElementById('sv-edge-rule')?.value || '';
+  return Object.assign({}, base, {
+    name,
+    statuses,
+    priorities,
+    life_areas,
+    edge_rule: edgeRuleType ? { type: edgeRuleType } : null,
+    sort_field: document.getElementById('sv-sort-field')?.value || 'pressure',
+    sort_dir: document.getElementById('sv-sort-dir')?.value || 'desc'
+  });
+};
+
+OAD.openNewSavedViewModal = function () {
+  const blank = OAD.makeSavedView({});
+  OAD.openModal(`
+    <h2>New Graph View</h2>
+    ${OAD._savedViewForm(blank)}
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveNewSavedView()">Create</button>
+    </div>`);
+  setTimeout(() => document.getElementById('sv-name')?.focus(), 50);
+};
+
+OAD._saveNewSavedView = function () {
+  const data = OAD._readSavedViewForm(OAD.makeSavedView({}));
+  if (!data) return;
+  OAD.addSavedView(data);
+  OAD.closeModal();
+  OAD.renderListView();
+};
+
+OAD.openEditSavedViewModal = function (id) {
+  const v = OAD.getSavedView(id);
+  if (!v) return;
+  OAD.openModal(`
+    <h2>Edit Graph View</h2>
+    ${OAD._savedViewForm(v)}
+    <div class="modal-footer">
+      <button class="danger" onclick="OAD._deleteSavedView(${id})">Delete</button>
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button onclick="OAD._saveEditSavedView(${id})">Save</button>
+    </div>`);
+};
+
+OAD._saveEditSavedView = function (id) {
+  const v = OAD.getSavedView(id);
+  if (!v) return;
+  const data = OAD._readSavedViewForm(v);
+  if (!data) return;
+  OAD.updateSavedView(id, data);
+  OAD.closeModal();
+  OAD.renderListView();
+};
+
+OAD._deleteSavedView = function (id) {
+  const v = OAD.getSavedView(id);
+  if (!v) return;
+  if (!confirm('Delete "' + v.name + '"? This cannot be undone.')) return;
+  if (OAD._activeSavedViewId === id) OAD._activeSavedViewId = null;
+  OAD.deleteSavedView(id);
+  OAD.closeModal();
+  OAD.renderListView();
+};
+
+OAD.openManageSavedViewsModal = function () {
+  const rows = OAD.DB.saved_views.map(function (v) {
+    return `
+      <div class="field-row" style="align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding:8px 0;">
+        <span>${OAD.esc(v.name)}</span>
+        <div>
+          <button class="ghost" onclick="OAD.openEditSavedViewModal(${v.id})">Edit</button>
+          <button class="danger" onclick="OAD._deleteSavedView(${v.id})">Delete</button>
+        </div>
+      </div>`;
+  }).join('') || '<div class="text-muted">No saved views yet.</div>';
+
+  OAD.openModal(`
+    <h2>Manage Graph Views</h2>
+    <div>${rows}</div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Close</button>
+      <button onclick="OAD.openNewSavedViewModal()">+ New View</button>
+    </div>`);
 };
 
 // ── Import ────────────────────────────────────────────────────────────
