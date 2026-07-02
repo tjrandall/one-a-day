@@ -44,6 +44,14 @@ OAD._closingTypeOptions = function (selected) {
   ).join('');
 };
 
+OAD._stageOptions = function (selected) {
+  var all = ['— Not an application —'].concat(OAD.APPLICATION_STAGES, OAD.APPLICATION_TERMINAL_STAGES);
+  return all.map(function (s) {
+    var value = s === '— Not an application —' ? '' : s;
+    return '<option value="' + value + '" ' + (value === (selected || '') ? 'selected' : '') + '>' + s + '</option>';
+  }).join('');
+};
+
 OAD._threadForm = function (t) {
   return `
     <div class="field">
@@ -136,6 +144,12 @@ OAD._threadForm = function (t) {
       </label>
     </div>
 
+    <div class="field-section-label">Job Application Tracking <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional — only for leaf application threads; feeds Runway Risk)</span></div>
+    <div class="field">
+      <label>Pipeline Stage</label>
+      <select id="f-stage">${OAD._stageOptions(t.stage)}</select>
+    </div>
+
     <div class="field-section-label">Deadline Tracking <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
     <div class="field-row">
       <div class="field">
@@ -181,7 +195,8 @@ OAD._readThreadForm = function (base) {
     dormant_trigger:   document.getElementById('f-dormant-trigger')?.value.trim() || '',
     user_action_complete: (document.getElementById('f-status')?.value === 'waiting')
                          ? (document.getElementById('f-user-action-complete')?.checked || false)
-                         : false
+                         : false,
+    stage: document.getElementById('f-stage')?.value || null
   });
 };
 

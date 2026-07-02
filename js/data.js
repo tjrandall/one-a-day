@@ -38,11 +38,19 @@ OAD.RECURRENCES = [
   'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'weekly-days', 'custom'
 ];
 
-OAD.STATUSES   = ['open', 'waiting', 'dormant', 'stalled', 'closed'];
+OAD.STATUSES   = ['inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'];
 OAD.PRIORITIES = ['critical', 'high', 'medium', 'low'];
 OAD.EDGE_TYPES = ['blocks', 'blocked_by', 'enables', 'relates'];
 
 OAD.CLOSING_TYPES = ['outcome', 'action'];
+
+// Job-application pipeline stage — optional, only meaningful on leaf application threads
+// (identified by having a stage set at all, not a separate thread-type field). Ordered
+// ascending = closer to converting. 'rejected' is a separate terminal value, deliberately
+// NOT in this ordered list — it's excluded from "earliest active stage" calculations
+// (Runway Risk), same way 'closed' threads are excluded from pressure-sorted views.
+OAD.APPLICATION_STAGES = ['applied', 'screening', 'interview', 'offer'];
+OAD.APPLICATION_TERMINAL_STAGES = ['rejected'];
 
 OAD._generateUUID = function () {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
@@ -148,6 +156,17 @@ OAD.addThread = function (thread) {
   return thread;
 };
 
+// Quick Add — zero-friction capture. Raw text only, no synthesis, no LLM call, instant save.
+// Creates a minimal thread with status "inbox" so it stays out of pressure-sorted views,
+// Focus Now, and Daily View until reviewed. Returns null on empty/whitespace-only input.
+OAD.quickAddThread = function (rawText) {
+  var title = (rawText || '').trim();
+  if (!title) return null;
+  var thread = OAD.addThread(OAD.makeThread({ title: title, status: 'inbox' }));
+  OAD.addEvolution(thread.id, 'Captured via Quick Add.');
+  return thread;
+};
+
 OAD.updateThread = function (id, patch) {
   const t = OAD.getThread(id);
   if (!t) return null;
@@ -155,6 +174,23 @@ OAD.updateThread = function (id, patch) {
   OAD.saveDB();
   OAD._runAfterSave(t);
   return t;
+};
+
+// Runway Risk acknowledge — snoozes one track's at-risk banner/card entry for a week, not
+// forever. The underlying math keeps running; if the track is still at-risk once the snooze
+// expires, it re-presents automatically as the deadline keeps approaching. Deliberately not
+// a permanent dismiss — repeated pushing of a deadline-critical signal is itself information.
+OAD._RUNWAY_REPRESENT_DAYS = 7;
+
+OAD.acknowledgeRunwayRisk = function (trackUuid) {
+  const track = OAD.getThreadByUUID(trackUuid);
+  if (!track) return null;
+  const reprompt = new Date();
+  reprompt.setDate(reprompt.getDate() + OAD._RUNWAY_REPRESENT_DAYS);
+  track.runway_ack_until = reprompt.toISOString().slice(0, 10);
+  OAD.addEvolution(track.id, 'Runway Risk acknowledged — will re-present around ' + OAD.formatDate(track.runway_ack_until) + ' if still at-risk.');
+  OAD.saveDB();
+  return track;
 };
 
 OAD.deleteThread = function (id) {
@@ -200,6 +236,7 @@ OAD.makeThread = function (overrides) {
   return Object.assign({
     uuid: OAD._generateUUID(), // stable identifier — used for export/import matching
     id: null,
+    created_at: new Date().toISOString(),
     title: '',
     life_area: 'Other',
     status: 'open',
@@ -227,7 +264,9 @@ OAD.makeThread = function (overrides) {
     ai_insights: [],
     date_push_count: 0,
     dormant_trigger: '',
-    user_action_complete: false
+    user_action_complete: false,
+    stage: null, // job-application pipeline stage; null unless this is a leaf application thread
+    runway_ack_until: null // Runway Risk snooze — ISO date; suppressed from banner/card until this date passes
   }, overrides);
 };
 
@@ -855,10 +894,16 @@ OAD._normalizeDB = function () {
     if (!t.id) { _maxId++; t.id = _maxId; }
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!t.title) t.title = '';
+    if (!Array.isArray(t.evolution_log)) t.evolution_log = [];
+    if (!Array.isArray(t.ai_insights)) t.ai_insights = [];
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;
     if (t.date_push_count == null) t.date_push_count = 0;
     if (!Object.prototype.hasOwnProperty.call(t, 'dormant_trigger')) t.dormant_trigger = '';
     if (!Object.prototype.hasOwnProperty.call(t, 'user_action_complete')) t.user_action_complete = false;
+    // Legacy threads predate created_at — backfill to null (unknown) rather than fabricate a date.
+    if (!Object.prototype.hasOwnProperty.call(t, 'created_at')) t.created_at = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'stage')) t.stage = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'runway_ack_until')) t.runway_ack_until = null;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();

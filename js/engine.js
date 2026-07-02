@@ -12,6 +12,7 @@ window.OAD = window.OAD || {};
 // truncated version of it.
 OAD.pressure = function (thread, _suppressSideEffects, _visited) {
   if (thread.status === 'dormant') return 0;
+  if (thread.status === 'inbox') return 0; // uncaptured/unreviewed — not yet real work, stays out of pressure-sorted views
 
   var score = 0;
 
@@ -219,6 +220,126 @@ OAD.deadlineState = function (thread) {
   return { daysRemaining: daysRemaining, weeksRemaining: weeksRemaining, sessionsRemaining: sessionsRemaining, onTrack: onTrack, behindBy: behindBy };
 };
 
+// ── Runway Risk — convergence check ──────────────────────────────────
+// Separate signal type from pressure/deadlineState: not "how urgent does this feel," but
+// "given where things actually sit in the pipeline, is the trajectory even mathematically
+// capable of landing before the deadline." Additive, read-only — never writes anything.
+
+// Maps a category thread's title to a runway benchmark key. Same keyword-matching style as
+// OAD.suggestArea() elsewhere in this file — simple, not graph-aware, easy to extend.
+OAD._classifyRunwayBenchmark = function (title) {
+  var t = (title || '').toLowerCase();
+  if (t.indexOf('federal') !== -1) return 'federal';
+  if (t.indexOf('commercial') !== -1) return 'commercial';
+  return null;
+};
+
+// For one track thread, finds the earliest-active-stage among its leaf application threads
+// (children reached via 'enables'). Threads with no stage set are treated as 'applied' — they
+// exist as tracked applications, so they're at least that far in, per the spec's own framing
+// ("zero applications past Applied = worst case, still at stage 1"). Closed and rejected
+// threads are excluded — they're no longer part of the active pipeline math.
+OAD._earliestActiveStage = function (trackThread) {
+  var ctx = OAD.getGraphContext(trackThread.id);
+  var applications = (ctx.enables || [])
+    .map(function (e) { return e.thread; })
+    .filter(function (t) { return t && t.status !== 'closed' && t.stage !== 'rejected'; });
+
+  if (!applications.length) {
+    // No applications at all is the same worst case as "all applications still at applied" —
+    // the spec draws no distinction between the two for calculation purposes.
+    return { stage: 'applied', stageIndex: 0, applicationCount: 0 };
+  }
+
+  var earliest = null;
+  applications.forEach(function (app) {
+    var stage = app.stage || 'applied';
+    var idx = OAD.APPLICATION_STAGES.indexOf(stage);
+    if (idx === -1) idx = 0; // unrecognized/legacy value — treat as earliest, don't crash
+    if (earliest === null || idx < earliest.stageIndex) {
+      earliest = { stage: stage, stageIndex: idx };
+    }
+  });
+  return { stage: earliest.stage, stageIndex: earliest.stageIndex, applicationCount: applications.length };
+};
+
+// Estimates remaining weeks to outcome from the earliest-active stage, linearly discounting
+// the benchmark range by how far through the (applied -> screening -> interview -> offer)
+// pipeline that stage sits. A simplification, not a real distribution — matches the spec's
+// own "conceptual, not final formula" framing. Uses the benchmark's max (slower) estimate for
+// the at-risk trigger itself, since this is a warning signal — better to flag early.
+OAD._estimateRemainingWeeks = function (stageIndex, benchmark) {
+  var totalStages = OAD.APPLICATION_STAGES.length;
+  var remainingFraction = (totalStages - stageIndex) / totalStages;
+  return {
+    minWeeks: Math.round(benchmark.minWeeks * remainingFraction),
+    maxWeeks: Math.round(benchmark.maxWeeks * remainingFraction)
+  };
+};
+
+// Walks Full-Time Employment goal thread -> category threads (Federal/Commercial Job
+// Applications) -> track threads -> leaf application threads, using the same graph
+// (getGraphContext/'enables') the rest of the app already relies on — no new grouping field.
+// Returns null if the goal thread doesn't exist or has no deadline to converge against.
+OAD.calculateRunwayRisk = function (goalThreadId) {
+  var goalThread = OAD.getThread(goalThreadId);
+  if (!goalThread || !goalThread.deadline) return null;
+
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var deadline = new Date(goalThread.deadline + 'T00:00:00');
+  var benchmarks = (OAD.Config && OAD.Config.runwayBenchmarks) || {};
+
+  var goalCtx = OAD.getGraphContext(goalThread.id);
+  var categories = (goalCtx.enables || []).map(function (e) { return e.thread; }).filter(Boolean);
+
+  var tracks = [];
+  categories.forEach(function (category) {
+    var benchmarkKey = OAD._classifyRunwayBenchmark(category.title);
+    var benchmark = benchmarkKey ? benchmarks[benchmarkKey] : null;
+    if (!benchmark) return; // unclassifiable category — nothing to compare against, skip rather than guess
+
+    var categoryCtx = OAD.getGraphContext(category.id);
+    var trackThreads = (categoryCtx.enables || []).map(function (e) { return e.thread; }).filter(Boolean);
+
+    trackThreads.forEach(function (track) {
+      if (track.status === 'closed') return;
+      var earliest = OAD._earliestActiveStage(track);
+      var remaining = OAD._estimateRemainingWeeks(earliest.stageIndex, benchmark);
+
+      var projected = new Date(todayStr + 'T00:00:00');
+      projected.setDate(projected.getDate() + remaining.maxWeeks * 7);
+      var atRisk = projected >= deadline;
+
+      var deadlineLabel = OAD.formatDate ? OAD.formatDate(goalThread.deadline) : goalThread.deadline;
+      var sentence = atRisk
+        ? 'At current pipeline stage (' + earliest.applicationCount + ' application' + (earliest.applicationCount !== 1 ? 's' : '') +
+          ', earliest at ' + earliest.stage + ') and known ' + benchmark.label + ' timelines (~' +
+          remaining.minWeeks + '-' + remaining.maxWeeks + ' weeks remaining), "' + track.title +
+          '" cannot realistically convert before ' + deadlineLabel + ' without acceleration.'
+        : track.title + ' is mathematically on track to convert before ' + deadlineLabel + ' at current pace.';
+
+      tracks.push({
+        categoryTitle: category.title,
+        trackTitle: track.title,
+        trackUuid: track.uuid,
+        benchmarkKey: benchmarkKey,
+        stage: earliest.stage,
+        applicationCount: earliest.applicationCount,
+        minWeeksRemaining: remaining.minWeeks,
+        maxWeeksRemaining: remaining.maxWeeks,
+        atRisk: atRisk,
+        sentence: sentence
+      });
+    });
+  });
+
+  return {
+    deadline: goalThread.deadline,
+    tracks: tracks,
+    anyAtRisk: tracks.some(function (t) { return t.atRisk; })
+  };
+};
+
 OAD._DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
@@ -361,7 +482,7 @@ OAD.getGraphContext = function (threadId) {
 OAD.getLifeAreaHeat = function () {
   var map = {};
   (OAD.DB.threads || []).forEach(function (t) {
-    if (t.status === 'closed' || t.status === 'dormant') return;
+    if (t.status === 'closed' || t.status === 'dormant' || t.status === 'inbox') return;
     var a = t.life_area || 'Other';
     if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
     map[a].count++;
@@ -426,7 +547,7 @@ OAD.applySavedView = function (threads, view) {
 OAD.selectFocusThread = function () {
   var isWaitingActioned = function (t) { return t.status === 'waiting' && t.user_action_complete; };
   var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; });
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
 
   // Primary: not blocked, not waiting+actioned
   var candidates = allActive

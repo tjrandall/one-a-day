@@ -11,6 +11,14 @@ OAD.Config = {
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
     'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
   ],
+  // Runway Risk benchmark time-to-outcome (applied -> hire) per broad job-search category, in weeks.
+  // Starting assumptions, not derived from real base-rate data (sample size too small) — adjustable,
+  // not hardcoded permanently. Shared across all tracks within a category (e.g. both Federal tracks
+  // use the same federal benchmark) per the spec's stated grain.
+  runwayBenchmarks: JSON.parse(localStorage.getItem('oad_runway_benchmarks')) || {
+    federal:    { label: 'Federal',    minWeeks: 17, maxWeeks: 22 }, // ~4-5 months
+    commercial: { label: 'Commercial', minWeeks: 6,  maxWeeks: 8  }  // ~6-8 weeks
+  },
   demoMode: window.location.port === '8081' || window.location.pathname.includes('demo')
 };
 

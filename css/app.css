@@ -143,6 +143,26 @@ header h1 {
 }
 header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 
+.quick-add-bar { flex: 1; max-width: 480px; }
+.quick-add-bar input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  transition: border-color .3s ease, background .3s ease;
+}
+.quick-add-bar input.quick-add-saved {
+  border-color: var(--open);
+  background: #06d6a018;
+}
+.quick-add-bar input:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 /* Navigation Dropdowns */
 .nav-dropdown {
   position: relative;
@@ -523,6 +543,7 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 
 /* ── Overdue Banner ── */
 #overdue-banner { background: #ff4d6d14; border-bottom: 2px solid var(--critical); flex-shrink: 0; }
+#runway-risk-banner { background: #ff4d6d14; border-bottom: 2px solid var(--critical); flex-shrink: 0; }
 .overdue-item { display: flex; align-items: center; gap: 10px; padding: 11px 20px; border-bottom: 1px solid #ff4d6d28; font-size: 14px; }
 .overdue-item:last-child { border-bottom: none; }
 .overdue-label { font-size: 10px; font-weight: 800; letter-spacing: .1em; color: var(--critical); background: #ff4d6d28; padding: 2px 7px; border-radius: 4px; flex-shrink: 0; }

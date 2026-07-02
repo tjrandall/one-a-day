@@ -2,6 +2,27 @@ window.OAD = window.OAD || {};
 
 OAD._activeId = null;
 
+// Quick Add starts disabled in the static HTML and stays that way until _finishBoot() calls
+// this — enabling it earlier risks a capture landing in a pre-auth placeholder OAD.DB that
+// _bootAfterAuth() then discards when it replaces OAD.DB wholesale with the loaded data.
+OAD._enableQuickAdd = function () {
+  const input = document.getElementById('quick-add-input');
+  if (input) input.disabled = false;
+};
+
+// Quick Add — instant capture from the header input, available regardless of active view.
+// No LLM call, no modal, no blocking work: just save and clear.
+OAD.submitQuickAdd = function () {
+  const input = document.getElementById('quick-add-input');
+  if (!input || input.disabled) return; // boot/auth not finished — OAD.DB isn't the real object yet
+  const thread = OAD.quickAddThread(input.value);
+  if (!thread) return; // empty/whitespace — leave the input as-is, nothing to save
+  input.value = '';
+  input.classList.add('quick-add-saved');
+  setTimeout(function () { input.classList.remove('quick-add-saved'); }, 600);
+  if (typeof OAD.refreshActiveView === 'function') OAD.refreshActiveView();
+};
+
 OAD.renderHeaderActions = function () {
   const header = document.querySelector('.header-actions');
   if (header && header.children.length === 0) {
@@ -22,6 +43,7 @@ OAD.renderHeaderActions = function () {
       <div class="nav-dropdown">
         <button class="ghost" style="font-weight:600" data-i18n="queues">Queues</button>
         <div class="nav-dropdown-content">
+          <button onclick="OAD.renderInboxPanel()">Inbox</button>
           <button onclick="OAD.renderIdeaPanel()" data-i18n="ideas">Ideas</button>
           <button onclick="OAD.renderHabitPanel()" data-i18n="habits">Habits</button>
           <button onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
@@ -113,10 +135,10 @@ OAD.renderPersonaBar = function () {
   if (!bar) return;
 
   const threads = OAD.getVisibleThreads();
-  const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').length;
+  const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalled = threads.filter(t => t.status === 'stalled').length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
-  const scores  = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').map(t => OAD.pressure(t));
+  const scores  = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
   const avg     = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls  = avg >= 60 ? 'pressure-high' : avg >= 30 ? 'pressure-mid' : 'pressure-low';
   const p = OAD.DB.persona;
@@ -142,6 +164,10 @@ OAD.selectThread = function (id) {
 
 OAD.refreshActiveView = function () {
   OAD.renderList();
+
+  if (typeof OAD.renderRunwayRiskBanner === 'function') {
+    OAD.renderRunwayRiskBanner();
+  }
 
   if (OAD._lastView === 'Graph') {
     OAD.renderGraphView();
@@ -281,6 +307,22 @@ OAD.renderDetail = function (id) {
       '</div>';
   }());
 
+  const runwayRiskHtml = (function () {
+    var risk = OAD.calculateRunwayRisk(t.id);
+    if (!risk || !risk.tracks.length) return '';
+    var atRiskTracks = risk.tracks.filter(function (r) { return r.atRisk && !OAD._isRunwayRiskSnoozed(r.trackUuid); });
+    if (!atRiskTracks.length) return ''; // on-track (or snoozed) tracks stay quiet here — this card is for the "math doesn't work" signal specifically
+    return '<div class="card runway-risk-card" style="border-left:3px solid var(--critical);background:rgba(255,77,109,0.04)">' +
+      '<div class="card-title" style="color:var(--critical)">⚠ Runway Risk</div>' +
+      atRiskTracks.map(function (r) {
+        return '<div class="mt-8">' +
+          '<div class="text-sm">' + OAD.esc(r.sentence) + '</div>' +
+          '<button class="secondary mt-8" style="font-size:12px;padding:5px 12px" onclick="OAD.acknowledgeRunwayRisk(\'' + r.trackUuid + '\'); OAD.renderDetail(' + t.id + '); OAD.renderRunwayRiskBanner();">Acknowledge (1wk)</button>' +
+          '</div>';
+      }).join('') +
+      '</div>';
+  }());
+
   const evoHtml = (t.evolution_log || []).length
     ? `<div class="evo-log">${[...(t.evolution_log)].reverse().map(e => `
         <div class="evo-entry">
@@ -344,6 +386,8 @@ OAD.renderDetail = function (id) {
     </div>
 
     ${deadlineHtml}
+
+    ${runwayRiskHtml}
 
     <div class="card insight-card">
       <div class="insight-header">
@@ -438,6 +482,59 @@ OAD.renderOverdueBanner = function () {
       '<strong>' + OAD.esc(c.title) + '</strong>' +
       (c.consequences ? '<span class="overdue-consequence"> — ' + OAD.esc(c.consequences) + '</span>' : '') +
       '<button class="danger" style="margin-left:auto;font-size:12px;padding:5px 12px" onclick="OAD.markCadenceDone(' + c.id + ')">Mark Done</button>' +
+      '</div>';
+  }).join('');
+};
+
+// Scans open threads with a deadline for Runway Risk (any at their goal-thread level, not
+// just one hardcoded thread) and shows a hard banner — same "impossible to miss" treatment
+// as the overdue-cadence banner, but genuinely persistent: called from _finishBoot() so it
+// survives view switches, rather than only rendering when a specific panel is active.
+// A track is suppressed from display while its own runway_ack_until date hasn't passed yet —
+// the underlying calc still runs and still counts it as at-risk (calculateRunwayRisk stays
+// pure/unaware of acknowledgment), this is purely a presentation-layer snooze.
+OAD._isRunwayRiskSnoozed = function (trackUuid) {
+  var track = OAD.getThreadByUUID(trackUuid);
+  if (!track || !track.runway_ack_until) return false;
+  var todayStr = new Date().toISOString().slice(0, 10);
+  return track.runway_ack_until >= todayStr;
+};
+
+OAD.renderRunwayRiskBanner = function () {
+  var atRiskTracks = [];
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.status === 'closed' || !t.deadline) return;
+    var risk = OAD.calculateRunwayRisk(t.id);
+    if (risk && risk.anyAtRisk) {
+      risk.tracks
+        .filter(function (r) { return r.atRisk && !OAD._isRunwayRiskSnoozed(r.trackUuid); })
+        .forEach(function (r) {
+          atRiskTracks.push(Object.assign({ goalThreadId: t.id, goalTitle: t.title }, r));
+        });
+    }
+  });
+
+  var banner = document.getElementById('runway-risk-banner');
+  if (!atRiskTracks.length) {
+    if (banner) banner.remove();
+    return;
+  }
+
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'runway-risk-banner';
+    var detailPanel = document.getElementById('detail-panel');
+    if (!detailPanel) return;
+    detailPanel.insertBefore(banner, detailPanel.firstChild);
+  }
+
+  banner.innerHTML = atRiskTracks.map(function (r) {
+    return '<div class="overdue-item" style="border-left-color:var(--critical)">' +
+      '<span class="overdue-label">RUNWAY RISK</span>' +
+      '<strong>' + OAD.esc(r.trackTitle) + '</strong>' +
+      '<span class="overdue-consequence"> — ' + OAD.esc(r.sentence) + '</span>' +
+      '<button class="ghost" style="margin-left:auto;font-size:12px;padding:5px 12px" onclick="OAD.selectThread(' + r.goalThreadId + ')">View</button>' +
+      '<button class="secondary" style="font-size:12px;padding:5px 12px" onclick="OAD.acknowledgeRunwayRisk(\'' + r.trackUuid + '\'); OAD.renderRunwayRiskBanner(); if (OAD._activeId === ' + r.goalThreadId + ') OAD.renderDetail(' + r.goalThreadId + ');">Acknowledge (1wk)</button>' +
       '</div>';
   }).join('');
 };
@@ -800,7 +897,7 @@ OAD.renderTodayView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
@@ -1070,7 +1167,7 @@ OAD.renderDailyView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
@@ -1542,7 +1639,7 @@ OAD.renderMatrixView = function () {
 
   // ── Threads ────────────────────────────────────────────────────────
   const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant'; })
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
@@ -2393,6 +2490,15 @@ OAD._renderGraphFallback = function (data) {
     '</div>';
 };
 
+// One-click access to captured Quick Add items — jumps straight to the List Tab pre-filtered
+// to status=inbox, rather than requiring a manual search or a hand-built Graph View.
+OAD.renderInboxPanel = function () {
+  OAD._activeSavedViewId = null;
+  OAD._activeListStatus = 'inbox';
+  OAD.renderListView();
+  OAD.highlightNav('renderInboxPanel'); // renderListView() highlights itself; re-highlight Inbox instead
+};
+
 OAD.renderListView = function () {
   OAD._lastView = 'List';
   OAD.highlightNav('renderListView');
@@ -2405,10 +2511,10 @@ OAD.renderListView = function () {
   if (OAD._activeSavedViewId === undefined) OAD._activeSavedViewId = null;
 
   const threads = OAD.getVisibleThreads();
-  const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').length;
+  const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalledCount = threads.filter(t => t.status === 'stalled').length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
-  const scores = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant').map(t => OAD.pressure(t));
+  const scores = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls = avgPressure >= 60 ? 'pressure-high' : avgPressure >= 30 ? 'pressure-mid' : 'pressure-low';
   const persona = OAD.DB.persona;
@@ -2417,7 +2523,7 @@ OAD.renderListView = function () {
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
 
-  const statusOptions = ['all', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
+  const statusOptions = ['all', 'inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
     const label = s === 'all' ? 'All States' : s.charAt(0).toUpperCase() + s.slice(1);
     const selected = s === OAD._activeListStatus ? 'selected' : '';
     return `<option value="${s}" ${selected}>${label}</option>`;
@@ -2447,7 +2553,7 @@ OAD.renderListView = function () {
         </select>
         <select id="list-tab-saved-view" onchange="OAD.applySavedViewFromToolbar()">
           <option value="">— No Saved View —</option>
-          ${OAD.DB.saved_views.map(v => `<option value="${v.id}" ${v.id === OAD._activeSavedViewId ? 'selected' : ''}>${OAD.esc(v.name)}</option>`).join('')}
+          ${(OAD.DB.saved_views || []).map(v => `<option value="${v.id}" ${v.id === OAD._activeSavedViewId ? 'selected' : ''}>${OAD.esc(v.name)}</option>`).join('')}
         </select>
         <button class="ghost" onclick="OAD.openManageSavedViewsModal()">Manage Views</button>
         <button onclick="OAD.openNewThreadModal()">+ New Thread</button>

@@ -678,6 +678,229 @@ OAD.test('deadlineState: no effortEstimate → onTrack true, sessionsRemaining n
   OAD._assertEqual(ds.sessionsRemaining, null, 'sessionsRemaining null when no estimate');
 });
 
+// ── Tests: Runway Risk (convergence check) ───────────────────────────
+
+function _rrDate(weeksFromNow) {
+  const d = new Date();
+  d.setDate(d.getDate() + weeksFromNow * 7);
+  return d.toISOString().slice(0, 10);
+}
+
+OAD.test('OAD.APPLICATION_STAGES is ordered applied -> screening -> interview -> offer', function () {
+  OAD._assertEqual(OAD.APPLICATION_STAGES.join(','), 'applied,screening,interview,offer', 'stage order should match the pipeline');
+});
+
+OAD.test('_classifyRunwayBenchmark: classifies Federal/Commercial by keyword, skips unrelated titles', function () {
+  OAD._assertEqual(OAD._classifyRunwayBenchmark('Federal Job Applications'), 'federal', 'Federal keyword');
+  OAD._assertEqual(OAD._classifyRunwayBenchmark('Commercial Job Applications'), 'commercial', 'Commercial keyword');
+  OAD._assertEqual(OAD._classifyRunwayBenchmark('Divinum Officium — Weekly Health Check'), null, 'unrelated title should not be guessed at');
+});
+
+OAD.test('_earliestActiveStage: zero applications is the worst case (applied, count 0)', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const track = { id: 801, uuid: 'rr-empty-track', title: 'Empty Track', status: 'open', connections: [] };
+    OAD.DB.threads = [track];
+    const result = OAD._earliestActiveStage(track);
+    OAD._assertEqual(result.stage, 'applied', 'zero applications treated as stage applied');
+    OAD._assertEqual(result.stageIndex, 0, 'stageIndex 0');
+    OAD._assertEqual(result.applicationCount, 0, 'application count is 0');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('_earliestActiveStage: picks the earliest stage among multiple applications, excludes closed/rejected', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const track = {
+      id: 802, uuid: 'rr-track', title: 'Track', status: 'open',
+      connections: [
+        { to_uuid: 'rr-app-interview', edge_type: 'enables' },
+        { to_uuid: 'rr-app-applied', edge_type: 'enables' },
+        { to_uuid: 'rr-app-rejected', edge_type: 'enables' },
+        { to_uuid: 'rr-app-closed', edge_type: 'enables' }
+      ]
+    };
+    const appInterview = { id: 803, uuid: 'rr-app-interview', title: 'App at interview', status: 'waiting', stage: 'interview' };
+    const appApplied    = { id: 804, uuid: 'rr-app-applied',   title: 'App at applied',   status: 'waiting', stage: null }; // unset defaults to applied
+    const appRejected   = { id: 805, uuid: 'rr-app-rejected',  title: 'App rejected',     status: 'waiting', stage: 'rejected' };
+    const appClosed     = { id: 806, uuid: 'rr-app-closed',    title: 'App closed',       status: 'closed',  stage: 'applied' };
+    OAD.DB.threads = [track, appInterview, appApplied, appRejected, appClosed];
+
+    const result = OAD._earliestActiveStage(track);
+    OAD._assertEqual(result.stage, 'applied', 'earliest active stage should be applied, not interview');
+    OAD._assertEqual(result.applicationCount, 2, 'only the 2 active (non-closed, non-rejected) applications count');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('_estimateRemainingWeeks: full benchmark at stage 0, quarter benchmark at the last stage', function () {
+  const benchmark = { minWeeks: 16, maxWeeks: 20 };
+  const atApplied = OAD._estimateRemainingWeeks(0, benchmark);
+  OAD._assertEqual(atApplied.maxWeeks, 20, 'stage 0 (applied) should carry the full benchmark');
+  const atOffer = OAD._estimateRemainingWeeks(3, benchmark); // last of 4 stages
+  OAD._assertEqual(atOffer.maxWeeks, 5, 'stage 3 of 4 (offer) should carry 1/4 of the benchmark');
+});
+
+OAD.test('calculateRunwayRisk: returns null when the goal thread has no deadline', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const goal = { id: 810, uuid: 'rr-goal-nodl', title: 'Goal without deadline', status: 'open', deadline: null, connections: [] };
+    OAD.DB.threads = [goal];
+    OAD._assertEqual(OAD.calculateRunwayRisk(goal.id), null, 'no deadline means nothing to converge against');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('calculateRunwayRisk: full hierarchy — zero-application track near deadline is flagged at-risk', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const goal = {
+      id: 811, uuid: 'rr-goal', title: 'Full-Time Employment (test)', status: 'open',
+      deadline: _rrDate(4), // 4 weeks away — federal benchmark is 17-22 weeks, cannot possibly land
+      connections: [{ to_uuid: 'rr-fed-cat', edge_type: 'enables' }]
+    };
+    const fedCategory = { id: 812, uuid: 'rr-fed-cat', title: 'Federal Job Applications', status: 'open',
+      connections: [{ to_uuid: 'rr-fed-track', edge_type: 'enables' }] };
+    const fedTrack = { id: 813, uuid: 'rr-fed-track', title: 'Federal — Test Track', status: 'open', connections: [] };
+    OAD.DB.threads = [goal, fedCategory, fedTrack];
+
+    const risk = OAD.calculateRunwayRisk(goal.id);
+    OAD._assert(!!risk, 'should return a result');
+    OAD._assertEqual(risk.tracks.length, 1, 'one track found');
+    OAD._assert(risk.anyAtRisk, 'zero-application track this close to deadline must be at-risk');
+    OAD._assertEqual(risk.tracks[0].applicationCount, 0, 'zero applications recorded');
+    OAD._assert(risk.tracks[0].sentence.indexOf('Federal — Test Track') !== -1, 'sentence should name the track');
+    OAD._assert(risk.tracks[0].sentence.indexOf('cannot realistically convert') !== -1, 'sentence should state the math does not work');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('calculateRunwayRisk: advanced-stage application with a comfortable deadline is not at-risk', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const goal = {
+      id: 821, uuid: 'rr-goal-2', title: 'Full-Time Employment (test 2)', status: 'open',
+      deadline: _rrDate(10), // 10 weeks away
+      connections: [{ to_uuid: 'rr-fed-cat-2', edge_type: 'enables' }]
+    };
+    const fedCategory = { id: 822, uuid: 'rr-fed-cat-2', title: 'Federal Job Applications', status: 'open',
+      connections: [{ to_uuid: 'rr-fed-track-2', edge_type: 'enables' }] };
+    const fedTrack = { id: 823, uuid: 'rr-fed-track-2', title: 'Federal — Advanced Track', status: 'open',
+      connections: [{ to_uuid: 'rr-app-offer', edge_type: 'enables' }] };
+    const appOffer = { id: 824, uuid: 'rr-app-offer', title: 'App at offer stage', status: 'waiting', stage: 'offer' };
+    OAD.DB.threads = [goal, fedCategory, fedTrack, appOffer];
+
+    const risk = OAD.calculateRunwayRisk(goal.id);
+    OAD._assertEqual(risk.tracks[0].stage, 'offer', 'earliest (only) stage is offer');
+    OAD._assert(!risk.tracks[0].atRisk, 'an application at offer stage with 10 weeks left should not be flagged at-risk');
+    OAD._assert(!risk.anyAtRisk, 'no track should be at-risk');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('calculateRunwayRisk: unclassifiable category is skipped rather than guessed at', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const goal = {
+      id: 831, uuid: 'rr-goal-3', title: 'Goal (test 3)', status: 'open', deadline: _rrDate(4),
+      connections: [{ to_uuid: 'rr-unrelated-cat', edge_type: 'enables' }]
+    };
+    const unrelated = { id: 832, uuid: 'rr-unrelated-cat', title: 'Unrelated Category', status: 'open',
+      connections: [{ to_uuid: 'rr-unrelated-track', edge_type: 'enables' }] };
+    const unrelatedTrack = { id: 833, uuid: 'rr-unrelated-track', title: 'Some Other Track', status: 'open', connections: [] };
+    OAD.DB.threads = [goal, unrelated, unrelatedTrack];
+
+    const risk = OAD.calculateRunwayRisk(goal.id);
+    OAD._assertEqual(risk.tracks.length, 0, 'unclassifiable category should be skipped, not guessed at');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('acknowledgeRunwayRisk: sets a 7-day snooze and logs an evolution entry', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const track = OAD.makeThread({ id: 841, uuid: 'rr-ack-track', title: 'Ack Test Track', status: 'open' });
+    OAD.DB.threads = [track];
+
+    const before = new Date();
+    const result = OAD.acknowledgeRunwayRisk('rr-ack-track');
+    OAD._assert(!!result, 'should return the updated track');
+
+    const expected = new Date(before);
+    expected.setDate(expected.getDate() + OAD._RUNWAY_REPRESENT_DAYS);
+    OAD._assertEqual(track.runway_ack_until, expected.toISOString().slice(0, 10), 'snooze should be exactly _RUNWAY_REPRESENT_DAYS out');
+    OAD._assert(track.evolution_log.length > 0, 'should log an evolution entry');
+    OAD._assert(track.evolution_log[track.evolution_log.length - 1].note.indexOf('Runway Risk acknowledged') !== -1, 'evolution note should mention acknowledgment');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('_isRunwayRiskSnoozed: true while ack_until is in the future, false once it passes or is unset', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const future = new Date(); future.setDate(future.getDate() + 3);
+    const past = new Date(); past.setDate(past.getDate() - 3);
+
+    const snoozed   = OAD.makeThread({ id: 851, uuid: 'rr-snoozed',   title: 'Snoozed',   runway_ack_until: future.toISOString().slice(0, 10) });
+    const expired    = OAD.makeThread({ id: 852, uuid: 'rr-expired',   title: 'Expired',    runway_ack_until: past.toISOString().slice(0, 10) });
+    const neverAcked = OAD.makeThread({ id: 853, uuid: 'rr-neveracked', title: 'Never acked', runway_ack_until: null });
+    OAD.DB.threads = [snoozed, expired, neverAcked];
+
+    OAD._assert(OAD._isRunwayRiskSnoozed('rr-snoozed'), 'still-future ack_until should be snoozed');
+    OAD._assert(!OAD._isRunwayRiskSnoozed('rr-expired'), 'past ack_until should no longer be snoozed — re-presents');
+    OAD._assert(!OAD._isRunwayRiskSnoozed('rr-neveracked'), 'no ack_until at all should not be snoozed');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('calculateRunwayRisk stays unaware of acknowledgment — snoozing is display-layer only', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const goal = {
+      id: 861, uuid: 'rr-goal-ack', title: 'Goal (ack test)', status: 'open', deadline: _rrDate(4),
+      connections: [{ to_uuid: 'rr-fed-cat-ack', edge_type: 'enables' }]
+    };
+    const fedCategory = { id: 862, uuid: 'rr-fed-cat-ack', title: 'Federal Job Applications', status: 'open',
+      connections: [{ to_uuid: 'rr-fed-track-ack', edge_type: 'enables' }] };
+    const future = new Date(); future.setDate(future.getDate() + 3);
+    const fedTrack = OAD.makeThread({ id: 863, uuid: 'rr-fed-track-ack', title: 'Federal — Snoozed Track', status: 'open', runway_ack_until: future.toISOString().slice(0, 10) });
+    OAD.DB.threads = [goal, fedCategory, fedTrack];
+
+    const risk = OAD.calculateRunwayRisk(goal.id);
+    OAD._assert(risk.tracks[0].atRisk, 'the underlying math should still report at-risk regardless of snooze');
+    OAD._assert(OAD._isRunwayRiskSnoozed('rr-fed-track-ack'), 'but the track should read as currently snoozed for display purposes');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('renderInboxPanel: sets status filter to inbox and clears any active saved view', function () {
+  const originalLastView = OAD._lastView;
+  const originalListStatus = OAD._activeListStatus;
+  const originalSavedViewId = OAD._activeSavedViewId;
+  try {
+    OAD._activeSavedViewId = 999; // simulate a saved view being active beforehand
+    OAD.renderInboxPanel();
+    OAD._assertEqual(OAD._activeListStatus, 'inbox', 'status filter should be set to inbox');
+    OAD._assertEqual(OAD._activeSavedViewId, null, 'any active saved view should be cleared');
+  } finally {
+    // renderInboxPanel() calls the real renderListView(), which sets _lastView — restore all
+    // three so this test doesn't change how later tests' goBackToLastView()/refreshActiveView() dispatch.
+    OAD._lastView = originalLastView;
+    OAD._activeListStatus = originalListStatus;
+    OAD._activeSavedViewId = originalSavedViewId;
+  }
+});
+
 OAD.test('pressure: deadline within 7 days not on track adds 30', function () {
   const soon = new Date();
   soon.setDate(soon.getDate() + 3);
@@ -1536,8 +1759,14 @@ OAD._finishBoot = function () {
   if (typeof OAD.renderHeaderActions === 'function') {
     OAD.renderHeaderActions();
   }
-  
+
+  OAD._enableQuickAdd();
+
   OAD.renderDailyView();
+
+  if (typeof OAD.renderRunwayRiskBanner === 'function') {
+    OAD.renderRunwayRiskBanner();
+  }
 
   if (typeof OAD.runADE === 'function') {
     OAD.runADE();
@@ -2134,6 +2363,101 @@ OAD.test('selectFocusThread: dormant thread is never returned', function () {
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'focus should return a thread');
     OAD._assertEqual(focus.id, 2, 'focus should select the open thread, not the dormant one');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+// ── Tests: Quick Add / Inbox status ──────────────────────────────────
+
+OAD.test('OAD.STATUSES includes inbox', function () {
+  OAD._assert(OAD.STATUSES.includes('inbox'), 'inbox should be a recognized status value');
+});
+
+OAD.test('makeThread: created_at defaults to a valid ISO timestamp', function () {
+  const t = OAD.makeThread({});
+  OAD._assert(!!t.created_at, 'created_at should be set');
+  OAD._assert(!isNaN(new Date(t.created_at).getTime()), 'created_at should parse as a valid date');
+});
+
+OAD.test('_normalizeDB: legacy thread without created_at backfills to null, not a fabricated date', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const legacy = { id: 701, uuid: OAD._generateUUID(), title: 'Predates created_at', status: 'open', connections: [] };
+    delete legacy.created_at;
+    OAD.DB.threads = [legacy];
+    OAD._normalizeDB();
+    OAD._assert(Object.prototype.hasOwnProperty.call(legacy, 'created_at'), 'created_at key should exist after normalize');
+    OAD._assertEqual(legacy.created_at, null, 'backfilled created_at should be null (unknown), not a guessed date');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('quickAddThread: creates a minimal inbox thread from raw text', function () {
+  const before = OAD.DB.threads.length;
+  const t = OAD.quickAddThread('Mom beta test Bible Clock');
+  OAD._assert(!!t, 'should return the created thread');
+  OAD._assertEqual(t.title, 'Mom beta test Bible Clock', 'raw text becomes the title');
+  OAD._assertEqual(t.status, 'inbox', 'status should be inbox');
+  OAD._assertEqual(t.date_push_count, 0, 'date_push_count starts at 0');
+  OAD._assert(!!t.created_at, 'created_at should be set');
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'thread count increased by one');
+});
+
+OAD.test('quickAddThread: trims whitespace and rejects empty/whitespace-only input', function () {
+  const before = OAD.DB.threads.length;
+  OAD._assertEqual(OAD.quickAddThread('   '), null, 'whitespace-only input should not create a thread');
+  OAD._assertEqual(OAD.quickAddThread(''), null, 'empty input should not create a thread');
+  OAD._assertEqual(OAD.DB.threads.length, before, 'no threads created from empty/whitespace input');
+
+  const t = OAD.quickAddThread('  padded title  ');
+  OAD._assertEqual(t.title, 'padded title', 'title should be trimmed');
+});
+
+OAD.test('_enableQuickAdd: enables the quick-add input (guards against pre-auth capture loss)', function () {
+  const input = document.getElementById('quick-add-input');
+  if (!input) return; // not present in this DOM context (e.g. non-browser test runner) — nothing to check
+  const wasDisabled = input.disabled;
+  input.disabled = true; // force known state regardless of prior test runs
+  OAD._enableQuickAdd();
+  OAD._assert(!input.disabled, '_enableQuickAdd() must enable the quick-add input');
+  input.disabled = wasDisabled; // restore, in case a later test depends on default state
+});
+
+OAD.test('pressure: inbox status is 0, matching dormant', function () {
+  const inbox = OAD.makeThread({ status: 'inbox', priority: 'critical', connections: [] });
+  const dormant = OAD.makeThread({ status: 'dormant', priority: 'critical', connections: [] });
+  OAD._assertEqual(OAD.pressure(inbox), 0, 'inbox thread pressure should be 0 regardless of priority');
+  OAD._assertEqual(OAD.pressure(inbox), OAD.pressure(dormant), 'inbox and dormant should both be 0');
+});
+
+OAD.test('selectFocusThread: inbox thread is never returned', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Inbox capture', status: 'inbox', priority: 'critical' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something' })
+    ];
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'focus should return a thread');
+    OAD._assertEqual(focus.id, 2, 'focus should select the open thread, not the inbox capture');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('getLifeAreaHeat: excludes inbox threads from area aggregates', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Inbox item', status: 'inbox', life_area: 'Test Area', connections: [] }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Real work', status: 'open', life_area: 'Test Area', connections: [] })
+    ];
+    const heat = OAD.getLifeAreaHeat();
+    const area = heat.find(h => h.name === 'Test Area');
+    OAD._assert(!!area, 'Test Area should appear in heat map');
+    OAD._assertEqual(area.count, 1, 'only the non-inbox thread should count toward the area');
   } finally {
     OAD.DB.threads = orig;
   }

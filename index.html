@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&family=Montserrat:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/app.css?v=19">
+  <link rel="stylesheet" href="css/app.css?v=25">
 </head>
 <body>
 
@@ -16,6 +16,9 @@
   <header>
     <div class="fq-navbar-brand" style="display:flex; align-items:center;">
       <img src="img/brand_mark.png" alt="FlowQueue Home" style="height: 48px; object-fit: contain; cursor: pointer;">
+    </div>
+    <div class="quick-add-bar">
+      <input id="quick-add-input" type="text" placeholder="Quick capture — press Enter to save…" autocomplete="off" disabled onkeydown="if (event.key === 'Enter') OAD.submitQuickAdd();">
     </div>
     <div class="header-actions">
       <!-- Nav injected dynamically by OAD.renderHeaderActions() -->
@@ -43,7 +46,7 @@
 <!-- Layer order: supabase → supabase-client → data → engine → api → render → modals → seed → tests → boot -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.29.2/cytoscape.min.js"></script>
-<script src="js/supabase-client.js?v=19"></script>
+<script src="js/supabase-client.js?v=25"></script>
 <!-- Demo credentials — gitignored, absent in prod/local dev. Silent no-op if file not present. -->
 <script>window.OAD = window.OAD || {}; OAD.DemoConfig = null;</script>
 <script src="js/demo_boot.js" onerror="void 0"></script>
@@ -62,16 +65,16 @@
 <script src="js/demo_data_sync.js" onerror="void 0"></script>
 <script src="js/demo.config.js" onerror="void 0"></script>
 <script src="js/module.config.js" onerror="void 0"></script>
-<script src="js/config.js?v=19"></script>
-<script src="js/data.js?v=19"></script>
-<script src="js/engine.js?v=19"></script>
-<script src="js/mailroom.js?v=19"></script>
-<script src="js/api.js?v=19"></script>
-<script src="js/render.js?v=19"></script>
-<script src="js/dashboard.js?v=19"></script>
-<script src="js/modals.js?v=19"></script>
-<script src="tests/tests.data.js?v=19"></script>
-<script src="tests/tests.js?v=19"></script>
+<script src="js/config.js?v=25"></script>
+<script src="js/data.js?v=25"></script>
+<script src="js/engine.js?v=25"></script>
+<script src="js/mailroom.js?v=25"></script>
+<script src="js/api.js?v=25"></script>
+<script src="js/render.js?v=25"></script>
+<script src="js/dashboard.js?v=25"></script>
+<script src="js/modals.js?v=25"></script>
+<script src="tests/tests.data.js?v=25"></script>
+<script src="tests/tests.js?v=25"></script>
 <script>OAD.boot();</script>
 
 </body>

@@ -3,7 +3,7 @@
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 2, 2026** — Pressure propagation fix: removed the backwards one-hop bleed-up, added cycle-safe transitive propagation from blocking threads up through the full `blockedBy` closure (148 tests passing).
+**Last updated: July 2, 2026** — First-usage feedback fixes: added an Inbox nav entry (Quick Add captures had no dedicated view — had to search List manually) and a Runway Risk acknowledge/re-present mechanism (banners needed a way to snooze without permanently dismissing a live deadline signal). Also hardened `_normalizeDB()` to backfill `evolution_log`/`ai_insights` — missing on any thread that predates those fields, which crashed the first real call to `addEvolution()` on such a thread. Also this session: Runway Risk convergence check (Steps 1/3/4 of `flowqueue_runway_risk_spec.md`; Step 2 backfill deferred, needs TJ's input), Quick Add capture (Part 1 of `flowqueue_quickadd_inbox_spec.md`; Parts 2-4 not yet built), and the pressure propagation fix (171 tests passing).
 
 ---
 
@@ -89,7 +89,8 @@ localStorage is a temporary bridge only — do not build new features on top of 
 Every thread has:
 - **uuid** — stable UUID assigned at creation (`crypto.randomUUID()`). Used for export/import matching. Never changes. Backfilled by `_normalizeDB()` for threads that predate this field.
 - id — sequential integer, internal use only
-- title, life_area, status (`open|waiting|dormant|stalled|closed`), priority (critical|high|medium|low)
+- **created_at** (ISO timestamp, LIVE) — set by `makeThread()` at creation. Legacy threads that predate this field backfill to `null` (unknown) in `_normalizeDB()` — never fabricated.
+- title, life_area, status (`inbox|open|waiting|dormant|stalled|closed`), priority (critical|high|medium|low)
 - closing_condition (string) — what verified OUTCOME closes this, not what action
 - closing_condition_type (outcome|action), closing_condition_met (boolean)
 - current_assumption (string), assumption_verified (boolean)
@@ -103,7 +104,8 @@ Every thread has:
 - **dormant_trigger** (string) — condition-based re-engagement trigger, e.g. "Re-engage when SDVOSB certified". Only meaningful when status = dormant. Set in Edit Thread modal.
 - **user_action_complete** (boolean, default false) — "I've done my part / ball in their court." Only meaningful when status = waiting. Auto-resets to false when status changes away from waiting. Set via checkbox in Edit Thread modal.
 
-**Status semantics (ordered: open → waiting → dormant → stalled → closed):**
+**Status semantics (ordered: inbox → open → waiting → dormant → stalled → closed):**
+- `inbox` — raw, uncaptured/unreviewed idea (Quick Add, LIVE). Contributes **zero pressure**, excluded from Focus Now/TOAT/Daily View/Matrix aggregates and life-area heat, same treatment as `dormant`. Still visible via the List Tab's "All States" filter and Graph Views (both iterate `OAD.STATUSES` generically). No synthesis happens at capture — see `OAD.quickAddThread()`. Housekeeping review screen (batched triage of inbox items) is spec'd but not yet built.
 - `open` — actively being worked
 - `waiting` — action sent, waiting on someone else's response
 - `dormant` — deliberately parked; no current value to offer; milestone-gated re-engagement. Contributes **zero pressure**. Never appears in TOAT or Focus Now.
@@ -147,6 +149,16 @@ Work backwards from the deadline, not forward from today. If something is due 6/
 - Thread: eCornell Python for Data Science — deadline June 26, 2026
 - effortEstimate: 4, weeklyCommitment: 1, effortLogged: 0
 - Current state: at-risk (1 session behind)
+
+## Runway Risk — Convergence Check (LIVE, Steps 1/3/4 of the spec — Step 2 backfill deferred)
+Spec: `flowqueue_runway_risk_spec.md`. A separate signal type from pressure/deadlineState — not "how urgent does this feel," but "given where things actually sit in the pipeline right now, is the trajectory even mathematically capable of landing before the deadline." Additive, read-only, never writes anything on its own.
+
+- **`stage`** (Thread field, LIVE) — job-application pipeline stage: `null | applied | screening | interview | offer | rejected`. `null` by default on every thread; only meaningful on leaf application threads. Set via the "Job Application Tracking" section of the Edit Thread form. `OAD.APPLICATION_STAGES = ['applied','screening','interview','offer']` (ordered); `rejected` is a separate terminal value excluded from the ordering.
+- **`OAD.Config.runwayBenchmarks`** (`js/config.js`, localStorage-backed like `lifeAreas`) — starting-assumption time-to-outcome per broad category, in weeks: `federal: 17-22`, `commercial: 6-8`. Adjustable, not derived from TJ's own data (sample size too small — 30+ applications, 0 hires as of this writing).
+- **`OAD.calculateRunwayRisk(goalThreadId)`** (`js/engine.js`) — walks the goal thread's `enables` graph (goal → category threads classified Federal/Commercial by keyword → track threads → leaf application threads) using the same `getGraphContext()` traversal as everywhere else — no new grouping field needed, the existing graph structure already carries this. For each track, finds the earliest-active stage among its non-closed, non-rejected leaf applications (a track with **zero** applications is treated as the same worst case as "all applications still at applied," per the spec's own framing — not skipped). Estimates remaining weeks by linearly discounting the benchmark range by pipeline position (a stated simplification, not a real distribution). Flags `atRisk` using the benchmark's slower (max) estimate, and generates a plain-English sentence per track. Unclassifiable categories (title doesn't match "federal" or "commercial") are skipped, never guessed at.
+- **Surfacing**: a `.runway-risk-card` on the goal thread's own detail view (`renderDetail`, mirrors the "Deadline Tracking" card) showing only at-risk tracks; and a global `#runway-risk-banner` (mirrors the overdue-Cadence banner's visual treatment, but wired into `_finishBoot()`/`refreshActiveView()` so it's genuinely persistent across view switches, not just visible on one panel). Both stay silent when nothing is at-risk.
+- **Acknowledge / re-present (LIVE)** — per-track snooze, not a permanent dismiss: `track.runway_ack_until` (ISO date). `OAD.acknowledgeRunwayRisk(trackUuid)` (`js/data.js`) sets it to `today + OAD._RUNWAY_REPRESENT_DAYS` (7), logs an evolution entry, saves. `OAD._isRunwayRiskSnoozed(trackUuid)` (`js/render.js`) is a pure presentation-layer check — `calculateRunwayRisk()` itself stays unaware of acknowledgment and keeps reporting the true math; both the banner and the detail card filter snoozed tracks out until the date passes, at which point they reappear automatically if still genuinely at-risk (deadline math doesn't stop just because it was acknowledged once). "Acknowledge (1wk)" button on both surfaces.
+- **Not done**: Step 2 of the spec (backfilling real `stage` values on TJ's ~18 live leaf application threads) was deliberately deferred — several thread titles (e.g. "VA GS-0028-9 Ineligibility — Follow Up") don't map cleanly to a pipeline stage from title alone, and the spec explicitly says not to guess. Until backfilled, every real leaf application defaults to `stage: null` → treated as `applied`, which is why both real Federal tracks currently show at-risk (conservative-by-default, not a bug).
 
 ## Data Model — Persona (the moat)
 OAD.DB.persona contains:
@@ -326,6 +338,15 @@ Key functions:
 UI behavior:
 - Lives inside the existing List Tab (`OAD.renderListView()`/`filterListTab()`, `js/render.js`) — no new nav panel. A "— No Saved View —" selector plus "Manage Views" button sit in the list toolbar; selecting a view supersedes the ad hoc status filter (disabled while a view is active) and composes with the free-text search box, same as SP's board+search interaction.
 - No Kanban/column UI — a saved view renders as a filtered, sorted list, consistent with how the rest of FlowQueue presents threads.
+
+## Quick Add / Inbox Capture (Part 1 — LIVE; Parts 2-4 not yet built)
+Spec: `flowqueue_quickadd_inbox_spec.md`. Design principle: automation is safe in proportion to how fast a human can see and undo it — Part 1 does zero synthesis, zero LLM calls, and writes nothing but the raw capture itself.
+
+- **UI**: single always-available text input in the `<header>` (`#quick-add-input`, between the brand mark and nav actions), not the header nav or a modal — the one piece of chrome visible regardless of active view. Enter submits. Starts `disabled` in the static HTML; `OAD._enableQuickAdd()` (called from `_finishBoot()`) enables it once `OAD.DB` is the real, cloud-loaded object — enabling it earlier risks a capture landing in a pre-auth placeholder DB that `_bootAfterAuth()` discards when it replaces `OAD.DB` wholesale.
+- **`OAD.quickAddThread(rawText)`** (`js/data.js`) — trims input, rejects empty/whitespace-only (returns `null`), creates a minimal thread via `makeThread({title, status: 'inbox'})`, logs one evolution entry ("Captured via Quick Add."). Fully synchronous — no LLM call blocks the save.
+- **`OAD.submitQuickAdd()`** (`js/render.js`) — reads `#quick-add-input`, calls `quickAddThread()`, clears the field, briefly flashes a `.quick-add-saved` success state, calls `refreshActiveView()`.
+- **Inbox nav (LIVE)** — `OAD.renderInboxPanel()` (`js/render.js`), under header nav → Queues → Inbox. One click into the existing List Tab pre-filtered to `status=inbox` (`OAD._activeListStatus = 'inbox'` then `renderListView()`) — not a new panel type, reuses List Tab's search/cards/sort as-is. Added after first real usage surfaced that Quick Add had no way to find what you'd just captured except manually searching List. `'inbox'` is also a selectable option in the List Tab's own status dropdown.
+- **Not yet built** (spec Parts 2-4, intentionally deferred until the capture habit proves out): capture-time keyword/life_area suggestions, a dedicated Housekeeping Review screen listing all `inbox` threads with `date_push_count`-based threshold flagging, and the clarify-then-propose synthesis flow that turns a reviewed inbox item into real graph structure (new threads/edges) with explicit approval before writing — should reuse the import diff-preview pattern (`_diffImportItem`) rather than invent a new approval UI.
 
 ## Calendar Sync & OAuth SSO
 - **OAuth Providers:** Google (`google`) and Microsoft (`azure`) are implemented in the `OAD._signInWithProvider` flow (`js/modals.js`).
