@@ -66,13 +66,72 @@ OAD.test('pressure: critical adds 30', function () {
   OAD._assert(s >= 30, `Expected >= 30, got ${s}`);
 });
 
-OAD.test('pressure: blocking connection adds 10 each', function () {
+OAD.test('pressure: unresolvable blocking connections (no to_uuid) add nothing', function () {
+  // Ghost targets (to_label only, no real thread to resolve) can never appear in anyone's
+  // blockedBy, so they must not inflate pressure — replaces the old flat +10-per-edge fallback.
   const t = OAD.makeThread({ status: 'open', priority: 'low', connections: [
     { to_label: 'A', edge_type: 'blocks' },
     { to_label: 'B', edge_type: 'blocks' }
   ]});
   const t0 = OAD.makeThread({ status: 'open', priority: 'low', connections: [] });
-  OAD._assert(OAD.pressure(t) - OAD.pressure(t0) >= 20, 'Two blocking connections should add at least 20');
+  OAD._assertEqual(OAD.pressure(t), OAD.pressure(t0), 'unresolvable blocks edges on THIS thread should not change its own pressure');
+});
+
+OAD.test('pressure: propagates from a real blocker up to the blocked thread (not the reverse)', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    // SDVOSB holds the outbound 'blocks' edge pointing at Federal Contracting — matches the
+    // real edge-creation convention (_adeAddEdge: the prerequisite holds the edge).
+    const fedContracting = { id: 601, uuid: 'pt-fc', title: 'Federal Contracting', status: 'open', priority: 'medium', connections: [] };
+    const sdvosb = { id: 602, uuid: 'pt-sdvosb', title: 'SDVOSB', status: 'stalled', priority: 'critical',
+      connections: [{ to_uuid: 'pt-fc', to_label: 'Federal Contracting', edge_type: 'blocks' }] };
+    OAD.DB.threads = [fedContracting, sdvosb];
+
+    const fcPressure = OAD.pressure(fedContracting);
+    const sdvosbPressure = OAD.pressure(sdvosb);
+    OAD._assertEqual(fcPressure, sdvosbPressure, 'blocked parent should rise to match its blocker\'s pressure');
+    OAD._assert(fcPressure > 10, 'parent pressure should reflect the urgent blocker, not just its own low baseline');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('pressure: transitive propagation walks multiple hops, not just one', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    // root -> blocks -> mid -> blocks -> leaf (root is the real bottleneck, two hops from leaf)
+    const leaf = { id: 611, uuid: 'pt-leaf', title: 'Leaf', status: 'open', priority: 'low', connections: [] };
+    const mid  = { id: 612, uuid: 'pt-mid', title: 'Mid', status: 'open', priority: 'low',
+      connections: [{ to_uuid: 'pt-leaf', to_label: 'Leaf', edge_type: 'blocks' }] };
+    const root = { id: 613, uuid: 'pt-root', title: 'Root', status: 'stalled', priority: 'critical',
+      connections: [{ to_uuid: 'pt-mid', to_label: 'Mid', edge_type: 'blocks' }] };
+    OAD.DB.threads = [leaf, mid, root];
+
+    const rootPressure = OAD.pressure(root);
+    const leafPressure = OAD.pressure(leaf);
+    OAD._assertEqual(leafPressure, rootPressure, 'leaf should inherit the root blocker\'s pressure two hops away');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('pressure: transitive propagation is cycle-safe (does not infinite-loop or throw)', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    // a -> blocks -> b -> blocks -> a (a genuine cycle)
+    const a = { id: 621, uuid: 'pt-a', title: 'A', status: 'open', priority: 'low',
+      connections: [{ to_uuid: 'pt-b', to_label: 'B', edge_type: 'blocks' }] };
+    const b = { id: 622, uuid: 'pt-b', title: 'B', status: 'open', priority: 'low',
+      connections: [{ to_uuid: 'pt-a', to_label: 'A', edge_type: 'blocks' }] };
+    OAD.DB.threads = [a, b];
+
+    let result;
+    OAD._assert((function () { try { result = OAD.pressure(a); return true; } catch (e) { return false; } })(),
+      'pressure() must not throw on a cyclic blocking graph');
+    OAD._assert(typeof result === 'number' && result >= 0 && result <= 100, 'pressure on a cycle member should still be a valid 0-100 score');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
 });
 
 OAD.test('pressure: enables connection does not add pressure', function () {
@@ -81,18 +140,54 @@ OAD.test('pressure: enables connection does not add pressure', function () {
   OAD._assertEqual(OAD.pressure(t1), OAD.pressure(t2), 'enables should not change pressure');
 });
 
+// ── Tests: _runJuly2Cac102EdgeTypeFixV1 ──────────────────────────────
+
+OAD.test('_runJuly2Cac102EdgeTypeFixV1: backfills null edge_type matched by connection uuid, and unblocks propagation', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalPersona = OAD.DB.persona;
+  try {
+    OAD.DB.persona = Object.assign({}, originalPersona, { _july2Cac102EdgeTypeFixV1Done: false });
+
+    const fixUuid = OAD._CAC102_EDGE_TYPE_FIXES[0].edge_uuid;
+    const fixFromUuid = OAD._CAC102_EDGE_TYPE_FIXES[0].from_uuid;
+
+    const assignment = {
+      id: 641, uuid: fixFromUuid, title: 'CAC102 Assignment fixture', status: 'stalled', priority: 'critical',
+      connections: [{ uuid: fixUuid, to_uuid: 'cac102-completion-2026', to_label: 'eCornell CAC102', edge_type: null }]
+    };
+    const completion = { id: 642, uuid: 'cac102-completion-2026', title: 'eCornell CAC102', status: 'open', priority: 'low', connections: [] };
+    OAD.DB.threads = [assignment, completion];
+
+    // Before the fix: null edge_type means blockedBy resolution can't see this relationship at all.
+    OAD._assertEqual(OAD.getGraphContext(completion.id).blockedBy.length, 0, 'before fix: completion thread sees no blockers');
+
+    const fixedCount = OAD._runJuly2Cac102EdgeTypeFixV1();
+    OAD._assertEqual(fixedCount, 1, 'only the one fixture thread present should be fixed; other 21 patch entries have no matching thread in this isolated DB');
+    OAD._assertEqual(assignment.connections[0].edge_type, 'blocks', 'edge_type backfilled to blocks');
+
+    // After the fix: the (stalled/critical) assignment now blocks completion, and pressure propagates.
+    const ctx = OAD.getGraphContext(completion.id);
+    OAD._assertEqual(ctx.blockedBy.length, 1, 'after fix: completion thread sees exactly one blocker');
+    OAD._assertEqual(OAD.pressure(completion), OAD.pressure(assignment), 'completion pressure should now match its (higher) blocker');
+
+    OAD._assert(OAD.DB.persona._july2Cac102EdgeTypeFixV1Done, 'guard flag set after running');
+    const secondRunCount = OAD._runJuly2Cac102EdgeTypeFixV1();
+    OAD._assertEqual(secondRunCount, 0, 'guarded — second run is a no-op');
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.DB.persona = originalPersona;
+  }
+});
+
 OAD.test('pressure: capped at 100', function () {
+  const past = new Date(); past.setDate(past.getDate() - 30);
   const t = OAD.makeThread({
     status: 'stalled',
     priority: 'critical',
     current_assumption: 'x',
     assumption_verified: false,
-    connections: [
-      { to_label: 'A', edge_type: 'blocks' },
-      { to_label: 'B', edge_type: 'blocks' },
-      { to_label: 'C', edge_type: 'blocks' },
-      { to_label: 'D', edge_type: 'blocks' }
-    ]
+    next_action_date: past.toISOString().slice(0, 10),
+    connections: []
   });
   OAD._assertEqual(OAD.pressure(t), 100, 'pressure should cap at 100');
 });
@@ -166,14 +261,28 @@ OAD.test('makeThread: parent_uuid defaults to null', function () {
   OAD._assertEqual(t.parent_uuid, null, 'parent_uuid defaults to null');
 });
 
-OAD.test('pressure: bleed-up uses to_uuid when present, ignores stale title', function () {
-  const blocked = OAD.addThread(OAD.makeThread({ title: 'Stall target', status: 'stalled', priority: 'low', connections: [] }));
-  // Edge stores UUID of blocked thread; to_label is intentionally wrong (stale title)
-  const blocker = OAD.makeThread({ status: 'open', priority: 'low', connections: [
-    { to_uuid: blocked.uuid, to_label: 'WRONG STALE TITLE', edge_type: 'blocks' }
-  ]});
-  const blockerNoConn = OAD.makeThread({ status: 'open', priority: 'low', connections: [] });
-  OAD._assert(OAD.pressure(blocker) > OAD.pressure(blockerNoConn), 'UUID-resolved bleed-up should add pressure even with wrong to_label');
+OAD.test('pressure: blockedBy resolution uses to_uuid when present, ignores stale title', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const blocked = { id: 631, uuid: 'pt-blocked', title: 'Stall target', status: 'open', priority: 'low', connections: [] };
+    // Edge stores UUID of the blocked thread; to_label is intentionally wrong (stale title)
+    const blocker = { id: 632, uuid: 'pt-blocker', title: 'Blocker', status: 'stalled', priority: 'critical',
+      connections: [{ to_uuid: 'pt-blocked', to_label: 'WRONG STALE TITLE', edge_type: 'blocks' }] };
+    OAD.DB.threads = [blocked, blocker];
+
+    const blockedNoConn = { id: 633, uuid: 'pt-blocked-control', title: 'Unblocked control', status: 'open', priority: 'low', connections: [] };
+    const controlPressure = (function () {
+      OAD.DB.threads = [blockedNoConn];
+      const p = OAD.pressure(blockedNoConn);
+      OAD.DB.threads = [blocked, blocker];
+      return p;
+    })();
+
+    OAD._assert(OAD.pressure(blocked) > controlPressure, 'UUID-resolved blockedBy should raise the blocked thread\'s pressure even with a stale to_label');
+    OAD._assertEqual(OAD.pressure(blocked), OAD.pressure(blocker), 'blocked thread should match its blocker\'s pressure exactly (uuid-resolved, not label-resolved)');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
 });
 
 OAD.test('parseImportFile: deleted_uuids populates close list', function () {
@@ -1413,6 +1522,7 @@ OAD._bootAfterAuth = async function () {
     if (OAD._migrateActionDeadlines() > 0) needsSave = true;
     OAD._runJune16DedupV2();   // calls saveDB() internally; always persists its guard flag
     OAD._runJune16PatchV1();  // targeted title/status fixes; calls saveDB() internally
+    OAD._runJuly2Cac102EdgeTypeFixV1(); // backfills missing edge_type on CAC102 assignment edges; calls saveDB() internally
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();

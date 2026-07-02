@@ -3,7 +3,7 @@
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 1, 2026** — Graph Views (saved filter+sort predicates over the thread graph, including graph-edge rules) shipped (149 tests passing).
+**Last updated: July 2, 2026** — Pressure propagation fix: removed the backwards one-hop bleed-up, added cycle-safe transitive propagation from blocking threads up through the full `blockedBy` closure (148 tests passing).
 
 ---
 
@@ -161,7 +161,6 @@ OAD.pressure(thread) returns 0-100:
 - stalled: +30, waiting: +15
 - assumption unverified: +20
 - critical: +30, high: +20, medium: +10
-- each blocking connection: +10
 - contingency < 3 days: +25, < 7 days: +15, < 14 days: +5
 - deadline within 7 days and not on track: +30
 - deadline within 14 days and not on track: +20
@@ -169,9 +168,10 @@ OAD.pressure(thread) returns 0-100:
 - behind by 2+ sessions: additional +15
 - **cross-load multiplier: +12 when `getDayLoad(thread.next_action_date) > 150`** — surface threads piling up on the same day
 - capped at 100
+- **transitive blocking propagation (LIVE, July 2)**: a thread's final pressure is `max(its own score above, the highest pressure of anything currently blocking it)`, walking the full `blockedBy` closure (not just one hop) — cycle-safe via a visited-uuid guard. A thread blocked by an urgent prerequisite inherits that prerequisite's real pressure, not a discounted version of it. Replaces an earlier "bleed-up" mechanism that ran backwards (it boosted a *blocker's* pressure from what it blocked, not the reverse) and was capped at one hop — confirmed via a real-data audit (`fq-pressure-propagation-audit-2026`) that it silently understated blocked parent threads by up to 70 points.
 
 ## Cross-Load Awareness (engine.js)
-`OAD.getDayLoad(dateStr)` — sums `pressure(t, true)` for all non-closed threads whose `next_action_date === dateStr`. The `_inBleedUp=true` flag prevents recursive calls into `getDayLoad`. If the day's total load exceeds 150, each thread on that date gets +12 pressure. Implemented in `engine.js`; tested with a 3-thread stalled-critical fixture at date '2099-01-01'.
+`OAD.getDayLoad(dateStr)` — sums `pressure(t, true)` for all non-closed threads whose `next_action_date === dateStr`. The `_suppressSideEffects=true` flag prevents recursive calls into `getDayLoad` and skips redundant cycle-penalty checks (also used by `calculateCriticalPath`). It does NOT suppress transitive blocking propagation — that has its own `_visited`-based cycle guard and is expected to run at every hop so multi-hop chains propagate correctly. If the day's total load exceeds 150, each thread on that date gets +12 pressure. Implemented in `engine.js`; tested with a 3-thread stalled-critical fixture at date '2099-01-01'.
 
 ## API Layer (api.js) & The Coach Engine
 - **OAD._llmCall(messages, systemPrompt)** — Router that dynamically sends requests to either Claude or Gemini based on the user's provider setting.

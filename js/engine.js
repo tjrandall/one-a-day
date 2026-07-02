@@ -1,7 +1,16 @@
 window.OAD = window.OAD || {};
 
-// _inBleedUp: true when called recursively for bleed-up, suppresses second-hop bleed-up
-OAD.pressure = function (thread, _inBleedUp) {
+// _suppressSideEffects: true on calls from getDayLoad()/calculateCriticalPath() — skips
+// the day-load multiplier and cycle penalty (so they're only ever applied once, for the
+// top-level thread being displayed) and skips transitive blocker resolution, so those two
+// callers get this thread's own local weight, not a blocker-boosted one.
+// _visited: internal — a plain object of visited uuids, threaded through pressure()'s own
+// recursive blocker lookups (see the transitive block below) purely as a cycle guard. Those
+// recursive calls deliberately do NOT set _suppressSideEffects — a blocker's day-load and
+// cycle penalty should count too, so the thread it blocks inherits that blocker's real,
+// full pressure (matching what the blocker would show anywhere else in the UI), not a
+// truncated version of it.
+OAD.pressure = function (thread, _suppressSideEffects, _visited) {
   if (thread.status === 'dormant') return 0;
 
   var score = 0;
@@ -18,23 +27,8 @@ OAD.pressure = function (thread, _inBleedUp) {
   else if (thread.priority && thread.priority.toLowerCase() === 'high')     score += 20;
   else if (thread.priority && thread.priority.toLowerCase() === 'medium')   score += 10;
 
-  // One-hop bleed-up from blocking connections.
-  // For each connection that blocks a resolvable thread: add 30% of that thread's pressure.
-  // For unresolvable labels (no thread found): flat +10 fallback.
-  // Capped at +20 total. _inBleedUp prevents recursing past one hop.
-  if (!_inBleedUp) {
-    var blockingConns = (thread.connections || []).filter(function (c) { return c.edge_type === 'blocks'; });
-    var bleedUp = 0;
-    blockingConns.forEach(function (c) {
-      var blocked = null;
-      if (c.to_uuid) {
-        blocked = (OAD.DB.threads || []).find(function (t) { return t.uuid === c.to_uuid; }) || null;
-      }
-      bleedUp += blocked ? 0.3 * OAD.pressure(blocked, true) : 10;
-    });
-    score += Math.min(Math.round(bleedUp), 20);
-
-    // Cycle Penalty: +25 if this node is part of a cycle
+  // Cycle Penalty: +25 if this node is part of a cycle
+  if (!_suppressSideEffects) {
     var cycles = OAD.detectCycles();
     var inCycle = cycles.some(function(cycle) { return cycle.indexOf(thread.id) !== -1; });
     if (inCycle) {
@@ -73,7 +67,7 @@ OAD.pressure = function (thread, _inBleedUp) {
   }
 
   // Day-load multiplier
-  if (!_inBleedUp && thread.next_action_date) {
+  if (!_suppressSideEffects && thread.next_action_date) {
     if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
   }
 
@@ -105,6 +99,29 @@ OAD.pressure = function (thread, _inBleedUp) {
   if (thread.status === 'waiting' && thread.user_action_complete) {
     capped = Math.round(capped * 0.35);
   }
+
+  // Transitive blocking propagation: a thread's effective pressure is at least as high
+  // as the most urgent thing currently blocking it — walks the full blockedBy closure
+  // (not just one hop), since real blocking chains run several edges deep. _visited
+  // guards against cycles (detectCycles() already penalizes cycles separately above;
+  // this just has to not infinite-loop through one). Runs on normal top-level calls
+  // (_suppressSideEffects falsy) AND on our own recursive blocker lookups, which are
+  // identifiable by a truthy _visited even though they pass _suppressSideEffects=false;
+  // skipped only for getDayLoad/calculateCriticalPath's internal calls, which pass
+  // _suppressSideEffects=true with no _visited.
+  if (!_suppressSideEffects || _visited) {
+    var visited = _visited || {};
+    visited[thread.uuid] = true;
+    var ctx = OAD.getGraphContext(thread.id);
+    var maxBlockerPressure = 0;
+    (ctx.blockedBy || []).forEach(function (blocker) {
+      if (visited[blocker.uuid]) return; // cycle guard — don't recurse back through a visited node
+      var bp = OAD.pressure(blocker, false, visited); // full pressure, not suppressed — see header comment
+      if (bp > maxBlockerPressure) maxBlockerPressure = bp;
+    });
+    if (maxBlockerPressure > capped) capped = maxBlockerPressure;
+  }
+
   return capped;
 };
 

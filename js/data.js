@@ -1125,6 +1125,55 @@ OAD._runJune16PatchV1 = function () {
   OAD.saveDB();
 };
 
+// July 2 fix: 22 CAC102 assignment/quiz/discussion threads hold a connection back to the
+// course completion thread with edge_type missing (null) — invisible to pressure propagation,
+// Graph Views, and ADE. Backfills edge_type: 'blocks' (each item blocks the course from being
+// considered complete), matched by the connection's own uuid to avoid touching unrelated edges.
+// Source: ~/Downloads/cac102_edge_type_fix.json (from the pressure propagation audit).
+OAD._CAC102_EDGE_TYPE_FIXES = [
+  { edge_uuid: '110f88a3-3f10-4a24-948b-17b30c70fb0a', from_uuid: 'cac102-a01', edge_type: 'blocks' },
+  { edge_uuid: '88f2563e-8fd1-4f16-a3f3-b1c539617a95', from_uuid: 'cac102-a02', edge_type: 'blocks' },
+  { edge_uuid: '7301a2b5-c2a8-4815-8605-ff819d27ae07', from_uuid: 'cac102-a03', edge_type: 'blocks' },
+  { edge_uuid: 'd307b5b4-a535-4d93-9a84-fae0af998ea9', from_uuid: 'cac102-a04', edge_type: 'blocks' },
+  { edge_uuid: '7095f3bb-1e7d-4a60-8d44-d00eb4263392', from_uuid: 'cac102-a05', edge_type: 'blocks' },
+  { edge_uuid: 'e19b1eb7-6a11-4eaa-a3a0-a6e6debe677c', from_uuid: 'cac102-a06', edge_type: 'blocks' },
+  { edge_uuid: '9c87c59d-1594-4ed9-b06b-f9a86bb9bffc', from_uuid: 'cac102-a07', edge_type: 'blocks' },
+  { edge_uuid: '04b795b0-5529-4885-9a52-3f188aa9d1a7', from_uuid: 'cac102-a08', edge_type: 'blocks' },
+  { edge_uuid: '22179cf0-4bea-44d7-be52-c75f34d24d30', from_uuid: 'cac102-a09', edge_type: 'blocks' },
+  { edge_uuid: '4fd19863-9edb-4965-bc65-b5d75cff1d35', from_uuid: 'cac102-a10', edge_type: 'blocks' },
+  { edge_uuid: '3c468616-aed2-41a8-aba2-ff3eec20a0d3', from_uuid: 'cac102-a11', edge_type: 'blocks' },
+  { edge_uuid: 'eb81fb21-546d-4031-859b-56954cbf6095', from_uuid: 'cac102-a12', edge_type: 'blocks' },
+  { edge_uuid: 'ee25e750-fbe0-48a1-9672-db0748c3d818', from_uuid: 'cac102-a13', edge_type: 'blocks' },
+  { edge_uuid: 'b6dc960f-51d2-4005-ac94-0dd162ea2cf9', from_uuid: 'cac102-a14', edge_type: 'blocks' },
+  { edge_uuid: '5b576d02-d595-4b0a-aa11-d5053eb41eef', from_uuid: 'cac102-disc-01', edge_type: 'blocks' },
+  { edge_uuid: '34cfe744-ee7b-4ca6-8425-2d1c3525e287', from_uuid: 'cac102-q01', edge_type: 'blocks' },
+  { edge_uuid: '4b85402f-ee75-494f-a720-2251f7af79e9', from_uuid: 'cac102-q02', edge_type: 'blocks' },
+  { edge_uuid: '3b8470fa-9e0c-43e0-82c7-2bb9c5d17f42', from_uuid: 'cac102-q03', edge_type: 'blocks' },
+  { edge_uuid: '7c225274-795e-4e1b-8e50-da64627211f4', from_uuid: 'cac102-q04', edge_type: 'blocks' },
+  { edge_uuid: 'eb00450e-5e67-417b-8ee6-df4c9bc09cfb', from_uuid: 'cac102-q05', edge_type: 'blocks' },
+  { edge_uuid: '2c7b9f23-0678-4079-8b9e-6a48643295a9', from_uuid: 'cac102-q06', edge_type: 'blocks' },
+  { edge_uuid: '0ac2086f-3737-437c-884a-befc427d94c1', from_uuid: 'cac102-q07', edge_type: 'blocks' }
+];
+
+OAD._runJuly2Cac102EdgeTypeFixV1 = function () {
+  if (OAD.DB.persona && OAD.DB.persona._july2Cac102EdgeTypeFixV1Done) return 0;
+
+  var fixed = 0;
+  OAD._CAC102_EDGE_TYPE_FIXES.forEach(function (fix) {
+    var fromThread = (OAD.DB.threads || []).find(function (t) { return t.uuid === fix.from_uuid; });
+    if (!fromThread) return;
+    var conn = (fromThread.connections || []).find(function (c) { return c.uuid === fix.edge_uuid; });
+    if (conn && !conn.edge_type) {
+      conn.edge_type = fix.edge_type;
+      fixed++;
+    }
+  });
+
+  if (OAD.DB.persona) OAD.DB.persona._july2Cac102EdgeTypeFixV1Done = true;
+  OAD.saveDB();
+  return fixed;
+};
+
 OAD._DB_PERSIST = false; // set true by _initApp after tests pass; keeps test suite writes out of localStorage
 OAD._userId     = null;  // set on successful Supabase sign-in
 
