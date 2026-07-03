@@ -248,12 +248,14 @@ OAD.makeThread = function (overrides) {
     assumption_verified: false,
     next_action: '',
     next_action_date: '',
+    next_action_time: null, // optional 'HH:MM' (24h) — null means date-only, no specific time
     next_action_channel: '',
     next_action_contact: '',
     contingency_trigger_date: '',
     contingency_action: '',
     contingency_escalation: '',
     deadline: null,
+    deadline_time: null, // optional 'HH:MM' (24h) — null means date-only, no specific time
     effortEstimate: null,
     weeklyCommitment: null,
     effortLogged: 0,
@@ -539,9 +541,9 @@ OAD._IMPORT_FIELDS = [
   'status', 'priority', 'life_area',
   'closing_condition', 'closing_condition_type', 'closing_condition_met',
   'current_assumption', 'assumption_verified',
-  'next_action', 'next_action_date', 'next_action_channel', 'next_action_contact',
+  'next_action', 'next_action_date', 'next_action_time', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
-  'deadline', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
+  'deadline', 'deadline_time', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
   'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata',
   'dormant_trigger', 'user_action_complete'
 ];
@@ -571,12 +573,14 @@ OAD.applyImport = function (results, confirmedUpdates) {
       assumption_verified:      row.assumption_verified      || false,
       next_action:              row.next_action              || '',
       next_action_date:         row.next_action_date         || '',
+      next_action_time:         row.next_action_time         || null,
       next_action_channel:      row.next_action_channel      || '',
       next_action_contact:      row.next_action_contact      || '',
       contingency_trigger_date: row.contingency_trigger_date || '',
       contingency_action:       row.contingency_action       || '',
       contingency_escalation:   row.contingency_escalation   || '',
       deadline:                 row.deadline                 || null,
+      deadline_time:            row.deadline_time             || null,
       effortEstimate:           row.effortEstimate           || null,
       weeklyCommitment:         row.weeklyCommitment         || null,
       effortLogged:             row.effortLogged             || 0,
@@ -665,8 +669,8 @@ OAD.getDailyToat = function () {
   function isFriction(t) {
     if (!t || t.status === 'closed' || t.status === 'dormant') return false;
     if (t.status === 'stalled') return true;
-    if (t.status === 'waiting' && t.next_action_date && t.next_action_date < todayStr) return true;
-    if (t.status === 'open' && t.next_action_date && t.next_action_date < todayStr) return true;
+    if (t.status === 'waiting' && OAD.isActionOverdue(t)) return true;
+    if (t.status === 'open' && OAD.isActionOverdue(t)) return true;
     return false;
   }
 
@@ -685,10 +689,10 @@ OAD.getDailyToat = function () {
   
   const stalled = allThreads.filter(t => t.status === 'stalled');
   const overdueWaiting = allThreads.filter(t => {
-    return t.status === 'waiting' && !t.user_action_complete && t.next_action_date && t.next_action_date < todayStr;
+    return t.status === 'waiting' && !t.user_action_complete && OAD.isActionOverdue(t);
   });
   const overdueOpen = allThreads.filter(t => {
-    return t.status === 'open' && t.next_action_date && t.next_action_date < todayStr;
+    return t.status === 'open' && OAD.isActionOverdue(t);
   });
 
   let selected = null;
@@ -736,10 +740,12 @@ OAD.exportThreads = function () {
       assumption_verified:      t.assumption_verified      || false,
       next_action:              t.next_action              || '',
       next_action_date:         t.next_action_date         || '',
+      next_action_time:         t.next_action_time         || null,
       next_action_channel:      t.next_action_channel      || '',
       next_action_contact:      t.next_action_contact      || '',
       contingency_trigger_date: t.contingency_trigger_date || '',
       deadline:                 t.deadline                 || null,
+      deadline_time:            t.deadline_time             || null,
       effortEstimate:           t.effortEstimate           || null,
       weeklyCommitment:         t.weeklyCommitment         || null,
       effortLogged:             t.effortLogged             || 0,
@@ -904,6 +910,8 @@ OAD._normalizeDB = function () {
     if (!Object.prototype.hasOwnProperty.call(t, 'created_at')) t.created_at = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'stage')) t.stage = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'runway_ack_until')) t.runway_ack_until = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'next_action_time')) t.next_action_time = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'deadline_time')) t.deadline_time = null;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();

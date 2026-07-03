@@ -302,7 +302,7 @@ OAD.renderDetail = function (id) {
         '<div class="deadline-countdown">' + OAD.esc(countdownText + sessText) + '</div>' +
         statusBadge +
       '</div>' +
-      '<div class="deadline-due">Due ' + OAD.esc(OAD.formatDate(t.deadline)) + OAD.esc(commitLine) + '</div>' +
+      '<div class="deadline-due">Due ' + OAD.esc(OAD.formatDate(t.deadline)) + (t.deadline_time ? OAD.esc(' at ' + OAD.formatTime(t.deadline_time)) : '') + OAD.esc(commitLine) + '</div>' +
       effortLine +
       '</div>';
   }());
@@ -376,7 +376,7 @@ OAD.renderDetail = function (id) {
       <div class="card-title">${OAD.esc(OAD.t('nextAction'))}</div>
       <div class="next-action-text">${OAD.esc(t.next_action) || '<span class="text-muted">Not set</span>'}</div>
       <div class="next-action-meta">
-        ${t.next_action_date    ? `<span>By ${OAD.formatDate(t.next_action_date)}</span>` : ''}
+        ${t.next_action_date    ? `<span>By ${OAD.formatDate(t.next_action_date)}${t.next_action_time ? ' at ' + OAD.formatTime(t.next_action_time) : ''}</span>` : ''}
         ${t.next_action_channel ? `<span>via ${OAD.esc(t.next_action_channel)}</span>` : ''}
         ${t.next_action_contact ? `<span>with ${OAD.esc(t.next_action_contact)}</span>` : ''}
       </div>
@@ -961,7 +961,7 @@ OAD.renderTodayView = function () {
   function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
-    const isOverdue = t.next_action_date && t.next_action_date < todayStr;
+    const isOverdue = OAD.isActionOverdue(t);
     const isToday = t.next_action_date === todayStr;
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
@@ -976,20 +976,18 @@ OAD.renderTodayView = function () {
       ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
     
-    const daysOver = isOverdue
-      ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
-      : null;
+    const daysOver = isOverdue ? OAD.getOverdueDays(t) : null;
     const metaHtml = daysOver !== null
       ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
       : (t.next_action_date > todayStr
-          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
+          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) + '</span>'
           : '');
 
     const children = childrenByParentUUID[t.uuid] || [];
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(function (c) { return c.next_action_date && c.next_action_date < todayStr; }).length;
+      const overdueCount = children.filter(OAD.isActionOverdue).length;
       const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
@@ -1193,7 +1191,7 @@ OAD.renderDailyView = function () {
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
   // Filter threads into the standard buckets
-  const overdueThreads = filteredActive.filter(t => t.next_action_date && t.next_action_date < todayStr);
+  const overdueThreads = filteredActive.filter(OAD.isActionOverdue);
   const todayThreads   = filteredActive.filter(t => t.next_action_date === todayStr);
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
@@ -1235,7 +1233,7 @@ OAD.renderDailyView = function () {
   function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
-    const isOverdue = t.next_action_date && t.next_action_date < todayStr;
+    const isOverdue = OAD.isActionOverdue(t);
     const isToday = t.next_action_date === todayStr;
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
@@ -1250,20 +1248,18 @@ OAD.renderDailyView = function () {
       ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
 
-    const daysOver = isOverdue
-      ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
-      : null;
+    const daysOver = isOverdue ? OAD.getOverdueDays(t) : null;
     const metaHtml = daysOver !== null
       ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
       : (t.next_action_date > todayStr
-          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
+          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) + '</span>'
           : '');
 
     const children = childrenByParentUUID[t.uuid] || [];
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(function (c) { return c.next_action_date && c.next_action_date < todayStr; }).length;
+      const overdueCount = children.filter(OAD.isActionOverdue).length;
       const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
@@ -1382,7 +1378,7 @@ OAD.renderDailyView = function () {
       const idx = stalledThreads.findIndex(t => t.id === toatThread.id) + 1;
       explanation = 'Selected because it is <strong>STALLED</strong> and is the oldest of ' + stalledThreads.length + ' such tasks (Rank ' + idx + '/' + stalledThreads.length + ' by creation age).';
     } else {
-      const overdueThreads = openThreads.filter(t => t.next_action_date && t.next_action_date < todayStr);
+      const overdueThreads = openThreads.filter(OAD.isActionOverdue);
       overdueThreads.sort((a, b) => a.id - b.id);
       const idx = overdueThreads.findIndex(t => t.id === toatThread.id) + 1;
       explanation = 'Selected because it is <strong>OVERDUE</strong> and is the oldest of ' + overdueThreads.length + ' such tasks (Rank ' + idx + '/' + overdueThreads.length + ' by creation age).';
@@ -1704,7 +1700,7 @@ OAD.renderMatrixView = function () {
   function threadRow(t, context) {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
-    const isOverdue = t.next_action_date && t.next_action_date < todayStr;
+    const isOverdue = OAD.isActionOverdue(t);
     const isToday = t.next_action_date === todayStr;
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
@@ -1719,20 +1715,18 @@ OAD.renderMatrixView = function () {
       ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
     
-    const daysOver = isOverdue
-      ? Math.round((todayDt - new Date(t.next_action_date + 'T00:00:00')) / 86400000)
-      : null;
+    const daysOver = isOverdue ? OAD.getOverdueDays(t) : null;
     const metaHtml = daysOver !== null
       ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
       : (t.next_action_date > todayStr
-          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date)) + '</span>'
+          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) + '</span>'
           : '');
 
     const children = childrenByParentUUID[t.uuid] || [];
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(function (c) { return c.next_action_date && c.next_action_date < todayStr; }).length;
+      const overdueCount = children.filter(OAD.isActionOverdue).length;
       const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
@@ -2653,7 +2647,7 @@ OAD.filterListTab = function () {
         ${deadlineLineHtml ? `<div style="margin-top: 4px;">${deadlineLineHtml}</div>` : ''}
         <div class="list-tab-card-footer">
           <span>Next: ${t.next_action ? OAD.esc(t.next_action) : '<span class="text-muted">None</span>'}</span>
-          <span>${t.next_action_date ? OAD.esc(OAD.formatDate(t.next_action_date)) : ''}</span>
+          <span>${t.next_action_date ? OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) : ''}</span>
         </div>
       </div>
     `;
@@ -2695,7 +2689,7 @@ OAD.renderReportsView = function() {
     if (t.status === 'closed') return false;
     if (t.life_area === 'Patient') return false;
     
-    let isOverdue = t.next_action_date && t.next_action_date < todayStr;
+    let isOverdue = OAD.isActionOverdue(t);
     let isBlocker = t.connections && t.connections.some(c => c.edge_type === 'blocks');
     let isStalled = t.status === 'stalled';
     
@@ -2730,7 +2724,7 @@ OAD.renderReportsView = function() {
           <div style="margin-top:4px;display:flex;gap:8px;font-size:12px;">
             <span class="pill ${OAD.esc(t.status)}">${OAD.esc(t.status)}</span>
             <span class="pill ${OAD.esc(t.priority)}">${OAD.esc(t.priority)}</span>
-            ${t.next_action_date ? `<span style="color:${t.next_action_date < todayStr ? 'var(--critical)' : 'var(--text-muted)'}">Due: ${t.next_action_date}</span>` : ''}
+            ${t.next_action_date ? `<span style="color:${OAD.isActionOverdue(t) ? 'var(--critical)' : 'var(--text-muted)'}">Due: ${t.next_action_date}${t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : ''}</span>` : ''}
           </div>
           ${dischargeStr}
         </div>
@@ -2894,7 +2888,7 @@ OAD.renderJourneyMap = function() {
               color = 'var(--text-main)';
               icon = '<span aria-hidden="true" style="font-size:12px;margin-right:4px;color:#2ea043">✓</span>';
               srStatus = 'Completed';
-            } else if (t.next_action_date < todayStr) {
+            } else if (OAD.isActionOverdue(t)) {
               bg = 'rgba(248, 81, 73, 0.05)'; // Very light red
               border = '1px dashed #f85149; border-left: 4px solid #f85149';
               color = 'var(--text-main)';

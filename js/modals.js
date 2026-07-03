@@ -111,6 +111,10 @@ OAD._threadForm = function (t) {
         <input id="f-next-date" type="date" value="${OAD.esc(t.next_action_date)}">
       </div>
       <div class="field">
+        <label>By Time <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input id="f-next-time" type="time" value="${OAD.esc(t.next_action_time || '')}">
+      </div>
+      <div class="field">
         <label>Channel</label>
         <input id="f-next-channel" type="text" value="${OAD.esc(t.next_action_channel)}" placeholder="email, phone, in-person…">
       </div>
@@ -157,6 +161,10 @@ OAD._threadForm = function (t) {
         <input id="f-deadline" type="date" value="${OAD.esc(t.deadline || '')}">
       </div>
       <div class="field">
+        <label>Deadline Time <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input id="f-deadline-time" type="time" value="${OAD.esc(t.deadline_time || '')}">
+      </div>
+      <div class="field">
         <label>Total sessions needed</label>
         <input id="f-effort-estimate" type="number" min="1" step="1" value="${t.effortEstimate != null ? t.effortEstimate : ''}" placeholder="e.g. 4">
       </div>
@@ -182,12 +190,14 @@ OAD._readThreadForm = function (base) {
     assumption_verified:     document.getElementById('f-assumption-verified')?.checked || false,
     next_action:             document.getElementById('f-next-action')?.value.trim() || '',
     next_action_date:        document.getElementById('f-next-date')?.value || '',
+    next_action_time:        document.getElementById('f-next-time')?.value || null,
     next_action_channel:     document.getElementById('f-next-channel')?.value.trim() || '',
     next_action_contact:     document.getElementById('f-next-contact')?.value.trim() || '',
     contingency_trigger_date: document.getElementById('f-ctg-date')?.value || '',
     contingency_action:      document.getElementById('f-ctg-action')?.value.trim() || '',
     contingency_escalation:  document.getElementById('f-ctg-escalation')?.value.trim() || '',
     deadline:          document.getElementById('f-deadline')?.value || null,
+    deadline_time:     document.getElementById('f-deadline-time')?.value || null,
     effortEstimate:    document.getElementById('f-effort-estimate')?.value !== ''
                          ? parseInt(document.getElementById('f-effort-estimate').value, 10) : null,
     weeklyCommitment:  document.getElementById('f-weekly-commitment')?.value !== ''
@@ -1569,6 +1579,10 @@ OAD._cawStep3 = function () {
         <input id="ca-date" type="date" value="${OAD.esc(prev.date || '')}">
       </div>
       <div class="field">
+        <label>Time <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+        <input id="ca-time" type="time" value="${OAD.esc(prev.time || '')}">
+      </div>
+      <div class="field">
         <label>Channel</label>
         <select id="ca-channel">${channelOpts}</select>
       </div>
@@ -1609,6 +1623,7 @@ OAD._cawStep3Next = function () {
   OAD._caw.step2 = {
     action:     action,
     date:       date,
+    time:       document.getElementById('ca-time')?.value        || '',
     channel:    document.getElementById('ca-channel')?.value    || '',
     contact:    document.getElementById('ca-contact')?.value.trim()    || '',
     ctg_date:   document.getElementById('ca-ctg-date')?.value   || '',
@@ -1626,6 +1641,7 @@ OAD._cawSave = function () {
   const patch = {
     next_action:              caw.step2.action,
     next_action_date:         caw.step2.date,
+    next_action_time:         caw.step2.time || null,
     next_action_channel:      caw.step2.channel,
     next_action_contact:      caw.step2.contact,
     contingency_trigger_date: caw.step2.ctg_date,

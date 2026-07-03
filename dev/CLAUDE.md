@@ -3,7 +3,7 @@
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 2, 2026** — First-usage feedback fixes: added an Inbox nav entry (Quick Add captures had no dedicated view — had to search List manually) and a Runway Risk acknowledge/re-present mechanism (banners needed a way to snooze without permanently dismissing a live deadline signal). Also hardened `_normalizeDB()` to backfill `evolution_log`/`ai_insights` — missing on any thread that predates those fields, which crashed the first real call to `addEvolution()` on such a thread. Also this session: Runway Risk convergence check (Steps 1/3/4 of `flowqueue_runway_risk_spec.md`; Step 2 backfill deferred, needs TJ's input), Quick Add capture (Part 1 of `flowqueue_quickadd_inbox_spec.md`; Parts 2-4 not yet built), and the pressure propagation fix (171 tests passing).
+**Last updated: July 2, 2026** — Time-of-day scheduling shipped: `next_action_time`/`deadline_time` fields, `OAD.isActionOverdue()`/`OAD.getOverdueDays()` as the single time-aware source of truth for overdue determination (replaces ~15 duplicated date-string comparisons across pressure(), Daily View, TOAT, and Command Center). A hard-time commitment (e.g. "meet Amy no later than 09:30") now registers as overdue and gains pressure the moment that time passes today, instead of waiting for the calendar to roll over. Also: an Inbox nav entry, a Runway Risk acknowledge/re-present mechanism, `_normalizeDB()` hardened to backfill `evolution_log`/`ai_insights`, the Runway Risk convergence check (Steps 1/3/4 of `flowqueue_runway_risk_spec.md`; Step 2 backfill deferred), Quick Add capture (Part 1 of `flowqueue_quickadd_inbox_spec.md`), and the pressure propagation fix (181 tests passing).
 
 ---
 
@@ -94,9 +94,9 @@ Every thread has:
 - closing_condition (string) — what verified OUTCOME closes this, not what action
 - closing_condition_type (outcome|action), closing_condition_met (boolean)
 - current_assumption (string), assumption_verified (boolean)
-- next_action, next_action_date, next_action_channel, next_action_contact
+- next_action, next_action_date, **next_action_time** (optional 'HH:MM', LIVE), next_action_channel, next_action_contact
 - contingency_trigger_date, contingency_action, contingency_escalation
-- deadline (ISO date, optional), effortEstimate, weeklyCommitment, effortLogged
+- deadline (ISO date, optional), **deadline_time** (optional 'HH:MM', LIVE), effortEstimate, weeklyCommitment, effortLogged
 - connections[] — graph edges: `{uuid, to_uuid, to_label, edge_type: blocks|enables|relates|blocked_by, auto_generated, rule, confidence, confirmed_by_user, created_at}`. Edges with `auto_generated: true` and `confirmed_by_user: false` are ADE-inferred, pending review.
 - evolution_log[] — {date, note} living history
 - ai_insights[] — counsel engine observations
@@ -159,6 +159,14 @@ Spec: `flowqueue_runway_risk_spec.md`. A separate signal type from pressure/dead
 - **Surfacing**: a `.runway-risk-card` on the goal thread's own detail view (`renderDetail`, mirrors the "Deadline Tracking" card) showing only at-risk tracks; and a global `#runway-risk-banner` (mirrors the overdue-Cadence banner's visual treatment, but wired into `_finishBoot()`/`refreshActiveView()` so it's genuinely persistent across view switches, not just visible on one panel). Both stay silent when nothing is at-risk.
 - **Acknowledge / re-present (LIVE)** — per-track snooze, not a permanent dismiss: `track.runway_ack_until` (ISO date). `OAD.acknowledgeRunwayRisk(trackUuid)` (`js/data.js`) sets it to `today + OAD._RUNWAY_REPRESENT_DAYS` (7), logs an evolution entry, saves. `OAD._isRunwayRiskSnoozed(trackUuid)` (`js/render.js`) is a pure presentation-layer check — `calculateRunwayRisk()` itself stays unaware of acknowledgment and keeps reporting the true math; both the banner and the detail card filter snoozed tracks out until the date passes, at which point they reappear automatically if still genuinely at-risk (deadline math doesn't stop just because it was acknowledged once). "Acknowledge (1wk)" button on both surfaces.
 - **Not done**: Step 2 of the spec (backfilling real `stage` values on TJ's ~18 live leaf application threads) was deliberately deferred — several thread titles (e.g. "VA GS-0028-9 Ineligibility — Follow Up") don't map cleanly to a pipeline stage from title alone, and the spec explicitly says not to guess. Until backfilled, every real leaf application defaults to `stage: null` → treated as `applied`, which is why both real Federal tracks currently show at-risk (conservative-by-default, not a bug).
+
+## Time-of-Day Scheduling (LIVE)
+Origin: static day-only pressure treated "meet Amy at 09:30" the same as a bill due in 5 months — technically correct date distance, wrong felt urgency. `next_action_date`/`deadline` were pure `YYYY-MM-DD` strings with no time granularity anywhere in the schema.
+
+- **`next_action_time` / `deadline_time`** (Thread fields, optional `'HH:MM'` 24h, `null` = date-only) — set via the Edit Thread form and the Complete Action Wizard's "What's Next?" step.
+- **`OAD._combineDateTime(dateStr, timeStr)`** (`js/engine.js`) — combines into a real local `Date`. No time set defaults to `23:59:59` of that date, which is what makes date-only threads behave exactly as before (not overdue until the calendar rolls to the next day). This is deliberately **local** time, not UTC — `<input type="date">`/`<input type="time">` values are inherently local wall-clock with no timezone info, and "is this overdue" must be judged against local now, not UTC now. (Watch for this in tests: `new Date().toISOString().slice(0,10)`, used throughout the rest of the codebase for `todayStr`, is UTC-based and can drift a day ahead of local during evening hours in negative-UTC-offset zones — don't use it to construct date-only test fixtures for time-aware logic; use a local-date constructor instead.)
+- **`OAD.isActionOverdue(thread)`** / **`OAD.getOverdueDays(thread)`** (`js/engine.js`) — the single source of truth for "is this actually late right now," replacing ~15 duplicated `next_action_date < todayStr` string comparisons across `pressure()`, `focusReason()`, the three near-identical Daily View overdue-badge blocks, `getDailyToat()`'s friction detection, and Command Center. A thread with a specific time that passes today counts as **at least 1 day-equivalent overdue immediately** — a missed hard-time commitment shouldn't need to wait for midnight to register in pressure.
+- **Not done**: the CIC/demo-role shift-collision system (`isOffDay`) and `dashboard.js`'s programmatic discharge-date setters were deliberately left untouched — different, unrelated features that happen to also read `next_action_date`.
 
 ## Data Model — Persona (the moat)
 OAD.DB.persona contains:

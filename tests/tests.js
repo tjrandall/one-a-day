@@ -901,6 +901,90 @@ OAD.test('renderInboxPanel: sets status filter to inbox and clears any active sa
   }
 });
 
+// ── Tests: Time of Day (next_action_time / deadline_time) ────────────
+
+// Local calendar date string (matches what <input type="date"> shows and what
+// _combineDateTime/isActionOverdue actually parse against). Deliberately NOT
+// toISOString().slice(0,10) — that's UTC-based and drifts a day ahead during evening
+// hours in negative-UTC-offset zones, which would make these fixtures flaky.
+function _localDateStr(date) {
+  date = date || new Date();
+  var y = date.getFullYear();
+  var m = String(date.getMonth() + 1).padStart(2, '0');
+  var d = String(date.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + d;
+}
+
+OAD.test('formatTime: formats HH:MM as a readable 12-hour time', function () {
+  OAD._assertEqual(OAD.formatTime('09:30'), '9:30 AM', 'morning time formatted correctly');
+  OAD._assertEqual(OAD.formatTime('14:00'), '2:00 PM', 'afternoon time formatted correctly');
+  OAD._assertEqual(OAD.formatTime(null), '', 'null returns empty string');
+  OAD._assertEqual(OAD.formatTime(''), '', 'empty string returns empty string');
+});
+
+OAD.test('_combineDateTime: defaults to 23:59:59 when no time set, uses the given time otherwise', function () {
+  OAD._assertEqual(OAD._combineDateTime(null, null), null, 'no date returns null');
+  const withoutTime = OAD._combineDateTime('2026-07-10', null);
+  OAD._assertEqual(withoutTime.getHours(), 23, 'defaults to hour 23 when no time given');
+  OAD._assertEqual(withoutTime.getMinutes(), 59, 'defaults to minute 59 when no time given');
+  const withTime = OAD._combineDateTime('2026-07-10', '09:30');
+  OAD._assertEqual(withTime.getHours(), 9, 'uses the given hour');
+  OAD._assertEqual(withTime.getMinutes(), 30, 'uses the given minute');
+});
+
+OAD.test('isActionOverdue: date-only thread due today is not overdue yet (unchanged prior behavior)', function () {
+  const todayStr = _localDateStr();
+  const t = OAD.makeThread({ next_action_date: todayStr, next_action_time: null, connections: [] });
+  OAD._assert(!OAD.isActionOverdue(t), 'date-only "due today" should not be overdue until the day passes');
+});
+
+OAD.test('isActionOverdue: date-only thread from yesterday is overdue', function () {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const t = OAD.makeThread({ next_action_date: _localDateStr(yesterday), connections: [] });
+  OAD._assert(OAD.isActionOverdue(t), 'a date-only thread from yesterday should be overdue');
+});
+
+OAD.test('isActionOverdue: no next_action_date at all is never overdue', function () {
+  const t = OAD.makeThread({ next_action_date: '', connections: [] });
+  OAD._assert(!OAD.isActionOverdue(t), 'a thread with no next_action_date has nothing to be overdue against');
+});
+
+OAD.test('isActionOverdue: a specific time earlier today that has passed IS overdue — TJ\'s "meet Amy at 09:30" case', function () {
+  const todayStr = _localDateStr();
+  const t = OAD.makeThread({ next_action_date: todayStr, next_action_time: '00:01', connections: [] });
+  OAD._assert(OAD.isActionOverdue(t), 'a hard-time commitment earlier today that has passed should be overdue right now, not tomorrow');
+});
+
+OAD.test('isActionOverdue: a specific time later today that has not passed is NOT overdue', function () {
+  const todayStr = _localDateStr();
+  const t = OAD.makeThread({ next_action_date: todayStr, next_action_time: '23:59', connections: [] });
+  OAD._assert(!OAD.isActionOverdue(t), 'a commitment later today that has not happened yet should not be flagged overdue');
+});
+
+OAD.test('getOverdueDays: a same-day missed time counts as at least 1 day-equivalent immediately', function () {
+  const todayStr = _localDateStr();
+  const notOverdue = OAD.makeThread({ next_action_date: todayStr, next_action_time: null, connections: [] });
+  const overdueToday = OAD.makeThread({ next_action_date: todayStr, next_action_time: '00:01', connections: [] });
+  OAD._assertEqual(OAD.getOverdueDays(notOverdue), 0, 'not overdue means 0 days');
+  OAD._assertEqual(OAD.getOverdueDays(overdueToday), 1, 'a same-day missed time should register as 1 day-equivalent overdue, not 0');
+});
+
+OAD.test('pressure: a missed hard-time commitment today scores higher than an undifferentiated "due today" thread — the exact gap being fixed', function () {
+  const todayStr = _localDateStr();
+  const withTime = OAD.makeThread({ status: 'open', priority: 'low', next_action_date: todayStr, next_action_time: '00:01', connections: [] });
+  const noTime    = OAD.makeThread({ status: 'open', priority: 'low', next_action_date: todayStr, next_action_time: null,   connections: [] });
+  OAD._assert(OAD.pressure(withTime) > OAD.pressure(noTime),
+    'a thread whose specific 00:01 commitment already passed today should score higher than one merely "due today" with no time');
+});
+
+OAD.test('pressure: a thread due later today (time not yet passed) scores the same as a date-only "due today" thread', function () {
+  const todayStr = _localDateStr();
+  const laterToday = OAD.makeThread({ status: 'open', priority: 'low', next_action_date: todayStr, next_action_time: '23:59', connections: [] });
+  const noTime      = OAD.makeThread({ status: 'open', priority: 'low', next_action_date: todayStr, next_action_time: null,   connections: [] });
+  OAD._assertEqual(OAD.pressure(laterToday), OAD.pressure(noTime), 'neither should be overdue yet, so neither gets the overdue pressure bump');
+});
+
 OAD.test('pressure: deadline within 7 days not on track adds 30', function () {
   const soon = new Date();
   soon.setDate(soon.getDate() + 3);

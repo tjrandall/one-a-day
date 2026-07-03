@@ -72,11 +72,9 @@ OAD.pressure = function (thread, _suppressSideEffects, _visited) {
     if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
   }
 
-  // Overdue next_action_date
-  var todayStr = new Date().toISOString().slice(0, 10);
-  if (thread.next_action_date && thread.next_action_date < todayStr) {
-    var daysOverdue = Math.ceil((new Date(todayStr) - new Date(thread.next_action_date + 'T00:00:00')) / 86400000);
-    score += Math.min(40, daysOverdue * 5); // +5 per day overdue, max 40
+  // Overdue next_action_date — time-aware via isActionOverdue/getOverdueDays (see above)
+  if (OAD.isActionOverdue(thread)) {
+    score += Math.min(40, OAD.getOverdueDays(thread) * 5); // +5 per day-equivalent overdue, max 40
   }
 
   // Escalation: Shift Collision
@@ -194,6 +192,42 @@ OAD.formatDate = function (dateStr) {
   if (!dateStr) return '—';
   const d = new Date(dateStr + 'T00:00:00');
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+OAD.formatTime = function (timeStr) {
+  if (!timeStr) return '';
+  const d = new Date('2000-01-01T' + timeStr + ':00');
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
+
+// Combines a date string with an optional 'HH:MM' time into a real Date. No time set defaults
+// to 23:59:59 of that date — this is what makes date-only threads behave exactly as before
+// (not overdue until the calendar rolls to the next day), while a thread with a specific time
+// becomes overdue the moment that time passes today, not at midnight.
+OAD._combineDateTime = function (dateStr, timeStr) {
+  if (!dateStr) return null;
+  var t = (timeStr && /^\d{2}:\d{2}$/.test(timeStr)) ? timeStr + ':00' : '23:59:59';
+  return new Date(dateStr + 'T' + t);
+};
+
+// Single source of truth for "is this thread's next action actually late right now" — replaces
+// the next_action_date < todayStr string comparison duplicated across pressure(), the Daily
+// View overdue buckets, and TOAT selection, so time-of-day awareness applies everywhere at once.
+OAD.isActionOverdue = function (thread) {
+  var dt = OAD._combineDateTime(thread.next_action_date, thread.next_action_time);
+  if (!dt) return false;
+  return dt < new Date();
+};
+
+// Days-overdue equivalent, for pressure/label purposes. A thread with a specific time that's
+// overdue same-day counts as at least 1 day overdue immediately — missing a hard-time
+// commitment is already as serious as being "a day late," it shouldn't need to wait for the
+// calendar to flip before pressure reflects that.
+OAD.getOverdueDays = function (thread) {
+  var dt = OAD._combineDateTime(thread.next_action_date, thread.next_action_time);
+  if (!dt || dt >= new Date()) return 0;
+  var hoursOverdue = (new Date() - dt) / 3600000;
+  return Math.max(1, Math.ceil(hoursOverdue / 24));
 };
 
 OAD.deadlineState = function (thread) {
@@ -582,11 +616,10 @@ OAD.focusReason = function (t) {
   if (t.status === 'stalled')  parts.push('stalled');
   if (t.status === 'waiting' && t.user_action_complete) parts.push('ball in their court');
   else if (t.status === 'waiting') parts.push('waiting on response');
-  if (t.next_action_date && t.next_action_date < todayStr) {
-    var daysOver = Math.round((new Date(todayStr) - new Date(t.next_action_date + 'T00:00:00')) / 86400000);
-    parts.push(daysOver + 'd overdue');
+  if (OAD.isActionOverdue(t)) {
+    parts.push(OAD.getOverdueDays(t) + 'd overdue');
   } else if (t.next_action_date === todayStr) {
-    parts.push('due today');
+    parts.push('due today' + (t.next_action_time ? ' at ' + OAD.formatTime(t.next_action_time) : ''));
   }
   if (!t.assumption_verified && t.current_assumption) parts.push('unverified assumption');
   var ctx = OAD.getGraphContext(t.id);
