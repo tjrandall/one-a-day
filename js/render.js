@@ -2,6 +2,56 @@ window.OAD = window.OAD || {};
 
 OAD._activeId = null;
 
+// Nothing in the app re-checks "is my view still accurate" on its own — every render is
+// triggered by an explicit user mutation. For a tab left running constantly (flipped to,
+// not reloaded), that means a view rendered before midnight — or before some background
+// change — can sit stale until an unrelated edit happens to trigger a refresh. Two guards:
+// (1) refresh immediately when the tab regains focus, (2) a periodic safety net in case
+// visibilitychange doesn't fire (e.g. workspace-switching without ever backgrounding the
+// tab). Both skip refreshing while a thread's detail is open, so they don't yank a page
+// out from under someone mid-read; refreshActiveView() itself no-ops safely before boot
+// finishes, since _lastView isn't set to anything yet.
+OAD._autoRefreshActiveView = function () {
+  if (OAD._activeId) return;
+  if (typeof OAD.refreshActiveView === 'function') OAD.refreshActiveView();
+};
+
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'visible') OAD._autoRefreshActiveView();
+});
+
+OAD._AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+setInterval(function () {
+  if (document.visibilityState === 'visible') OAD._autoRefreshActiveView();
+}, OAD._AUTO_REFRESH_INTERVAL_MS);
+
+// Focus Now's empty state — nothing due today or overdue. Mirrors TOAT's celebrate-when-empty
+// style (green, not a dead end) and offers the nearest upcoming item as an optional "get
+// ahead" suggestion, distinct from an actual recommendation. Shared by all three Focus Now
+// card render sites so the empty-state markup only needs to change in one place.
+OAD._renderFocusNowEmptyState = function () {
+  var futureThread = OAD.selectFutureFocusSuggestion();
+  var futureSuggestionHtml = futureThread
+    ? '<div class="focus-future-suggestion" role="button" onclick="OAD.selectThread(' + futureThread.id + ')" ' +
+        'style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(46,204,113,0.2);cursor:pointer" ' +
+        'aria-label="Get ahead: ' + OAD.esc(futureThread.title) + '">' +
+        '<div style="font-size:11px;color:var(--text-muted)">Want to get ahead?</div>' +
+        '<div style="font-size:13px;font-weight:600;color:var(--text-main)">' + OAD.esc(OAD.formatDisplayTitle(futureThread.title)) + '</div>' +
+        '<div style="font-size:11px;color:var(--text-muted)">Due ' + OAD.esc(OAD.formatDate(futureThread.next_action_date)) + '</div>' +
+      '</div>'
+    : '';
+  return '<div class="focus-card focus-card-empty" style="background:rgba(46,204,113,0.06);border:1px solid rgba(46,204,113,0.2);border-radius:12px;padding:16px" role="region" aria-label="Focus Now clear">' +
+    '<div style="display:flex;align-items:center;gap:12px">' +
+      '<span style="font-size:20px" aria-hidden="true">🎉</span>' +
+      '<div>' +
+        '<div style="font-size:14px;font-weight:600;color:var(--text-main)">Nothing due today or overdue</div>' +
+        '<div style="font-size:11px;color:var(--text-muted)">Focus Now is clear.</div>' +
+      '</div>' +
+    '</div>' +
+    futureSuggestionHtml +
+  '</div>';
+};
+
 // Quick Add starts disabled in the static HTML and stays that way until _finishBoot() calls
 // this — enabling it earlier risks a capture landing in a pre-auth placeholder OAD.DB that
 // _bootAfterAuth() then discards when it replaces OAD.DB wholesale with the loaded data.
@@ -546,7 +596,11 @@ OAD.markCadenceDone = function (id) {
   c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
   OAD.saveDB();
   OAD.renderOverdueBanner();
-  if (!OAD._activeId) OAD.renderCadencePanel();
+  // refreshActiveView() re-renders whatever full view is currently showing (Daily, List,
+  // Cadences, etc.) — not just the Cadence panel — so the Load widget's cadence-count
+  // component doesn't go stale if this was triggered while looking at a different view.
+  // Guarded by !OAD._activeId so it doesn't clobber an open thread detail.
+  if (!OAD._activeId) OAD.refreshActiveView();
 };
 
 OAD.renderCadencePanel = function () {
@@ -913,12 +967,7 @@ OAD.renderTodayView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = new Set();
-  Object.keys(childrenByParentUUID).forEach(function (puuid) {
-    const parent = activeByUUID[puuid];
-    if (parent && parent.life_area === 'Patient') return;
-    childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
-  });
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -987,12 +1036,9 @@ OAD.renderTodayView = function () {
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(OAD.isActionOverdue).length;
-      const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
           '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
-          overdueTag +
           (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
         '</div>';
     }
@@ -1135,6 +1181,8 @@ OAD.renderTodayView = function () {
           : '') +
         blockedByHtml +
       '</div>';
+  } else {
+    focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
   panel.innerHTML =
@@ -1181,12 +1229,7 @@ OAD.renderDailyView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = new Set();
-  Object.keys(childrenByParentUUID).forEach(function (puuid) {
-    const parent = activeByUUID[puuid];
-    if (parent && parent.life_area === 'Patient') return;
-    childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
-  });
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -1259,12 +1302,9 @@ OAD.renderDailyView = function () {
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(OAD.isActionOverdue).length;
-      const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
           '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
-          overdueTag +
           (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
         '</div>';
     }
@@ -1435,6 +1475,8 @@ OAD.renderDailyView = function () {
           : '') +
         blockedByHtml +
       '</div>';
+  } else {
+    focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
   // ── Life-area heat map ──────────────────────────────────────────────
@@ -1469,10 +1511,11 @@ OAD.renderDailyView = function () {
       var dayStr = dayDt.toISOString().slice(0, 10);
       var threadCount  = active.filter(function (t) { return t.next_action_date === dayStr; }).length;
       var cadenceCount = cads.filter(function (c)  { return c.next_due === dayStr; }).length;
-      var total = threadCount + cadenceCount;
-      var labelKey = total >= 3 ? 'heavy' : total === 2 ? 'busy' : 'clear';
-      var label    = total >= 3 ? OAD.t('heavy', 'Heavy') : total === 2 ? OAD.t('busy', 'Busy') : OAD.t('clear', 'Clear');
-      var labelCls = total >= 3 ? 'load-row-heavy' : total === 2 ? 'load-row-busy' : 'load-row-clear';
+      var total = threadCount + cadenceCount; // still shown as "N items" — the label below no longer comes from this raw count
+      var loadScore = OAD.calculateDayLoadScore(dayStr);
+      var labelKey = OAD.getDayLoadLabel(loadScore);
+      var label    = labelKey === 'heavy' ? OAD.t('heavy', 'Heavy') : labelKey === 'busy' ? OAD.t('busy', 'Busy') : OAD.t('clear', 'Clear');
+      var labelCls = labelKey === 'heavy' ? 'load-row-heavy' : labelKey === 'busy' ? 'load-row-busy' : 'load-row-clear';
       var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
       
       var shiftStr = '';
@@ -1495,7 +1538,9 @@ OAD.renderDailyView = function () {
         label = OAD.t('shiftCollision', '⚠ Shift Collision');
       }
       
-      const pct = Math.min((total / 4) * 100, 100);
+      const heavyThreshold = ((OAD.Config && OAD.Config.weekLoadWeights && OAD.Config.weekLoadWeights.heavyThreshold) != null)
+        ? OAD.Config.weekLoadWeights.heavyThreshold : 150;
+      const pct = Math.min((loadScore / heavyThreshold) * 100, 100);
       rows +=
         '<div class="load-row ' + labelCls + '" aria-label="' +
             OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + label + '">' +
@@ -1649,12 +1694,7 @@ OAD.renderMatrixView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = new Set();
-  Object.keys(childrenByParentUUID).forEach(function (puuid) {
-    const parent = activeByUUID[puuid];
-    if (parent && parent.life_area === 'Patient') return;
-    childrenByParentUUID[puuid].forEach(function (c) { suppressedUUIDs.add(c.uuid); });
-  });
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -1726,12 +1766,9 @@ OAD.renderMatrixView = function () {
     var childSummaryHtml = '';
     if (children.length) {
       const topChild = children.reduce(function (best, c) { return c._score > best._score ? c : best; }, children[0]);
-      const overdueCount = children.filter(OAD.isActionOverdue).length;
-      const overdueTag = overdueCount ? '<span class="ds-child-overdue">' + overdueCount + ' overdue</span>' : '';
       childSummaryHtml =
         '<div class="ds-children-summary">' +
           '<span class="ds-child-count">' + children.length + ' subtask' + (children.length !== 1 ? 's' : '') + '</span>' +
-          overdueTag +
           (topChild.next_action ? '<span class="ds-child-next">Next: ' + OAD.esc(topChild.next_action) + '</span>' : '') +
         '</div>';
     }
@@ -1866,6 +1903,8 @@ OAD.renderMatrixView = function () {
           : '') +
         blockedByHtml +
       '</div>';
+  } else {
+    focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
   panel.innerHTML =

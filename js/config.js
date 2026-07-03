@@ -19,6 +19,17 @@ OAD.Config = {
     federal:    { label: 'Federal',    minWeeks: 17, maxWeeks: 22 }, // ~4-5 months
     commercial: { label: 'Commercial', minWeeks: 6,  maxWeeks: 8  }  // ~6-8 weeks
   },
+  // This Week's Load composite score weights (golden rule: no magic numbers in the code).
+  // Starting defaults, not derived/calibrated from a large sample — tune as the labels are
+  // used and compared against how days actually feel. edgeMultiplier and cadenceWeight scale
+  // structural/commitment signals to be roughly comparable in magnitude to a pressure score
+  // (0-100 per thread); busyThreshold/heavyThreshold are cutoffs on the resulting composite.
+  weekLoadWeights: JSON.parse(localStorage.getItem('oad_week_load_weights')) || {
+    edgeMultiplier: 2,    // per graph connection (in+out, any type) on a thread due that day
+    cadenceWeight: 20,    // flat, per cadence due that day (cadences have no pressure score of their own)
+    busyThreshold: 50,
+    heavyThreshold: 150
+  },
   demoMode: window.location.port === '8081' || window.location.pathname.includes('demo')
 };
 

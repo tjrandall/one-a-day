@@ -1503,6 +1503,152 @@ OAD.test('pressure: load multiplier adds 12 when day load exceeds 150', function
     'thread on overloaded date (' + loadedScore + ') should exceed identical thread on uncrowded date (' + unloadedScore + ')');
 });
 
+// ── Tests: This Week's Load composite score (calculateDayLoadScore / getDayLoadLabel) ──
+
+OAD.test('getDayLoadLabel: uses configurable thresholds from OAD.Config.weekLoadWeights, not hardcoded values', function () {
+  const original = OAD.Config.weekLoadWeights;
+  try {
+    OAD.Config.weekLoadWeights = { busyThreshold: 10, heavyThreshold: 20 };
+    OAD._assertEqual(OAD.getDayLoadLabel(5), 'clear', 'below busyThreshold');
+    OAD._assertEqual(OAD.getDayLoadLabel(10), 'busy', 'at busyThreshold');
+    OAD._assertEqual(OAD.getDayLoadLabel(20), 'heavy', 'at heavyThreshold');
+
+    // Same raw scores, different config -> different labels. Proves the thresholds are
+    // actually read from config, not baked into the function.
+    OAD.Config.weekLoadWeights = { busyThreshold: 1, heavyThreshold: 4 };
+    OAD._assertEqual(OAD.getDayLoadLabel(5), 'heavy', 'same score (5), tighter thresholds -> heavy instead of clear');
+  } finally {
+    OAD.Config.weekLoadWeights = original;
+  }
+});
+
+OAD.test('getDayLoadLabel: falls back to documented defaults (50/150) when config is missing', function () {
+  const original = OAD.Config.weekLoadWeights;
+  try {
+    OAD.Config.weekLoadWeights = {};
+    OAD._assertEqual(OAD.getDayLoadLabel(49), 'clear', 'below default busy threshold');
+    OAD._assertEqual(OAD.getDayLoadLabel(50), 'busy', 'at default busy threshold');
+    OAD._assertEqual(OAD.getDayLoadLabel(150), 'heavy', 'at default heavy threshold');
+  } finally {
+    OAD.Config.weekLoadWeights = original;
+  }
+});
+
+OAD.test('calculateDayLoadScore: sums pressure, adds edge-weighted connections and per-cadence weight', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalCadences = OAD.DB.cadences;
+  const originalWeights = OAD.Config.weekLoadWeights;
+  try {
+    OAD.Config.weekLoadWeights = { edgeMultiplier: 2, cadenceWeight: 20, busyThreshold: 50, heavyThreshold: 150 };
+    const date = '2099-05-01';
+    const t = { id: 9001, uuid: 'wl-t1', title: 'Load test thread', status: 'open', priority: 'low',
+      next_action_date: date,
+      connections: [
+        { to_uuid: 'wl-t2', edge_type: 'blocks' },
+        { to_uuid: 'wl-t2', edge_type: 'relates' }
+      ]
+    };
+    const t2 = { id: 9002, uuid: 'wl-t2', title: 'Unrelated', status: 'open', priority: 'low', connections: [] };
+    OAD.DB.threads = [t, t2];
+    OAD.DB.cadences = [{ id: 9101, title: 'Cadence due same day', next_due: date, recurrence: 'monthly-1st', days_of_week: [] }];
+
+    const ownPressure = OAD.pressure(t, true); // matches how getDayLoad computes it internally
+    const expectedEdgeContribution = 2 * 2; // 2 connections (blocks + relates) * edgeMultiplier 2
+    const expectedCadenceContribution = 20; // 1 cadence * cadenceWeight 20
+    const score = OAD.calculateDayLoadScore(date);
+    OAD._assertEqual(score, ownPressure + expectedEdgeContribution + expectedCadenceContribution,
+      'score should be pressure-sum + edge-weight + cadence-weight, using configured multipliers');
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.DB.cadences = originalCadences;
+    OAD.Config.weekLoadWeights = originalWeights;
+  }
+});
+
+OAD.test('calculateDayLoadScore: two entangled, genuinely overwhelming threads outscore ten easy ones — the exact intuition this replaces raw item count for', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const heavyDate = '2099-06-01';
+    const easyDate = '2099-06-02';
+    const ctgSoon = (function () { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+
+    // Two critical/stalled threads, entangled with each other AND each facing an imminent
+    // contingency — this is "two tasks and Underwater," not just "two tasks happen to be
+    // marked critical." A bare stalled+critical pair with no other severity factor lands as
+    // a solidly-elevated Busy day, not Heavy — and that's correct: Heavy should mean genuinely
+    // overwhelming, not "contains any critical item."
+    const heavy1 = { id: 9201, uuid: 'wl-heavy-1', title: 'Heavy 1', status: 'stalled', priority: 'critical',
+      next_action_date: heavyDate, contingency_trigger_date: ctgSoon,
+      connections: [{ to_uuid: 'wl-heavy-2', edge_type: 'blocks' }] };
+    const heavy2 = { id: 9202, uuid: 'wl-heavy-2', title: 'Heavy 2', status: 'stalled', priority: 'critical',
+      next_action_date: heavyDate, contingency_trigger_date: ctgSoon,
+      connections: [{ to_uuid: 'wl-heavy-1', edge_type: 'blocked_by' }] };
+
+    // Ten easy, isolated, medium-priority open threads — genuinely light individually,
+    // but there are a lot of them.
+    const easyThreads = [];
+    for (let i = 0; i < 10; i++) {
+      easyThreads.push({ id: 9300 + i, uuid: 'wl-easy-' + i, title: 'Easy ' + i, status: 'open', priority: 'medium',
+        next_action_date: easyDate, connections: [] });
+    }
+
+    OAD.DB.threads = [heavy1, heavy2].concat(easyThreads);
+
+    const heavyScore = OAD.calculateDayLoadScore(heavyDate);
+    const easyScore = OAD.calculateDayLoadScore(easyDate);
+    OAD._assert(heavyScore > easyScore,
+      'two entangled, imminently-contingent critical/stalled threads (score ' + heavyScore + ') should outweigh ten easy medium-priority threads (score ' + easyScore + ')');
+    OAD._assertEqual(OAD.getDayLoadLabel(easyScore), 'busy', 'ten easy items should land as Busy, not Heavy');
+    OAD._assertEqual(OAD.getDayLoadLabel(heavyScore), 'heavy', 'two genuinely overwhelming entangled items should land as Heavy despite far fewer items');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('markCadenceDone: refreshes the active view, not just the Cadence panel', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalCadences = OAD.DB.cadences;
+  const originalActiveId = OAD._activeId;
+  const originalLastView = OAD._lastView;
+  try {
+    const c = OAD.addCadence(OAD.makeCadence({ title: 'Refresh test cadence', recurrence: 'monthly-1st' }));
+    OAD._activeId = null; // no thread detail open
+    OAD._lastView = 'Daily';
+    let refreshCalled = false;
+    const origRefresh = OAD.refreshActiveView;
+    OAD.refreshActiveView = function () { refreshCalled = true; };
+    try {
+      OAD.markCadenceDone(c.id);
+      OAD._assert(refreshCalled, 'markCadenceDone should call refreshActiveView() regardless of which view is active');
+    } finally {
+      OAD.refreshActiveView = origRefresh;
+    }
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.DB.cadences = originalCadences;
+    OAD._activeId = originalActiveId;
+    OAD._lastView = originalLastView;
+  }
+});
+
+OAD.test('_autoRefreshActiveView: does not refresh while a thread detail is open', function () {
+  const originalActiveId = OAD._activeId;
+  try {
+    OAD._activeId = 12345; // simulate a thread detail being open
+    let refreshCalled = false;
+    const origRefresh = OAD.refreshActiveView;
+    OAD.refreshActiveView = function () { refreshCalled = true; };
+    try {
+      OAD._autoRefreshActiveView();
+      OAD._assert(!refreshCalled, 'should not refresh and clobber an open thread detail');
+    } finally {
+      OAD.refreshActiveView = origRefresh;
+    }
+  } finally {
+    OAD._activeId = originalActiveId;
+  }
+});
+
 // ── Tests: _seedCadences ──────────────────────────────────────────────
 
 OAD.test('_seedCadences: creates at least 3 cadences including Monthly Bills Review', function () {
@@ -2013,9 +2159,10 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
 OAD.test('strict ID-driven engine and focus selection excludes blocked threads', function () {
   const originalThreads = OAD.DB.threads;
   try {
-    const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', connections: [] };
-    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'open', life_area: 'Work', priority: 'high', connections: [{ to_uuid: 'uuid-a', to_label: 'Task A', edge_type: 'blocks' }] };
-    
+    const todayStr = new Date().toISOString().slice(0, 10); // matches selectFocusThread()'s own todayStr basis
+    const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', next_action_date: todayStr, connections: [] };
+    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'open', life_area: 'Work', priority: 'high', next_action_date: todayStr, connections: [{ to_uuid: 'uuid-a', to_label: 'Task A', edge_type: 'blocks' }] };
+
     OAD.DB.threads = [threadA, threadB];
 
     // Assert that Task A is blocked by Task B
@@ -2349,6 +2496,42 @@ OAD.test('ADE-002: parent_uuid creates enables edge', function () {
   }
 });
 
+OAD.test('computeSuppressedChildUUIDs: suppresses a lower-urgency child under an active parent', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-08-01' });
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(result.has('c1'), 'future-dated child should be suppressed under its parent');
+});
+
+OAD.test('computeSuppressedChildUUIDs: never suppresses a child due today (Bug 5)', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-03' });
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(!result.has('c1'), 'child due today must never be suppressed, even though its parent is active');
+});
+
+OAD.test('computeSuppressedChildUUIDs: never suppresses an overdue child', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2020-01-01' });
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(!result.has('c1'), 'overdue child must never be suppressed');
+});
+
+OAD.test('computeSuppressedChildUUIDs: Patient life_area parent never suppresses its children', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1', life_area: 'Patient' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-08-01' });
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(!result.has('c1'), 'children of a Patient life_area parent should never be suppressed');
+});
+
 OAD.test('ADE-003: shared identifier with prep→submit creates blocks edge', function () {
   const orig = OAD.DB.threads;
   const origSupp = OAD.DB.ade_suppressions;
@@ -2440,9 +2623,10 @@ OAD.test('getDailyToat: dormant thread is never selected', function () {
 OAD.test('selectFocusThread: dormant thread is never returned', function () {
   const orig = OAD.DB.threads;
   try {
+    const todayStr = new Date().toISOString().slice(0, 10);
     OAD.DB.threads = [
-      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Dormant high priority', status: 'dormant', priority: 'critical', next_action: 'do something' }),
-      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something else' })
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Dormant high priority', status: 'dormant', priority: 'critical', next_action: 'do something', next_action_date: todayStr }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something else', next_action_date: todayStr })
     ];
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'focus should return a thread');
@@ -2519,9 +2703,10 @@ OAD.test('pressure: inbox status is 0, matching dormant', function () {
 OAD.test('selectFocusThread: inbox thread is never returned', function () {
   const orig = OAD.DB.threads;
   try {
+    const todayStr = new Date().toISOString().slice(0, 10);
     OAD.DB.threads = [
-      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Inbox capture', status: 'inbox', priority: 'critical' }),
-      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something' })
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Inbox capture', status: 'inbox', priority: 'critical', next_action_date: todayStr }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something', next_action_date: todayStr })
     ];
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'focus should return a thread');
@@ -2561,9 +2746,10 @@ OAD.test('pressure: waiting+actioned pressure is 35% of base', function () {
 OAD.test('selectFocusThread: waiting+actioned excluded when alternatives exist', function () {
   const orig = OAD.DB.threads;
   try {
+    const todayStr = new Date().toISOString().slice(0, 10);
     OAD.DB.threads = [
-      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Actioned waiting', status: 'waiting', priority: 'critical', user_action_complete: true, next_action: 'sent email' }),
-      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open thread', status: 'open', priority: 'medium', next_action: 'do something' })
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Actioned waiting', status: 'waiting', priority: 'critical', user_action_complete: true, next_action: 'sent email', next_action_date: todayStr }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open thread', status: 'open', priority: 'medium', next_action: 'do something', next_action_date: todayStr })
     ];
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'focus should return a thread');
@@ -2576,14 +2762,133 @@ OAD.test('selectFocusThread: waiting+actioned excluded when alternatives exist',
 OAD.test('selectFocusThread: waiting+actioned returned as last resort when nothing else', function () {
   const orig = OAD.DB.threads;
   try {
+    const todayStr = new Date().toISOString().slice(0, 10);
     OAD.DB.threads = [
-      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Only actioned waiting', status: 'waiting', priority: 'high', user_action_complete: true, next_action: 'waiting for reply' })
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Only actioned waiting', status: 'waiting', priority: 'high', user_action_complete: true, next_action: 'waiting for reply', next_action_date: todayStr })
     ];
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'focus should still return a thread as last resort');
     OAD._assertEqual(focus.id, 1, 'waiting+actioned returned when nothing else qualifies');
   } finally {
     OAD.DB.threads = orig;
+  }
+});
+
+// ── Tests: Focus Now date-scoping (Bug 3 — was ORDER BY pressure DESC with no date filter) ──
+
+OAD.test('selectFocusThread: a lower-pressure item due today outranks a higher-pressure item due later — the exact reported bug', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const future = new Date(); future.setDate(future.getDate() + 5);
+    const futureStr = future.toISOString().slice(0, 10);
+
+    // Mirrors the real report: "Digital.ai" (pressure 69, due in 5 days) vs "HVAC Repair"
+    // (pressure 53, due today). HVAC should win now, even though its raw pressure is lower.
+    const digitalAi = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Digital.ai Class P Units Repurchase Offer',
+      status: 'waiting', priority: 'high', next_action_date: futureStr, next_action: 'Decide on offer' });
+    const hvac = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'HVAC Repair — Plymouth',
+      status: 'waiting', priority: 'medium', next_action_date: todayStr, next_action: 'Call contractor' });
+    OAD.DB.threads = [digitalAi, hvac];
+
+    OAD._assert(OAD.pressure(digitalAi) > OAD.pressure(hvac), 'sanity check: digitalAi genuinely has higher raw pressure than hvac');
+
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'focus should return a thread');
+    OAD._assertEqual(focus.id, hvac.id, 'the thread due today should win over a higher-pressure thread due 5 days out');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('selectFocusThread: returns null when nothing is due today or overdue, even if high-pressure future items exist', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const future = new Date(); future.setDate(future.getDate() + 5);
+    const futureStr = future.toISOString().slice(0, 10);
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Future critical thread', status: 'stalled', priority: 'critical', next_action_date: futureStr })
+    ];
+    const focus = OAD.selectFocusThread();
+    OAD._assertEqual(focus, null, 'nothing due today/overdue means Focus Now has nothing to recommend right now');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('selectFocusThread: an overdue thread is still selected (date-scoping includes overdue, not just exactly today)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const t = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Overdue thread', status: 'open', priority: 'medium', next_action_date: yesterday.toISOString().slice(0, 10) });
+    OAD.DB.threads = [t];
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus, 'an overdue thread should still be selected, not excluded by date-scoping');
+    OAD._assertEqual(focus.id, t.id, 'overdue thread selected');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('selectFutureFocusSuggestion: returns the nearest upcoming item, tie-broken by pressure', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const in3 = new Date(); in3.setDate(in3.getDate() + 3);
+    const in5 = new Date(); in5.setDate(in5.getDate() + 5);
+    const nearLow  = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Near, low pressure', status: 'open', priority: 'low', next_action_date: in3.toISOString().slice(0, 10) });
+    const farHigh  = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Far, high pressure', status: 'stalled', priority: 'critical', next_action_date: in5.toISOString().slice(0, 10) });
+    OAD.DB.threads = [farHigh, nearLow];
+
+    const suggestion = OAD.selectFutureFocusSuggestion();
+    OAD._assert(!!suggestion, 'should return a suggestion');
+    OAD._assertEqual(suggestion.id, nearLow.id, 'nearest date wins over higher pressure further out');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('selectFutureFocusSuggestion: returns null when nothing is upcoming either', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [];
+    OAD._assertEqual(OAD.selectFutureFocusSuggestion(), null, 'no threads at all means no suggestion');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+// ── Tests: reopen no longer misfires the closure wizard (Bug 4) ─────────
+
+OAD.test('_saveEditThread: reopening a closed thread does not trigger the closure wizard, even with a stale closing_condition_met checkbox and an active connection', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const blocked = OAD.addThread(OAD.makeThread({ title: 'Blocked target', status: 'open' }));
+    const closedThread = OAD.addThread(OAD.makeThread({
+      title: 'APEX Pitch Deck (test)', status: 'closed', closing_condition_met: true,
+      connections: [{ to_uuid: blocked.uuid, to_label: blocked.title, edge_type: 'blocks' }]
+    }));
+
+    OAD._assert(OAD.needsClosureWizard(closedThread.id), 'sanity check: this thread does have an active connection, so the wizard WOULD fire if isClosing misfired true');
+
+    OAD.openEditModal(closedThread.id);
+    // Simulate: user changes only the status dropdown to Open, leaves the (still-checked)
+    // "closing_condition_met" checkbox alone — exactly the reported reproduction steps.
+    document.getElementById('f-status').value = 'open';
+
+    let wizardOpened = false;
+    const origOpenWizard = OAD.openClosureWizard;
+    OAD.openClosureWizard = function () { wizardOpened = true; };
+    try {
+      OAD._saveEditThread(closedThread.id);
+    } finally {
+      OAD.openClosureWizard = origOpenWizard;
+    }
+
+    OAD._assert(!wizardOpened, 'closure wizard must not fire when reopening a closed thread');
+    OAD._assertEqual(OAD.getThread(closedThread.id).status, 'open', 'the reopen should have actually saved');
+    OAD.closeModal();
+  } finally {
+    OAD.DB.threads = originalThreads;
   }
 });
 

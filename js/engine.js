@@ -230,6 +230,24 @@ OAD.getOverdueDays = function (thread) {
   return Math.max(1, Math.ceil(hoursOverdue / 24));
 };
 
+// Single source of truth for which children get nested under their parent's summary badge
+// instead of listed flatly in the Overdue/Today/Week buckets. A child that's overdue or due
+// today is NEVER suppressed — nesting it away is only safe for lower-urgency children, since
+// the parent may have no next_action_date of its own and never appear in any date bucket,
+// which would otherwise hide the child's urgency completely (Bug 5, weekly load investigation).
+OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, todayStr) {
+  var suppressed = new Set();
+  Object.keys(childrenByParentUUID || {}).forEach(function (puuid) {
+    var parent = activeByUUID[puuid];
+    if (parent && parent.life_area === 'Patient') return;
+    childrenByParentUUID[puuid].forEach(function (c) {
+      if (OAD.isActionOverdue(c) || c.next_action_date === todayStr) return;
+      suppressed.add(c.uuid);
+    });
+  });
+  return suppressed;
+};
+
 OAD.deadlineState = function (thread) {
   if (!thread.deadline) return null;
   const today = new Date();
@@ -579,19 +597,26 @@ OAD.applySavedView = function (threads, view) {
 };
 
 OAD.selectFocusThread = function () {
+  var todayStr = new Date().toISOString().slice(0, 10);
   var isWaitingActioned = function (t) { return t.status === 'waiting' && t.user_action_complete; };
   var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
     .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
 
+  // Focus Now means "what should I work on right now" — scope to today + overdue first.
+  // Previously this sorted the ENTIRE active backlog by raw pressure with no date filter at
+  // all, so a thread due next week could outrank something due today just by having a higher
+  // pressure score anywhere in the backlog.
+  var dueNow = allActive.filter(function (t) { return t.next_action_date && t.next_action_date <= todayStr; });
+
   // Primary: not blocked, not waiting+actioned
-  var candidates = allActive
+  var candidates = dueNow
     .filter(function (t) { return !OAD.isBlocked(t) && !isWaitingActioned(t); })
     .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
     .sort(function (a, b) { return b._score - a._score; });
 
   // Secondary: allow blocked threads (still excludes waiting+actioned)
   if (!candidates.length) {
-    candidates = allActive
+    candidates = dueNow
       .filter(function (t) { return !isWaitingActioned(t); })
       .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
       .sort(function (a, b) { return b._score - a._score; });
@@ -599,7 +624,7 @@ OAD.selectFocusThread = function () {
 
   // Last resort: include waiting+actioned threads if nothing else qualifies
   if (!candidates.length) {
-    candidates = allActive
+    candidates = dueNow
       .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
       .sort(function (a, b) { return b._score - a._score; });
   }
@@ -607,6 +632,23 @@ OAD.selectFocusThread = function () {
   if (!candidates.length) return null;
   var actionable = candidates.filter(function (t) { return t.next_action || t.next_action_date; });
   return actionable.length ? actionable[0] : candidates[0];
+};
+
+// When nothing is due today or overdue, Focus Now has nothing to actively recommend — but
+// offers the nearest upcoming item as an optional "get ahead" suggestion, distinct from an
+// actual recommendation. Nearest date first, tie-broken by pressure. Mirrors the spirit of
+// TOAT's celebrate-when-empty pattern: an empty Focus Now is good news, not a dead end.
+OAD.selectFutureFocusSuggestion = function () {
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
+  var upcoming = allActive.filter(function (t) { return t.next_action_date && t.next_action_date > todayStr; });
+  if (!upcoming.length) return null;
+  upcoming.sort(function (a, b) {
+    if (a.next_action_date !== b.next_action_date) return a.next_action_date < b.next_action_date ? -1 : 1;
+    return OAD.pressure(b) - OAD.pressure(a);
+  });
+  return upcoming[0];
 };
 
 // Builds a human-readable reason string explaining why a thread is the focus.
@@ -646,6 +688,48 @@ OAD.getDayLoad = function (dateStr) {
   return (OAD.DB.threads || [])
     .filter(function (t) { return t.status !== 'closed' && t.next_action_date === dateStr; })
     .reduce(function (sum, t) { return sum + OAD.pressure(t, true); }, 0);
+};
+
+// Composite "how will this day actually feel" score for the This Week's Load widget —
+// distinct from getDayLoad() above, which is a pure pressure-sum feeding pressure()'s own
+// cross-load multiplier and must stay that way to avoid a new feedback loop. This adds:
+//   - edge-weight: total connection degree (in+out, all edge types) for threads due that
+//     day — a proxy for coordination/complexity that's deliberately separate from urgency
+//     (pressure already reflects urgency inherited through blocking chains; this captures
+//     raw entanglement regardless of type, which pressure doesn't).
+//   - cadence-weight: cadences have no pressure score of their own (binary done/overdue),
+//     but a due cadence is still a real commitment, so it gets a flat configurable weight.
+// Weights come from OAD.Config.weekLoadWeights — see js/config.js for the golden-rule note.
+OAD.calculateDayLoadScore = function (dateStr) {
+  if (!dateStr) return 0;
+  var weights = (OAD.Config && OAD.Config.weekLoadWeights) || {};
+  var edgeMultiplier = weights.edgeMultiplier != null ? weights.edgeMultiplier : 2;
+  var cadenceWeight  = weights.cadenceWeight  != null ? weights.cadenceWeight  : 20;
+
+  var pressureSum = OAD.getDayLoad(dateStr);
+
+  var dayThreads = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
+    .filter(function (t) { return t.status !== 'closed' && t.next_action_date === dateStr; });
+  var edgeSum = dayThreads.reduce(function (sum, t) {
+    var ctx = OAD.getGraphContext(t.id);
+    return sum + ctx.blocks.length + ctx.blockedBy.length + ctx.enables.length + ctx.relates.length;
+  }, 0);
+
+  var cadenceCount = (OAD.getVisibleCadences ? OAD.getVisibleCadences() : OAD.DB.cadences || [])
+    .filter(function (c) { return c.next_due === dateStr; }).length;
+
+  return pressureSum + (edgeSum * edgeMultiplier) + (cadenceCount * cadenceWeight);
+};
+
+// Maps a composite score to the Clear/Busy/Heavy label — thresholds are configurable
+// (OAD.Config.weekLoadWeights), never hardcoded in this function.
+OAD.getDayLoadLabel = function (score) {
+  var weights = (OAD.Config && OAD.Config.weekLoadWeights) || {};
+  var busyThreshold  = weights.busyThreshold  != null ? weights.busyThreshold  : 50;
+  var heavyThreshold = weights.heavyThreshold != null ? weights.heavyThreshold : 150;
+  if (score >= heavyThreshold) return 'heavy';
+  if (score >= busyThreshold) return 'busy';
+  return 'clear';
 };
 
 OAD.cadenceOverdue = function (cadence) {

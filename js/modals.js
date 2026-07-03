@@ -277,8 +277,13 @@ OAD._saveEditThread = function (id) {
   const data = OAD._readThreadForm(t);
   if (!data) return;
 
-  const isClosing = (data.status === 'closed' || data.closing_condition_met);
   const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified, next_action_date: t.next_action_date };
+  // Guarded by prev.status !== 'closed': the "closing_condition_met" checkbox isn't wired to
+  // the status dropdown, so it stays checked from a prior closure unless the user separately
+  // unchecks it. Without this guard, reopening a closed thread (status: closed -> open) would
+  // misread as a fresh close, firing the closure wizard and its dependency-break flow on a
+  // thread that was never actually being closed by this save.
+  const isClosing = (data.status === 'closed' || data.closing_condition_met) && prev.status !== 'closed';
   const notes = [];
   if (prev.status !== data.status) {
     notes.push(`Status → ${data.status}`);
