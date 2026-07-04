@@ -8,3 +8,7 @@ js/supabase-client.js
 Thumbs.db
 js/supabase-client.js
 js/module.config.js
+
+# Working session files
+SUPERPROD_ANALYSIS.md
+SUPERPROD_ANALYSIS_RESULTS.md
