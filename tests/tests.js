@@ -255,6 +255,126 @@ OAD.test('exportThreads: includes full thread data, excludes ai_insights and per
   OAD._assert(Array.isArray(parsed.edges),           'top-level edges is array');
 });
 
+OAD.test('exportThreads: includes cadences array with full fields', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    OAD.DB.cadences = [{
+      id: 5001, title: 'Export cadence test', life_area: 'finances', recurrence: 'monthly-1st',
+      days_of_week: [], last_completed: '2026-06-01', next_due: '2026-07-01',
+      notes: 'note text', consequences: 'consequence text'
+    }];
+    const parsed = JSON.parse(OAD.exportThreads());
+    OAD._assert('cadences' in parsed, 'export has top-level cadences array');
+    OAD._assert(Array.isArray(parsed.cadences), 'cadences is an array');
+    OAD._assert('cadence_count' in parsed, 'export has cadence_count');
+    const row = parsed.cadences.find(function (c) { return c.id === 5001; });
+    OAD._assert(!!row, 'seeded cadence present in export');
+    OAD._assertEqual(row.title, 'Export cadence test', 'title round-trips');
+    OAD._assertEqual(row.recurrence, 'monthly-1st', 'recurrence round-trips');
+    OAD._assertEqual(row.next_due, '2026-07-01', 'next_due round-trips');
+    OAD._assertEqual(row.notes, 'note text', 'notes round-trips');
+    OAD._assertEqual(row.consequences, 'consequence text', 'consequences round-trips');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('parseImportFile: cadence row with no id goes to create list', function () {
+  const json = JSON.stringify({ threads: [], cadences: [{ title: 'New cadence via import', recurrence: 'weekly' }] });
+  const results = OAD.parseImportFile(json);
+  OAD._assertEqual(results.cadences.create.length, 1, 'one cadence queued for create');
+  OAD._assertEqual(results.cadences.update.length, 0, 'none queued for update');
+});
+
+OAD.test('parseImportFile: cadence row matching an existing id goes to update list', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    OAD.DB.cadences = [{ id: 5002, title: 'Existing cadence', recurrence: 'weekly', next_due: '2026-07-01' }];
+    const json = JSON.stringify({ threads: [], cadences: [{ id: 5002, title: 'Existing cadence', next_due: '2026-07-15' }] });
+    const results = OAD.parseImportFile(json);
+    OAD._assertEqual(results.cadences.update.length, 1, 'one cadence queued for update');
+    OAD._assertEqual(results.cadences.create.length, 0, 'none queued for create');
+    OAD._assertEqual(results.cadences.update[0].existing.id, 5002, 'correct cadence matched by id');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('applyImport: creates a new cadence from import', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    OAD.DB.cadences = [];
+    const results = { create: [], update: [], cadences: { create: [{ title: 'Imported cadence', recurrence: 'monthly-1st', next_due: '2026-08-01' }], update: [] } };
+    const result = OAD.applyImport(results, [], []);
+    OAD._assertEqual(result.cadences_created, 1, 'one cadence created');
+    OAD._assertEqual(OAD.DB.cadences.length, 1, 'cadence added to DB');
+    OAD._assertEqual(OAD.DB.cadences[0].title, 'Imported cadence', 'title set correctly');
+    OAD._assertEqual(OAD.DB.cadences[0].next_due, '2026-08-01', 'next_due set correctly');
+    OAD._assert(OAD.DB.cadences[0].id != null, 'new cadence gets a real assigned id, not a fabricated one from the import row');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('applyImport: updates an existing cadence\'s next_due via import (Cadence Export/Import spec)', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    const existing = { id: 5003, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-01', notes: '', consequences: '' };
+    OAD.DB.cadences = [existing];
+    const incoming = { id: 5003, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-22', notes: '', consequences: '' };
+    const results = { create: [], update: [], cadences: { create: [], update: [{ incoming: incoming, existing: existing }] } };
+    const result = OAD.applyImport(results, [], [{ incoming: incoming, existing: existing }]);
+    OAD._assertEqual(result.cadences_updated, 1, 'one cadence updated');
+    OAD._assertEqual(OAD.getCadence(5003).next_due, '2026-07-22', 'next_due patched via import');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('applyImport: cadence update only patches actually-changed fields', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    const existing = { id: 5004, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: '' };
+    OAD.DB.cadences = [existing];
+    const incoming = { id: 5004, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: 'now set' };
+    const results = { create: [], update: [], cadences: { create: [], update: [] } };
+    OAD.applyImport(results, [], [{ incoming: incoming, existing: existing }]);
+    OAD._assertEqual(OAD.getCadence(5004).consequences, 'now set', 'changed field patched');
+    OAD._assertEqual(OAD.getCadence(5004).notes, 'keep me', 'unchanged field left alone');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('parseImportFile: deleted_cadence_ids queues matching cadences for delete, ignores unknown ids', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    OAD.DB.cadences = [{ id: 5005, title: 'Duplicate cadence to remove', recurrence: 'monthly-15th' }];
+    const json = JSON.stringify({ threads: [], cadences: [], deleted_cadence_ids: [5005, 999999] });
+    const results = OAD.parseImportFile(json);
+    OAD._assertEqual(results.cadences.delete.length, 1, 'only the matching cadence is queued for delete');
+    OAD._assertEqual(results.cadences.delete[0].id, 5005, 'queued delete is the correct cadence');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
+OAD.test('applyImport: deletes confirmed cadences, leaves unconfirmed ones alone', function () {
+  const saved = OAD.DB.cadences.slice();
+  try {
+    const toDelete = { id: 5006, title: 'Duplicate to delete', recurrence: 'monthly-15th' };
+    const toKeep   = { id: 5007, title: 'Not confirmed, should survive', recurrence: 'monthly-15th' };
+    OAD.DB.cadences = [toDelete, toKeep];
+    const results = { create: [], update: [], cadences: { create: [], update: [], delete: [toDelete, toKeep] } };
+    const result = OAD.applyImport(results, [], [], [toDelete]);
+    OAD._assertEqual(result.cadences_deleted, 1, 'one cadence deleted');
+    OAD._assert(!OAD.getCadence(5006), 'confirmed cadence is actually removed from DB.cadences');
+    OAD._assert(!!OAD.getCadence(5007), 'unconfirmed cadence is left untouched');
+  } finally {
+    OAD.DB.cadences = saved;
+  }
+});
+
 OAD.test('makeThread: parent_uuid defaults to null', function () {
   const t = OAD.makeThread({ title: 'Child candidate' });
   OAD._assert(Object.prototype.hasOwnProperty.call(t, 'parent_uuid'), 'parent_uuid field exists');
@@ -1727,6 +1847,31 @@ OAD.test('_normalizeDB: backfills days_of_week on cadences that predate the fiel
   OAD._normalizeDB();
   OAD._assert(Array.isArray(OAD.DB.cadences[0].days_of_week), 'legacy cadence should get a days_of_week array backfilled');
   OAD.DB.cadences = saved;
+});
+
+OAD.test('_normalizeDB: normalizes cadence life_area the same way threads already do', function () {
+  const saved = OAD.DB.cadences.slice();
+  OAD.DB.cadences = [
+    { id: 999998, title: 'Bad casing cadence', recurrence: 'weekly', life_area: 'Finance' },
+    { id: 999997, title: 'Lowercase cadence',  recurrence: 'weekly', life_area: 'finances' }
+  ];
+  OAD._normalizeDB();
+  OAD._assertEqual(OAD.getCadence(999998).life_area, 'Finances', "'Finance' normalizes to canonical 'Finances'");
+  OAD._assertEqual(OAD.getCadence(999997).life_area, 'Finances', "'finances' normalizes to canonical 'Finances'");
+  OAD.DB.cadences = saved;
+});
+
+OAD.test('addCadence: normalizes life_area on create', function () {
+  const c = OAD.addCadence(OAD.makeCadence({ title: 'New area test cadence', life_area: 'finance' }));
+  OAD._assertEqual(c.life_area, 'Finances', 'addCadence normalizes life_area to canonical form');
+  OAD.deleteCadence(c.id);
+});
+
+OAD.test('updateCadence: normalizes life_area on update', function () {
+  const c = OAD.addCadence(OAD.makeCadence({ title: 'Update area test cadence' }));
+  OAD.updateCadence(c.id, { life_area: 'Finance' });
+  OAD._assertEqual(OAD.getCadence(c.id).life_area, 'Finances', 'updateCadence normalizes life_area to canonical form');
+  OAD.deleteCadence(c.id);
 });
 
 OAD.test('cadenceDoneThisPeriod: identifies if a cadence has been completed in the current period', function () {

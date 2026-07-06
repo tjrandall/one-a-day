@@ -293,6 +293,7 @@ OAD.makeCadence = function (overrides) {
 
 OAD.addCadence = function (cadence) {
   cadence.id = OAD.nextCadenceId();
+  cadence.life_area = OAD.normalizeLifeArea(cadence.life_area);
   OAD.DB.cadences.push(cadence);
   OAD.saveDB();
   return cadence;
@@ -306,6 +307,7 @@ OAD.updateCadence = function (id, patch) {
   const c = OAD.getCadence(id);
   if (!c) return null;
   Object.assign(c, patch);
+  c.life_area = OAD.normalizeLifeArea(c.life_area);
   OAD.saveDB();
   return c;
 };
@@ -500,10 +502,37 @@ OAD.parseImportFile = function (jsonString) {
     const parsed = JSON.parse(jsonString);
     const rows = Array.isArray(parsed) ? parsed : (parsed.threads || []);
     if (!Array.isArray(rows)) return { error: 'Invalid format: expected a threads array.' };
-    const deletedUuids     = Array.isArray(parsed.deleted_uuids)      ? parsed.deleted_uuids      : [];
-    const deletedEdgeUuids = Array.isArray(parsed.deleted_edge_uuids) ? parsed.deleted_edge_uuids : [];
-    const importEdges      = Array.isArray(parsed.edges)              ? parsed.edges              : [];
+    const deletedUuids       = Array.isArray(parsed.deleted_uuids)         ? parsed.deleted_uuids         : [];
+    const deletedEdgeUuids   = Array.isArray(parsed.deleted_edge_uuids)    ? parsed.deleted_edge_uuids    : [];
+    const importEdges        = Array.isArray(parsed.edges)                 ? parsed.edges                 : [];
+    const cadenceRows        = Array.isArray(parsed.cadences)              ? parsed.cadences              : [];
+    const deletedCadenceIds  = Array.isArray(parsed.deleted_cadence_ids)   ? parsed.deleted_cadence_ids   : [];
     const results = { create: [], update: [], close: [], invalid: [], edges: importEdges, deletedEdgeUuids: deletedEdgeUuids };
+
+    // Cadences match on `id` — their real, stable identifier (cadences have no uuid field,
+    // unlike threads). A row with no id (or an id not found locally) is a new cadence, same
+    // rule as threads: never fabricate an identity that isn't already real.
+    const cadences = { create: [], update: [], invalid: [], delete: [] };
+    cadenceRows.forEach(function (row) {
+      if (!row.title || typeof row.title !== 'string') {
+        cadences.invalid.push(row);
+        return;
+      }
+      var existingCadence = (row.id != null) ? OAD.getCadence(row.id) : null;
+      if (existingCadence) {
+        cadences.update.push({ incoming: row, existing: existingCadence });
+      } else {
+        cadences.create.push(row);
+      }
+    });
+    // Cadences are permanently removed (spliced), unlike threads which are closed —
+    // there's no "reopen a deleted cadence" concept — so this is a real deletion,
+    // and the preview step requires explicit per-row confirmation same as updates.
+    deletedCadenceIds.forEach(function (id) {
+      const existing = OAD.getCadence(id);
+      if (existing) cadences.delete.push(existing);
+    });
+    results.cadences = cadences;
     // Collect threads to close from deleted_uuids
     deletedUuids.forEach(function (uuid) {
       const existing = OAD.getThreadByUUID(uuid);
@@ -548,8 +577,14 @@ OAD._IMPORT_FIELDS = [
   'dormant_trigger', 'user_action_complete'
 ];
 
-OAD.applyImport = function (results, confirmedUpdates) {
+// Fields synced on cadence import — mirrors makeCadence's full shape (data.js:280-292)
+OAD._CADENCE_IMPORT_FIELDS = [
+  'title', 'life_area', 'recurrence', 'days_of_week', 'last_completed', 'next_due', 'notes', 'consequences'
+];
+
+OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, confirmedCadenceDeletes) {
   var created = 0, updated = 0, closed = 0;
+  var cadencesCreated = 0, cadencesUpdated = 0, cadencesDeleted = 0;
 
   // Close threads flagged in deleted_uuids
   (results.close || []).forEach(function (existing) {
@@ -658,8 +693,45 @@ OAD.applyImport = function (results, confirmedUpdates) {
     }
   });
 
+  ((results.cadences && results.cadences.create) || []).forEach(function (row) {
+    OAD.addCadence(OAD.makeCadence({
+      title:          row.title,
+      life_area:      row.life_area      || 'finances',
+      recurrence:     row.recurrence     || 'monthly-1st',
+      days_of_week:   row.days_of_week   || [],
+      last_completed: row.last_completed || null,
+      next_due:       row.next_due       || null,
+      notes:          row.notes          || '',
+      consequences:   row.consequences   || ''
+    }));
+    cadencesCreated++;
+  });
+
+  (confirmedCadenceUpdates || []).forEach(function (item) {
+    const existing = OAD.getCadence(item.incoming.id) || item.existing;
+    const row      = item.incoming;
+    const patch    = {};
+    OAD._CADENCE_IMPORT_FIELDS.forEach(function (field) {
+      if (row[field] !== undefined && JSON.stringify(row[field]) !== JSON.stringify(existing[field])) {
+        patch[field] = row[field];
+      }
+    });
+    if (Object.keys(patch).length) OAD.updateCadence(existing.id, patch);
+    cadencesUpdated++;
+  });
+
+  (confirmedCadenceDeletes || []).forEach(function (existing) {
+    if (OAD.getCadence(existing.id)) {
+      OAD.deleteCadence(existing.id);
+      cadencesDeleted++;
+    }
+  });
+
   OAD.saveDB();
-  return { created: created, updated: updated, closed: closed, edges_merged: edgesMerged };
+  return {
+    created: created, updated: updated, closed: closed, edges_merged: edgesMerged,
+    cadences_created: cadencesCreated, cadences_updated: cadencesUpdated, cadences_deleted: cadencesDeleted
+  };
 };
 
 OAD.getDailyToat = function () {
@@ -787,14 +859,32 @@ OAD.exportThreads = function () {
     });
   });
 
+  // Cadences are a function of threads, not a parallel system — Export/Import's "ground
+  // truth for all threads, no exceptions" promise has to actually cover them too.
+  const cadences = (OAD.DB.cadences || []).map(function (c) {
+    return {
+      id:             c.id,
+      title:          c.title,
+      life_area:      c.life_area,
+      recurrence:     c.recurrence,
+      days_of_week:   c.days_of_week   || [],
+      last_completed: c.last_completed || null,
+      next_due:       c.next_due       || null,
+      notes:          c.notes          || '',
+      consequences:   c.consequences   || ''
+    };
+  });
+
   return JSON.stringify({
     exported_at:        new Date().toISOString(),
     exported_by:        OAD._userId || 'local',
     thread_count:       threads.length,
     edge_count:         edges.length,
-    note:               'Export includes thread data and graph edges. Evolution history, AI insights, and persona data are omitted.',
+    cadence_count:      cadences.length,
+    note:               'Export includes thread data, graph edges, and cadences. Evolution history, AI insights, and persona data are omitted.',
     threads:            threads,
     edges:              edges,
+    cadences:           cadences,
     deleted_edge_uuids: []
   }, null, 2);
 };
@@ -917,9 +1007,12 @@ OAD._normalizeDB = function () {
       if (!c.uuid) c.uuid = OAD._generateUUID();
     });
   });
-  // Backfill days_of_week for cadences created before weekly-days support existed
+  // Backfill days_of_week for cadences created before weekly-days support existed,
+  // and normalize life_area the same way threads already do (cadences were missed
+  // originally, which let 'Finance'/'finances' diverge into apparent duplicates).
   OAD.DB.cadences.forEach(function (c) {
     if (!Array.isArray(c.days_of_week)) c.days_of_week = [];
+    c.life_area = OAD.normalizeLifeArea(c.life_area);
   });
 };
 

@@ -882,7 +882,7 @@ OAD._readCadenceForm = function (base) {
 };
 
 OAD.openNewCadenceModal = function () {
-  const blank = OAD.makeCadence({ life_area: 'Finance' });
+  const blank = OAD.makeCadence();
   OAD.openModal(`
     <h2>New Cadence</h2>
     ${OAD._cadenceForm(blank)}
@@ -1103,8 +1103,8 @@ OAD.openImportModal = function () {
   OAD.openModal(`
     <h2>Import Threads</h2>
     <p class="text-muted text-sm" style="margin-bottom:14px">
-      Accepts the One-A-Day export JSON format. New threads are created immediately.
-      Threads matched by title will show a diff — you confirm before anything changes.
+      Accepts the One-A-Day export JSON format. New threads and cadences are created immediately.
+      Threads matched by title, and cadences matched by id, will show a diff — you confirm before anything changes.
       Evolution logs are always appended, never overwritten.
     </p>
     <div class="field">
@@ -1157,7 +1157,7 @@ OAD._previewImport = function (jsonString) {
         : '<div class="text-muted text-sm">No field changes (evolution log may append)</div>';
       return '<div class="import-row import-update">' +
         '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-          '<input type="checkbox" class="import-confirm-cb" data-idx="' + idx + '" ' +
+          '<input type="checkbox" class="import-confirm-cb" data-type="thread" data-idx="' + idx + '" ' +
             'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
           '<div>' +
             '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + OAD.esc(item.incoming.title) + '</div>' +
@@ -1172,7 +1172,62 @@ OAD._previewImport = function (jsonString) {
     html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Skipped (' + invalid.length + ') — missing title</div>';
   }
 
-  if (!create.length && !update.length) {
+  const cadenceResults = results.cadences || { create: [], update: [], invalid: [], delete: [] };
+  const cadenceCreate  = cadenceResults.create || [];
+  const cadenceUpdate  = cadenceResults.update || [];
+  const cadenceDelete  = cadenceResults.delete || [];
+
+  if (cadenceCreate.length) {
+    html += '<div class="import-section-label" style="margin-top:12px">New cadences (' + cadenceCreate.length + ') — will be created</div>';
+    html += cadenceCreate.map(function (r) {
+      return '<div class="import-row import-new">+ ' + OAD.esc(r.title) + '</div>';
+    }).join('');
+  }
+
+  if (cadenceUpdate.length) {
+    html += '<div class="import-section-label" style="margin-top:12px">Existing cadences (' + cadenceUpdate.length + ') — review changes</div>';
+    html += cadenceUpdate.map(function (item, idx) {
+      const diffs = OAD._diffCadenceImportItem(item);
+      const diffHtml = diffs.length
+        ? diffs.map(function (d) {
+            return '<div class="import-diff-line">' +
+              '<span class="import-diff-field">' + OAD.esc(d.field) + '</span> ' +
+              '<span class="import-diff-old">' + OAD.esc(d.old || '—') + '</span>' +
+              ' → <span class="import-diff-new">' + OAD.esc(d.new_ || '—') + '</span>' +
+            '</div>';
+          }).join('')
+        : '<div class="text-muted text-sm">No field changes</div>';
+      return '<div class="import-row import-update">' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
+          '<input type="checkbox" class="import-confirm-cb" data-type="cadence" data-idx="' + idx + '" ' +
+            'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
+          '<div>' +
+            '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + OAD.esc(item.incoming.title) + '</div>' +
+            diffHtml +
+          '</div>' +
+        '</label>' +
+      '</div>';
+    }).join('');
+  }
+
+  if (cadenceDelete.length) {
+    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Cadences to delete (' + cadenceDelete.length + ') — cannot be undone</div>';
+    html += cadenceDelete.map(function (c, idx) {
+      return '<div class="import-row import-delete">' +
+        '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
+          '<input type="checkbox" class="import-confirm-cb" data-type="cadence-delete" data-idx="' + idx + '" ' +
+            'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
+          '<span>' + OAD.esc(c.title) + '</span>' +
+        '</label>' +
+      '</div>';
+    }).join('');
+  }
+
+  if (cadenceResults.invalid && cadenceResults.invalid.length) {
+    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Cadences skipped (' + cadenceResults.invalid.length + ') — missing title</div>';
+  }
+
+  if (!create.length && !update.length && !cadenceCreate.length && !cadenceUpdate.length && !cadenceDelete.length) {
     html = '<p class="text-muted text-sm">Nothing to import.</p>';
   }
 
@@ -1198,17 +1253,37 @@ OAD._diffImportItem = function (item) {
   return diffs;
 };
 
+OAD._diffCadenceImportItem = function (item) {
+  const fields = ['title', 'recurrence', 'next_due', 'last_completed', 'notes', 'consequences'];
+  const diffs = [];
+  fields.forEach(function (f) {
+    const incoming = item.incoming[f] != null ? String(item.incoming[f]) : '';
+    const existing = item.existing[f]  != null ? String(item.existing[f])  : '';
+    if (incoming && incoming !== existing) {
+      diffs.push({ field: f, old: existing, new_: incoming });
+    }
+  });
+  return diffs;
+};
+
 OAD._confirmImport = function () {
   if (!OAD._pendingImport) return;
   const checkboxes = document.querySelectorAll('.import-confirm-cb');
   const confirmedUpdates = [];
+  const confirmedCadenceUpdates = [];
+  const confirmedCadenceDeletes = [];
   checkboxes.forEach(function (cb) {
-    if (cb.checked) {
-      const idx = parseInt(cb.dataset.idx, 10);
+    if (!cb.checked) return;
+    const idx = parseInt(cb.dataset.idx, 10);
+    if (cb.dataset.type === 'cadence') {
+      confirmedCadenceUpdates.push(OAD._pendingImport.cadences.update[idx]);
+    } else if (cb.dataset.type === 'cadence-delete') {
+      confirmedCadenceDeletes.push(OAD._pendingImport.cadences.delete[idx]);
+    } else {
       confirmedUpdates.push(OAD._pendingImport.update[idx]);
     }
   });
-  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates);
+  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates, confirmedCadenceUpdates, confirmedCadenceDeletes);
   OAD._pendingImport = null;
   const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
   const cheCount = typeof OAD.runCHE === 'function' ? OAD.runCHE() : 0;
@@ -1216,6 +1291,13 @@ OAD._confirmImport = function () {
   OAD.closeModal();
   OAD.refreshActiveView();
   var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
+  if (result.cadences_created > 0 || result.cadences_updated > 0 || result.cadences_deleted > 0) {
+    msg += ', ' + result.cadences_created + ' cadence' + (result.cadences_created === 1 ? '' : 's') + ' created, ' +
+      result.cadences_updated + ' cadence' + (result.cadences_updated === 1 ? '' : 's') + ' updated';
+    if (result.cadences_deleted > 0) {
+      msg += ', ' + result.cadences_deleted + ' cadence' + (result.cadences_deleted === 1 ? '' : 's') + ' deleted';
+    }
+  }
   if (result.edges_merged > 0) msg += ', ' + result.edges_merged + ' edges restored';
   if (adeCount > 0) msg += ', ' + adeCount + ' AI edges inferred';
   if (cheCount > 0) msg += '. ⚠ ' + cheCount + ' configuration issue' + (cheCount === 1 ? '' : 's') + ' found — review in Health Panel';
