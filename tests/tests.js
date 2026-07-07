@@ -2828,6 +2828,37 @@ OAD.test('quickAddThread: trims whitespace and rejects empty/whitespace-only inp
   OAD._assertEqual(t.title, 'padded title', 'title should be trimmed');
 });
 
+OAD.test('openPushbackWizard/_confirmPushback: survives apostrophes in thread data (regression — "Cannot move \'\'" bug)', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Apostrophe regression thread', status: 'open', priority: 'low', next_action_date: '2026-07-01' }));
+  try {
+    // Old bug: this data was JSON-stringified, encodeURIComponent'd (which leaves ' unescaped),
+    // then embedded inside a single-quoted onclick="..." attribute — the apostrophe below broke
+    // the generated inline handler's JS syntax and the Save button silently did nothing.
+    const data = Object.assign({}, t, {
+      next_action: "Reference Kevin's email and the 2-week extension Cornell granted.",
+      date_push_count: 3
+    });
+    const notes = ['Date pushed back to 2026-07-10'];
+
+    OAD.openPushbackWizard(t.id, data, notes);
+    OAD._assertEqual(OAD._pendingPushback.data.next_action, data.next_action, 'pending data holds the apostrophe-containing field intact, not re-encoded into markup');
+
+    const modalHtml = document.getElementById('modal-overlay').innerHTML;
+    OAD._assert(modalHtml.indexOf('_confirmPushback()') !== -1, 'Save button wires to the no-arg handler — no encoded data round-tripped through the attribute');
+
+    document.getElementById('f-pushback-reason').value = 'The real reason';
+    OAD._confirmPushback();
+
+    const saved = OAD.getThread(t.id);
+    OAD._assertEqual(saved.next_action, data.next_action, "apostrophe-containing next_action saved correctly, not truncated");
+    OAD._assertEqual(saved.current_assumption, 'The real reason', 'pushback reason saved');
+    OAD._assert(!OAD._pendingPushback, 'pending pushback cleared after confirm');
+  } finally {
+    OAD.closeModal();
+    OAD.deleteThread(t.id);
+  }
+});
+
 OAD.test('_enableQuickAdd: enables the quick-add input (guards against pre-auth capture loss)', function () {
   const input = document.getElementById('quick-add-input');
   if (!input) return; // not present in this DOM context (e.g. non-browser test runner) — nothing to check

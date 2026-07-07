@@ -338,8 +338,12 @@ OAD._deleteThread = function (id) {
 };
 
 OAD.openPushbackWizard = function(id, data, notes) {
-  const encodedData = encodeURIComponent(JSON.stringify(data));
-  const encodedNotes = encodeURIComponent(JSON.stringify(notes));
+  // Pending data lives on OAD, not round-tripped through an inline onclick attribute —
+  // encodeURIComponent leaves apostrophes un-escaped (they're in its unreserved set), so
+  // any thread text field containing one (e.g. "Kevin's email") broke out of the
+  // single-quoted onclick string and silently corrupted the handler's JS. Same pattern
+  // as OAD._pendingImport.
+  OAD._pendingPushback = { id: id, data: data, notes: notes };
   OAD.openModal(`
     <h2>Coach Pushback</h2>
     <div class="field" style="color: var(--critical); margin-bottom: 16px;">
@@ -351,18 +355,21 @@ OAD.openPushbackWizard = function(id, data, notes) {
       <textarea id="f-pushback-reason" placeholder="What's the real truth here?"></textarea>
     </div>
     <div class="modal-footer">
-      <button class="secondary" onclick="OAD.openEditModal(${id})">Cancel Date Change</button>
-      <button onclick="OAD._confirmPushback(${id}, '${encodedData}', '${encodedNotes}')">Acknowledge & Save</button>
+      <button class="secondary" onclick="OAD._pendingPushback=null; OAD.openEditModal(${id})">Cancel Date Change</button>
+      <button onclick="OAD._confirmPushback()">Acknowledge & Save</button>
     </div>
   `);
 };
 
-OAD._confirmPushback = function(id, encodedData, encodedNotes) {
-  const data = JSON.parse(decodeURIComponent(encodedData));
-  const notes = JSON.parse(decodeURIComponent(encodedNotes));
+OAD._confirmPushback = function() {
+  if (!OAD._pendingPushback) return;
+  const id = OAD._pendingPushback.id;
+  const data = OAD._pendingPushback.data;
+  const notes = OAD._pendingPushback.notes;
   const reason = document.getElementById('f-pushback-reason')?.value.trim();
   if (!reason) { alert('Please provide the real reason.'); return; }
-  
+  OAD._pendingPushback = null;
+
   notes.push(`Coach Pushback Answered: ${reason}`);
   data.current_assumption = reason;
   data.assumption_verified = false;
