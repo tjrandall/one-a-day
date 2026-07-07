@@ -3333,6 +3333,93 @@ OAD.test('_saveEditThread: reopening a closed thread does not trigger the closur
   }
 });
 
+// ── Tests: OAD.Due.buckets (Temporal Mutually Exclusive Buckets) ──────
+
+OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate (mutually exclusive)', function () {
+  const d = function (offset) {
+    const dt = new Date(); dt.setDate(dt.getDate() + offset);
+    return dt.toISOString().slice(0, 10);
+  };
+  
+  const todayStr = d(0);
+  const in7Str = d(7);
+  
+  // 1. Overdue: next_action_date is before today, or today but overdue by time
+  const tOverdue1 = OAD.makeThread({ title: 'Overdue yesterday', next_action_date: d(-1) });
+  const tOverdue2 = OAD.makeThread({ title: 'Overdue today by time', next_action_date: todayStr, next_action_time: '00:01' }); 
+  
+  // 2. Today: next_action_date is today (no time or future time, we mock isActionOverdue to return false for this test)
+  const tToday = OAD.makeThread({ title: 'Due today', next_action_date: todayStr, next_action_time: '23:59' });
+  
+  // 3. Week: strictly after today and <= in7Str
+  const tWeek1 = OAD.makeThread({ title: 'Due tomorrow', next_action_date: d(1) });
+  const tWeek7 = OAD.makeThread({ title: 'Due day 7', next_action_date: in7Str });
+  
+  // 4. No date or beyond week
+  const tNoDate = OAD.makeThread({ title: 'No date', next_action_date: null });
+  const tFar = OAD.makeThread({ title: 'Due day 8', next_action_date: d(8) });
+
+  const threads = [tOverdue1, tOverdue2, tToday, tWeek1, tWeek7, tNoDate, tFar];
+
+  // We need to mock isActionOverdue since it depends on the actual current time.
+  const origIsActionOverdue = OAD.isActionOverdue;
+  try {
+    OAD.isActionOverdue = function(t) {
+      if (t === tOverdue1 || t === tOverdue2) return true;
+      return false;
+    };
+    
+    const buckets = OAD.Due.buckets(threads, todayStr, in7Str);
+    
+    OAD._assertEqual(buckets.overdue.length, 2, 'overdue bucket has 2 threads');
+    OAD._assert(buckets.overdue.includes(tOverdue1) && buckets.overdue.includes(tOverdue2), 'overdue bucket contains correct threads');
+    
+    OAD._assertEqual(buckets.today.length, 1, 'today bucket has 1 thread');
+    OAD._assert(buckets.today.includes(tToday), 'today bucket contains correct thread');
+    
+    OAD._assertEqual(buckets.week.length, 2, 'week bucket has 2 threads');
+    OAD._assert(buckets.week.includes(tWeek1) && buckets.week.includes(tWeek7), 'week bucket contains correct threads');
+    
+    OAD._assertEqual(buckets.noDate.length, 2, 'nodate bucket has 2 threads (no date + far)');
+    OAD._assert(buckets.noDate.includes(tNoDate) && buckets.noDate.includes(tFar), 'nodate bucket contains correct threads');
+    
+  } finally {
+    OAD.isActionOverdue = origIsActionOverdue;
+  }
+});
+
+OAD.test('Due.buckets: ensures strict mutual exclusivity (no double counting)', function () {
+  const d = function (offset) {
+    const dt = new Date(); dt.setDate(dt.getDate() + offset);
+    return dt.toISOString().slice(0, 10);
+  };
+  
+  const todayStr = d(0);
+  const in7Str = d(7);
+  
+  // A thread that might theoretically be caught in multiple buckets if conditions overlap
+  const tricky = OAD.makeThread({ title: 'Tricky today overdue', next_action_date: todayStr });
+  
+  const origIsActionOverdue = OAD.isActionOverdue;
+  try {
+    // If it's overdue, it should ONLY be in overdue, not in today.
+    OAD.isActionOverdue = function(t) { return true; };
+    const bucketsOverdue = OAD.Due.buckets([tricky], todayStr, in7Str);
+    OAD._assertEqual(bucketsOverdue.overdue.length, 1, 'tricky is overdue');
+    OAD._assertEqual(bucketsOverdue.today.length, 0, 'tricky is NOT in today when overdue');
+    OAD._assertEqual(bucketsOverdue.week.length, 0, 'tricky is NOT in week when overdue');
+    
+    // If it's not overdue, it should ONLY be in today.
+    OAD.isActionOverdue = function(t) { return false; };
+    const bucketsToday = OAD.Due.buckets([tricky], todayStr, in7Str);
+    OAD._assertEqual(bucketsToday.overdue.length, 0, 'tricky is NOT in overdue');
+    OAD._assertEqual(bucketsToday.today.length, 1, 'tricky IS in today');
+    OAD._assertEqual(bucketsToday.week.length, 0, 'tricky is NOT in week');
+  } finally {
+    OAD.isActionOverdue = origIsActionOverdue;
+  }
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();

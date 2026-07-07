@@ -1,167 +1,36 @@
 window.OAD = window.OAD || {};
 
-// _suppressSideEffects: true on calls from getDayLoad()/calculateCriticalPath() — skips
-// the day-load multiplier and cycle penalty (so they're only ever applied once, for the
-// top-level thread being displayed) and skips transitive blocker resolution, so those two
-// callers get this thread's own local weight, not a blocker-boosted one.
-// _visited: internal — a plain object of visited uuids, threaded through pressure()'s own
-// recursive blocker lookups (see the transitive block below) purely as a cycle guard. Those
-// recursive calls deliberately do NOT set _suppressSideEffects — a blocker's day-load and
-// cycle penalty should count too, so the thread it blocks inherits that blocker's real,
-// full pressure (matching what the blocker would show anywhere else in the UI), not a
-// truncated version of it.
+/**
+ * Calculates and returns the pressure score for a given thread.
+ * Delegates to the Thread domain object.
+ */
 OAD.pressure = function (thread, _suppressSideEffects, _visited) {
-  if (thread.status === 'dormant') return 0;
-  if (thread.status === 'inbox') return 0; // uncaptured/unreviewed — not yet real work, stays out of pressure-sorted views
-
-  var score = 0;
-
-  // Status
-  if      (thread.status === 'stalled')  score += 30;
-  else if (thread.status === 'waiting')  score += 15;
-
-  // Unverified assumption
-  if (!thread.assumption_verified && thread.current_assumption) score += 20;
-
-  // Priority
-  if      (thread.priority && thread.priority.toLowerCase() === 'critical') score += 30;
-  else if (thread.priority && thread.priority.toLowerCase() === 'high')     score += 20;
-  else if (thread.priority && thread.priority.toLowerCase() === 'medium')   score += 10;
-
-  // Cycle Penalty: +25 if this node is part of a cycle
-  if (!_suppressSideEffects) {
-    var cycles = OAD.detectCycles();
-    var inCycle = cycles.some(function(cycle) { return cycle.indexOf(thread.id) !== -1; });
-    if (inCycle) {
-      score += 25;
-    }
+  if (!thread) return 0;
+  if (typeof thread.getPressure === 'function') {
+    return thread.getPressure(_suppressSideEffects, _visited);
   }
-
-  // Contingency proximity — quadratic over 14-day window.
-  // Produces a smooth 0→25 curve as the date approaches instead of step thresholds.
-  if (thread.contingency_trigger_date) {
-    var ctgToday = new Date();
-    ctgToday.setHours(0, 0, 0, 0);
-    var ctg = new Date(thread.contingency_trigger_date + 'T00:00:00');
-    var ctgDays = Math.ceil((ctg - ctgToday) / 86400000);
-    var ctgRatio = Math.max(0, Math.min(1, 1 - ctgDays / 14));
-    score += Math.round(ctgRatio * ctgRatio * 25);
-  }
-
-  // Deadline proximity — quadratic continuous slope.
-  // urgencyRatio² × 40 base, amplified ×1.5 when off-track, +10 when behind by 2+ sessions.
-  // totalDays is effort-derived (sessions/week → weeks) or falls back to a 90-day window.
-  if (thread.deadline) {
-    var ds = OAD.deadlineState(thread);
-    if (ds) {
-      var totalDays = 90;
-      if (thread.effortEstimate && thread.weeklyCommitment) {
-        totalDays = Math.round((thread.effortEstimate / thread.weeklyCommitment) * 7);
-      }
-      totalDays = Math.max(totalDays, 1);
-      var dlRatio = Math.max(0, Math.min(1, 1 - ds.daysRemaining / totalDays));
-      var dp = dlRatio * dlRatio * 40;
-      if (!ds.onTrack) dp *= 1.5;
-      if (ds.behindBy >= 2) dp += 10;
-      score += Math.round(dp);
-    }
-  }
-
-  // Day-load multiplier
-  if (!_suppressSideEffects && thread.next_action_date) {
-    if (OAD.getDayLoad(thread.next_action_date) > 150) score += 12;
-  }
-
-  // Overdue next_action_date — time-aware via isActionOverdue/getOverdueDays (see above)
-  if (OAD.isActionOverdue(thread)) {
-    score += Math.min(40, OAD.getOverdueDays(thread) * 5); // +5 per day-equivalent overdue, max 40
-  }
-
-  // Escalation: Shift Collision
-  if (thread.next_action_date && window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay) {
-    if (OAD.isOffDay(thread.next_action_date, OAD._demoRole)) {
-      score += 40;
-    }
-  }
-
-  // Escalation: CIC Discharge Readiness (-5d rule)
-  if (window.OAD && window.OAD.CIC && window.OAD.CIC.checkDischargeReadiness) {
-    var cicScore = window.OAD.CIC.checkDischargeReadiness(thread);
-    if (cicScore > 0) {
-      score += cicScore;
-      if (!thread.focusReason) thread.focusReason = '⚠ MISSING DISCHARGE LOC';
-      else thread.focusReason += ' · ⚠ MISSING DISCHARGE LOC';
-    }
-  }
-
-  var capped = Math.min(score, 100);
-  if (thread.status === 'waiting' && thread.user_action_complete) {
-    capped = Math.round(capped * 0.35);
-  }
-
-  // Transitive blocking propagation: a thread's effective pressure is at least as high
-  // as the most urgent thing currently blocking it — walks the full blockedBy closure
-  // (not just one hop), since real blocking chains run several edges deep. _visited
-  // guards against cycles (detectCycles() already penalizes cycles separately above;
-  // this just has to not infinite-loop through one). Runs on normal top-level calls
-  // (_suppressSideEffects falsy) AND on our own recursive blocker lookups, which are
-  // identifiable by a truthy _visited even though they pass _suppressSideEffects=false;
-  // skipped only for getDayLoad/calculateCriticalPath's internal calls, which pass
-  // _suppressSideEffects=true with no _visited.
-  if (!_suppressSideEffects || _visited) {
-    var visited = _visited || {};
-    visited[thread.uuid] = true;
-    var ctx = OAD.getGraphContext(thread.id);
-    var maxBlockerPressure = 0;
-    (ctx.blockedBy || []).forEach(function (blocker) {
-      if (visited[blocker.uuid]) return; // cycle guard — don't recurse back through a visited node
-      var bp = OAD.pressure(blocker, false, visited); // full pressure, not suppressed — see header comment
-      if (bp > maxBlockerPressure) maxBlockerPressure = bp;
-    });
-    if (maxBlockerPressure > capped) capped = maxBlockerPressure;
-  }
-
-  return capped;
+  return new window.OAD.Models.Thread(thread).getPressure(_suppressSideEffects, _visited);
 };
 
 OAD.getEisenhowerQuadrant = function (thread) {
-  const isImportant = thread.priority === 'critical' || thread.priority === 'high';
-  let isUrgent = false;
-
-  const todayStr = OAD.todayStr();
-  if (thread.next_action_date && thread.next_action_date <= todayStr) {
-    isUrgent = true;
+  if (!thread) return 'Q4';
+  if (typeof thread.getEisenhowerQuadrant === 'function') {
+    return thread.getEisenhowerQuadrant();
   }
-
-  if (!isUrgent && thread.deadline) {
-    const ds = OAD.deadlineState(thread);
-    if (ds && (!ds.onTrack || ds.daysRemaining <= 7)) {
-      isUrgent = true;
-    }
-  }
-
-  if (!isUrgent && OAD.pressure(thread) >= 60) {
-    isUrgent = true;
-  }
-
-  if (isImportant && isUrgent) return 'Q1';
-  if (isImportant && !isUrgent) return 'Q2';
-  if (!isImportant && isUrgent) return 'Q3';
-  return 'Q4';
+  return new window.OAD.Models.Thread(thread).getEisenhowerQuadrant();
 };
 
 OAD.suggestArea = function (title) {
   const lower = title.toLowerCase();
-  if (/job board|job search|job hunt|weekly job|apply to/.test(lower)) return 'Job Search';
-  if (/job|work|career|employ|hire|interview|resume/.test(lower)) return 'Career';
-  if (/health|doctor|medical|therapy|mental|physical/.test(lower)) return 'Health';
-  if (/\bfamily\b|parent|sibling|spouse|\bkid\b|child|\bmom\b|\bdad\b/.test(lower)) return 'Family';
-  if (/money|finance|bank|debt|loan|tax|budget|invest/.test(lower)) return 'Finances';
-  if (/friend|partner|relationship|social/.test(lower)) return 'Relationships';
-  if (/school|class|degree|cert|course|learn|study/.test(lower)) return 'Education';
-  if (/house|rent|lease|mortgage|apartment|move/.test(lower)) return 'Housing';
-  if (/legal|court|law|attorney|contract|va |vr&e|vre/.test(lower)) return 'Legal';
-  return 'Personal Growth';
+  for (const area in OAD.Config.areaKeywords) {
+    const keywords = OAD.Config.areaKeywords[area];
+    for (const keyword of keywords) {
+      if (lower.indexOf(keyword.toLowerCase()) !== -1) {
+        return area;
+      }
+    }
+  }
+  return OAD.Config.defaultArea || 'Personal Growth';
 };
 
 OAD.esc = function (str) {
@@ -175,8 +44,9 @@ OAD.esc = function (str) {
 };
 
 OAD.pressureClass = function (score) {
-  if (score >= 60) return 'p-high';
-  if (score >= 30) return 'p-mid';
+  var thresholds = (OAD.Config && OAD.Config.pressureThresholds) || { high: 60, mid: 30 };
+  if (score >= thresholds.high) return 'p-high';
+  if (score >= thresholds.mid)  return 'p-mid';
   return 'p-low';
 };
 
@@ -214,9 +84,12 @@ OAD._combineDateTime = function (dateStr, timeStr) {
 // the next_action_date < todayStr string comparison duplicated across pressure(), the Daily
 // View overdue buckets, and TOAT selection, so time-of-day awareness applies everywhere at once.
 OAD.isActionOverdue = function (thread) {
+  if (thread && typeof thread.isOverdue === 'function') {
+    return thread.isOverdue();
+  }
   var dt = OAD._combineDateTime(thread.next_action_date, thread.next_action_time);
   if (!dt) return false;
-  return dt < new Date();
+  return new window.OAD.Models.Thread(thread).isOverdue();
 };
 
 // Days-overdue equivalent, for pressure/label purposes. A thread with a specific time that's
@@ -224,10 +97,11 @@ OAD.isActionOverdue = function (thread) {
 // commitment is already as serious as being "a day late," it shouldn't need to wait for the
 // calendar to flip before pressure reflects that.
 OAD.getOverdueDays = function (thread) {
-  var dt = OAD._combineDateTime(thread.next_action_date, thread.next_action_time);
-  if (!dt || dt >= new Date()) return 0;
-  var hoursOverdue = (new Date() - dt) / 3600000;
-  return Math.max(1, Math.ceil(hoursOverdue / 24));
+  if (!thread) return 0;
+  if (typeof thread.getDaysOverdue === 'function') {
+    return thread.getDaysOverdue();
+  }
+  return new window.OAD.Models.Thread(thread).getDaysOverdue();
 };
 
 // Single source of truth for which children get nested under their parent's summary badge
@@ -277,27 +151,11 @@ OAD.getFocusUUID = function (activeThreads) {
 };
 
 OAD.deadlineState = function (thread) {
-  if (!thread.deadline) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const dl = new Date(thread.deadline + 'T00:00:00');
-  const daysRemaining = Math.ceil((dl - today) / 86400000);
-  const weeksRemaining = Math.floor(Math.max(0, daysRemaining) / 7);
-
-  const effortEstimate   = thread.effortEstimate;
-  const effortLogged     = thread.effortLogged     || 0;
-  const weeklyCommitment = thread.weeklyCommitment || 1;
-
-  if (effortEstimate == null) {
-    return { daysRemaining: daysRemaining, weeksRemaining: weeksRemaining, sessionsRemaining: null, onTrack: true, behindBy: 0 };
+  if (!thread) return null;
+  if (typeof thread.getDeadlineState === 'function') {
+    return thread.getDeadlineState();
   }
-
-  const sessionsRemaining = Math.max(0, effortEstimate - effortLogged);
-  const capacity = weeksRemaining * weeklyCommitment;
-  const onTrack  = sessionsRemaining <= capacity;
-  const behindBy = onTrack ? 0 : sessionsRemaining - capacity;
-
-  return { daysRemaining: daysRemaining, weeksRemaining: weeksRemaining, sessionsRemaining: sessionsRemaining, onTrack: onTrack, behindBy: behindBy };
+  return new window.OAD.Models.Thread(thread).getDeadlineState();
 };
 
 // ── Runway Risk — convergence check ──────────────────────────────────
@@ -305,8 +163,6 @@ OAD.deadlineState = function (thread) {
 // "given where things actually sit in the pipeline, is the trajectory even mathematically
 // capable of landing before the deadline." Additive, read-only — never writes anything.
 
-// Maps a category thread's title to a runway benchmark key. Same keyword-matching style as
-// OAD.suggestArea() elsewhere in this file — simple, not graph-aware, easy to extend.
 OAD._classifyRunwayBenchmark = function (title) {
   var t = (title || '').toLowerCase();
   if (t.indexOf('federal') !== -1) return 'federal';
@@ -314,102 +170,38 @@ OAD._classifyRunwayBenchmark = function (title) {
   return null;
 };
 
-// For one track thread, finds the earliest-active-stage among its leaf application threads
-// (children reached via 'enables'). Threads with no stage set are treated as 'applied' — they
-// exist as tracked applications, so they're at least that far in, per the spec's own framing
-// ("zero applications past Applied = worst case, still at stage 1"). Closed and rejected
-// threads are excluded — they're no longer part of the active pipeline math.
 OAD._earliestActiveStage = function (trackThread) {
-  var ctx = OAD.getGraphContext(trackThread.id);
-  var applications = (ctx.enables || [])
-    .map(function (e) { return e.thread; })
-    .filter(function (t) { return t && t.status !== 'closed' && t.stage !== 'rejected'; });
-
-  if (!applications.length) {
-    // No applications at all is the same worst case as "all applications still at applied" —
-    // the spec draws no distinction between the two for calculation purposes.
-    return { stage: 'applied', stageIndex: 0, applicationCount: 0 };
-  }
-
-  var earliest = null;
-  applications.forEach(function (app) {
-    var stage = app.stage || 'applied';
-    var idx = OAD.APPLICATION_STAGES.indexOf(stage);
-    if (idx === -1) idx = 0; // unrecognized/legacy value — treat as earliest, don't crash
-    if (earliest === null || idx < earliest.stageIndex) {
-      earliest = { stage: stage, stageIndex: idx };
-    }
-  });
-  return { stage: earliest.stage, stageIndex: earliest.stageIndex, applicationCount: applications.length };
+  var track = new window.OAD.Models.Track(trackThread);
+  return track.getEarliestActiveStage();
 };
 
-// Estimates remaining weeks to outcome from the earliest-active stage, linearly discounting
-// the benchmark range by how far through the (applied -> screening -> interview -> offer)
-// pipeline that stage sits. A simplification, not a real distribution — matches the spec's
-// own "conceptual, not final formula" framing. Uses the benchmark's max (slower) estimate for
-// the at-risk trigger itself, since this is a warning signal — better to flag early.
 OAD._estimateRemainingWeeks = function (stageIndex, benchmark) {
-  var totalStages = OAD.APPLICATION_STAGES.length;
-  var remainingFraction = (totalStages - stageIndex) / totalStages;
-  return {
-    minWeeks: Math.round(benchmark.minWeeks * remainingFraction),
-    maxWeeks: Math.round(benchmark.maxWeeks * remainingFraction)
-  };
+  // Temporary track to borrow the function for testing
+  var track = new window.OAD.Models.Track({});
+  track.getEarliestActiveStage = function() { return { stageIndex: stageIndex }; };
+  return track.estimateRemainingWeeks(benchmark);
 };
 
-// Walks Full-Time Employment goal thread -> category threads (Federal/Commercial Job
-// Applications) -> track threads -> leaf application threads, using the same graph
-// (getGraphContext/'enables') the rest of the app already relies on — no new grouping field.
-// Returns null if the goal thread doesn't exist or has no deadline to converge against.
 OAD.calculateRunwayRisk = function (goalThreadId) {
   var goalThread = OAD.getThread(goalThreadId);
   if (!goalThread || !goalThread.deadline) return null;
-
-  var todayStr = OAD.todayStr();
-  var deadline = new Date(goalThread.deadline + 'T00:00:00');
-  var benchmarks = (OAD.Config && OAD.Config.runwayBenchmarks) || {};
 
   var goalCtx = OAD.getGraphContext(goalThread.id);
   var categories = (goalCtx.enables || []).map(function (e) { return e.thread; }).filter(Boolean);
 
   var tracks = [];
   categories.forEach(function (category) {
-    var benchmarkKey = OAD._classifyRunwayBenchmark(category.title);
-    var benchmark = benchmarkKey ? benchmarks[benchmarkKey] : null;
-    if (!benchmark) return; // unclassifiable category — nothing to compare against, skip rather than guess
-
     var categoryCtx = OAD.getGraphContext(category.id);
     var trackThreads = (categoryCtx.enables || []).map(function (e) { return e.thread; }).filter(Boolean);
 
-    trackThreads.forEach(function (track) {
-      if (track.status === 'closed') return;
-      var earliest = OAD._earliestActiveStage(track);
-      var remaining = OAD._estimateRemainingWeeks(earliest.stageIndex, benchmark);
-
-      var projected = new Date(todayStr + 'T00:00:00');
-      projected.setDate(projected.getDate() + remaining.maxWeeks * 7);
-      var atRisk = projected >= deadline;
-
-      var deadlineLabel = OAD.formatDate ? OAD.formatDate(goalThread.deadline) : goalThread.deadline;
-      var sentence = atRisk
-        ? 'At current pipeline stage (' + earliest.applicationCount + ' application' + (earliest.applicationCount !== 1 ? 's' : '') +
-          ', earliest at ' + earliest.stage + ') and known ' + benchmark.label + ' timelines (~' +
-          remaining.minWeeks + '-' + remaining.maxWeeks + ' weeks remaining), "' + track.title +
-          '" cannot realistically convert before ' + deadlineLabel + ' without acceleration.'
-        : track.title + ' is mathematically on track to convert before ' + deadlineLabel + ' at current pace.';
-
-      tracks.push({
-        categoryTitle: category.title,
-        trackTitle: track.title,
-        trackUuid: track.uuid,
-        benchmarkKey: benchmarkKey,
-        stage: earliest.stage,
-        applicationCount: earliest.applicationCount,
-        minWeeksRemaining: remaining.minWeeks,
-        maxWeeksRemaining: remaining.maxWeeks,
-        atRisk: atRisk,
-        sentence: sentence
-      });
+    trackThreads.forEach(function (trackObj) {
+      if (trackObj.status === 'closed') return;
+      var track = new window.OAD.Models.Track(trackObj);
+      var result = track.calculateRunwayRisk(goalThread);
+      if (result) {
+        result.categoryTitle = category.title;
+        tracks.push(result);
+      }
     });
   });
 
@@ -518,83 +310,26 @@ OAD.formatRecurrence = function (c) {
 OAD.getGraphContext = function (threadId) {
   var thread = OAD.getThread(threadId);
   if (!thread) return { blocks: [], blockedBy: [], enables: [], relates: [] };
-  var threads = OAD.DB.threads || [];
-
-  function resolveEdge(c) {
-    var target = null;
-    if (c.to_uuid) target = threads.find(function (t) { return t.uuid === c.to_uuid; }) || null;
-    return { label: c.to_label || '', uuid: c.to_uuid || null, thread: target };
+  if (typeof thread.getGraphContext === 'function') {
+    return thread.getGraphContext();
   }
-
-  var conns = thread.connections || [];
-  
-  var outboundBlocks = conns.filter(function (c) { return c.edge_type === 'blocks'; }).map(resolveEdge);
-  var inboundBlockedBy = threads.filter(function (t) {
-    if (t.id === threadId || t.status === 'closed') return false;
-    return (t.connections || []).some(function (c) {
-      return c.edge_type === 'blocked_by' && c.to_uuid === thread.uuid;
-    });
-  }).map(function (t) {
-    return { label: t.title, uuid: t.uuid, thread: t };
-  });
-
-  var outboundEnables = conns.filter(function (c) { return c.edge_type === 'enables'; }).map(resolveEdge);
-  var outboundRelates = conns.filter(function (c) { return c.edge_type === 'relates'; }).map(resolveEdge);
-
-  var outboundBlockedBy = conns.filter(function (c) { return c.edge_type === 'blocked_by'; })
-    .map(function (c) {
-      return threads.find(function (t) { return t.uuid === c.to_uuid; });
-    })
-    .filter(Boolean);
-
-  var inboundBlocks = threads.filter(function (t) {
-    if (t.id === threadId || t.status === 'closed') return false;
-    return (t.connections || []).some(function (c) {
-      return c.edge_type === 'blocks' && c.to_uuid === thread.uuid;
-    });
-  });
-
-  var blocksMap = {};
-  outboundBlocks.concat(inboundBlockedBy).forEach(function (e) {
-    if (e.uuid) blocksMap[e.uuid] = e;
-  });
-  
-  var blockedByMap = {};
-  outboundBlockedBy.concat(inboundBlocks).forEach(function (t) {
-    if (t.id) blockedByMap[t.id] = t;
-  });
-
-  return {
-    blocks:    Object.values(blocksMap),
-    enables:   outboundEnables,
-    relates:   outboundRelates,
-    blockedBy: Object.values(blockedByMap)
-  };
+  return new window.OAD.Models.Thread(thread).getGraphContext();
 };
 
 // Returns life-area heat data: [{name, count, avgPressure, stalled}] sorted by avgPressure desc.
 OAD.getLifeAreaHeat = function () {
-  var map = {};
-  (OAD.DB.threads || []).forEach(function (t) {
-    if (t.status === 'closed' || t.status === 'dormant' || t.status === 'inbox') return;
-    var a = t.life_area || 'Other';
-    if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
-    map[a].count++;
-    map[a].total += OAD.pressure(t);
-    if (t.status === 'stalled') map[a].stalled++;
-  });
-  return Object.keys(map).map(function (name) {
-    var d = map[name];
-    return { name: name, count: d.count, avgPressure: d.count ? Math.round(d.total / d.count) : 0, stalled: d.stalled };
-  }).sort(function (a, b) { return b.avgPressure - a.avgPressure; });
+  var collection = new window.OAD.Models.ThreadCollection(OAD.DB.threads || []);
+  return collection.getLifeAreaHeat();
 };
 
 // Selects the single highest-priority actionable thread for the "Focus Now" card.
 // Prefers threads with a next action set; falls back to highest pressure overall.
 OAD.isBlocked = function (thread) {
   if (!thread) return false;
-  var ctx = OAD.getGraphContext(thread.id);
-  return ctx.blockedBy.length > 0;
+  if (typeof thread.isBlocked === 'function') {
+    return thread.isBlocked();
+  }
+  return new window.OAD.Models.Thread(thread).isBlocked();
 };
 
 // Graph Views — pure predicate matching a thread against a saved view's field filters + optional edge rule.
@@ -700,29 +435,35 @@ OAD.selectFutureFocusSuggestion = function (activeThreads) {
 OAD.focusReason = function (t) {
   var todayStr = OAD.todayStr();
   var parts = [];
-  if (t.status === 'stalled')  parts.push('stalled');
-  if (t.status === 'waiting' && t.user_action_complete) parts.push('ball in their court');
-  else if (t.status === 'waiting') parts.push('waiting on response');
+  var s = (OAD.Config && OAD.Config.focusReasonStrings) || {};
+  
+  if (t.status === 'stalled')  parts.push(s.stalled || 'stalled');
+  if (t.status === 'waiting' && t.user_action_complete) parts.push(s.ballInCourt || 'ball in their court');
+  else if (t.status === 'waiting') parts.push(s.waitingOnResponse || 'waiting on response');
+  
   if (OAD.isActionOverdue(t)) {
-    parts.push(OAD.getOverdueDays(t) + 'd overdue');
+    parts.push(OAD.getOverdueDays(t) + (s.overdueSuffix || 'd overdue'));
   } else if (t.next_action_date === todayStr) {
-    parts.push('due today' + (t.next_action_time ? ' at ' + OAD.formatTime(t.next_action_time) : ''));
+    parts.push((s.dueToday || 'due today') + (t.next_action_time ? (s.at || ' at ') + OAD.formatTime(t.next_action_time) : ''));
   }
-  if (!t.assumption_verified && t.current_assumption) parts.push('unverified assumption');
+  
+  if (!t.assumption_verified && t.current_assumption) parts.push(s.unverifiedAssumption || 'unverified assumption');
+  
   var ctx = OAD.getGraphContext(t.id);
-  if (ctx.blocks.length)     parts.push('blocking ' + ctx.blocks.length + ' thread' + (ctx.blocks.length !== 1 ? 's' : ''));
-  if (ctx.blockedBy.length)  parts.push('blocked by ' + ctx.blockedBy.length + ' thread' + (ctx.blockedBy.length !== 1 ? 's' : ''));
+  if (ctx.blocks.length)     parts.push((s.blockingPrefix || 'blocking ') + ctx.blocks.length + (ctx.blocks.length !== 1 ? (s.threadPlural || ' threads') : (s.threadSingular || ' thread')));
+  if (ctx.blockedBy.length)  parts.push((s.blockedByPrefix || 'blocked by ') + ctx.blockedBy.length + (ctx.blockedBy.length !== 1 ? (s.threadPlural || ' threads') : (s.threadSingular || ' thread')));
+  
   var ds = OAD.deadlineState(t);
-  if (ds && !ds.onTrack)     parts.push(ds.behindBy + ' session' + (ds.behindBy !== 1 ? 's' : '') + ' behind deadline');
-  else if (ds && ds.daysRemaining <= 7) parts.push('deadline in ' + ds.daysRemaining + 'd');
+  if (ds && !ds.onTrack)     parts.push(ds.behindBy + (ds.behindBy !== 1 ? (s.sessionPlural || ' sessions') : (s.sessionSingular || ' session')) + (s.behindDeadlineSuffix || ' behind deadline'));
+  else if (ds && ds.daysRemaining <= 7) parts.push((s.deadlineInPrefix || 'deadline in ') + ds.daysRemaining + (s.daysSuffix || 'd'));
   
   if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay && t.next_action_date) {
     if (OAD.isOffDay(t.next_action_date, OAD._demoRole)) {
-      parts.push('⚠ SHIFT COLLISION');
+      parts.push(s.shiftCollision || '⚠ SHIFT COLLISION');
     }
   }
   
-  return parts.join(' · ') || t.priority + ' priority';
+  return parts.join(s.separator || ' · ') || t.priority + (s.prioritySuffix || ' priority');
 };
 
 // Returns the sum of pressure scores for all active threads (demo-scoped, excluding
@@ -733,10 +474,8 @@ OAD.focusReason = function (t) {
 // calls OAD.pressure() unsuppressed on every thread, which would call back into getDayLoad
 // and recurse infinitely.
 OAD.getDayLoad = function (dateStr) {
-  if (!dateStr) return 0;
-  return OAD.Due.activeThreadsRaw()
-    .filter(function (t) { return t.next_action_date === dateStr; })
-    .reduce(function (sum, t) { return sum + OAD.pressure(t, true); }, 0);
+  var collection = new window.OAD.Models.ThreadCollection(OAD.DB.threads || []);
+  return collection.getDayLoad(dateStr);
 };
 
 // Composite "how will this day actually feel" score for the This Week's Load widget —
@@ -782,134 +521,39 @@ OAD.getDayLoadLabel = function (score) {
 };
 
 OAD.cadenceOverdue = function (cadence) {
-  if (!cadence.next_due) return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(cadence.next_due + 'T00:00:00');
-  return due < today;
+  if (!cadence) return false;
+  if (typeof cadence.isOverdue === 'function') {
+    return cadence.isOverdue();
+  }
+  return new window.OAD.Models.Cadence(cadence).isOverdue();
 };
 
 OAD.cadenceDoneThisPeriod = function (c) {
   if (!c) return false;
-  const today = OAD.todayStr();
-  const overdue = OAD.cadenceOverdue(c);
-  if (overdue) return false;
-  
-  const dueToday = c.next_due === today;
-  if (dueToday && c.last_completed === today) return true;
-
-  const prevDue = OAD.prevCadenceDue(c.recurrence, c.days_of_week);
-  return !!(c.last_completed && prevDue && c.last_completed >= prevDue);
+  if (typeof c.isDoneThisPeriod === 'function') {
+    return c.isDoneThisPeriod();
+  }
+  return new window.OAD.Models.Cadence(c).isDoneThisPeriod();
 };
 
 OAD._cyclesCache = null;
 OAD._cyclesCacheTime = 0;
 
 OAD.detectCycles = function (force) {
-  var now = Date.now();
-  if (!force && OAD._cyclesCache && (now - OAD._cyclesCacheTime < 100)) {
-    return OAD._cyclesCache;
+  var graph = new window.OAD.Models.Graph(OAD.DB.threads || []);
+  if (OAD._cyclesCache) {
+    graph._cyclesCache = OAD._cyclesCache;
+    graph._cyclesCacheTime = OAD._cyclesCacheTime;
   }
-
-  var threads = OAD.DB.threads || [];
-  var openThreads = threads.filter(function(t) { return t.status !== 'closed'; });
-  var cycles = [];
-  var visited = new Set();
-  var stack = new Set();
-  var path = [];
-
-  function resolveTarget(c, sourceThread) {
-    if (c.to_uuid) return openThreads.find(function(t) { return t.uuid === c.to_uuid; }) || null;
-    if (c.to_label) {
-      var lbl = c.to_label.toLowerCase();
-      return openThreads.find(function(t) { return t.id !== sourceThread.id && (t.title || '').toLowerCase() === lbl; }) || null;
-    }
-    return null;
-  }
-
-  function dfs(node) {
-    if (stack.has(node.id)) {
-      var cycleStart = path.indexOf(node.id);
-      if (cycleStart !== -1) cycles.push(path.slice(cycleStart));
-      return;
-    }
-    if (visited.has(node.id)) return;
-
-    visited.add(node.id);
-    stack.add(node.id);
-    path.push(node.id);
-
-    var blocking = (node.connections || []).filter(function(c) { return c.edge_type === 'blocks'; });
-    blocking.forEach(function(c) {
-      var target = resolveTarget(c, node);
-      if (target) dfs(target);
-    });
-
-    path.pop();
-    stack.delete(node.id);
-  }
-
-  openThreads.forEach(function(t) {
-    if (!visited.has(t.id)) dfs(t);
-  });
-
-  var uniqueCycles = [];
-  var seenSignatures = new Set();
-  cycles.forEach(function(cycle) {
-    var sorted = cycle.slice().sort().join(',');
-    if (!seenSignatures.has(sorted)) {
-      seenSignatures.add(sorted);
-      uniqueCycles.push(cycle);
-    }
-  });
-
-  OAD._cyclesCache = uniqueCycles;
-  OAD._cyclesCacheTime = now;
-  return uniqueCycles;
+  var result = graph.detectCycles(force);
+  OAD._cyclesCache = graph._cyclesCache;
+  OAD._cyclesCacheTime = graph._cyclesCacheTime;
+  return result;
 };
 
 OAD.calculateCriticalPath = function (threadId, visited) {
-  visited = visited || new Set();
-  var thread = OAD.getThread(threadId);
-  if (!thread || thread.status === 'closed') return { weight: 0, path: [] };
-  
-  if (visited.has(threadId)) return { weight: 0, path: [] };
-  visited.add(threadId);
-
-  var threads = OAD.DB.threads || [];
-  
-  function resolveTarget(c, sourceThread) {
-    if (c.to_uuid) return threads.find(function(t) { return t.uuid === c.to_uuid && t.status !== 'closed'; }) || null;
-    if (c.to_label) {
-      var lbl = c.to_label.toLowerCase();
-      return threads.find(function(t) { return t.id !== sourceThread.id && (t.title || '').toLowerCase() === lbl && t.status !== 'closed'; }) || null;
-    }
-    return null;
-  }
-
-  var blocking = (thread.connections || []).filter(function(c) { return c.edge_type === 'blocks'; });
-  var targets = [];
-  blocking.forEach(function(c) {
-    var t = resolveTarget(c, thread);
-    if (t) targets.push(t);
-  });
-
-  var weight = OAD.pressure(thread, true);
-  var maxPathWeight = 0;
-  var maxPath = [];
-
-  targets.forEach(function(t) {
-    var sub = OAD.calculateCriticalPath(t.id, new Set(visited));
-    if (sub.weight > maxPathWeight) {
-      maxPathWeight = sub.weight;
-      maxPath = sub.path;
-    }
-  });
-
-  return {
-    weight: weight + maxPathWeight,
-    path: [threadId].concat(maxPath)
-  };
+  var graph = new window.OAD.Models.Graph(OAD.DB.threads || []);
+  return graph.calculateCriticalPath(threadId, visited);
 };
 
 // ── Auto-Dependency Engine (ADE) ──────────────────────────────────────
@@ -1047,14 +691,6 @@ OAD.runADE = function () {
 // Detects thread misconfiguration silently undermining pressure/scheduling.
 // Phase 1: detection only (no auto-fix). Auto-fix is Phase 2.
 
-OAD.CHE_LEAD_DAYS = {
-  'Education':  5,
-  'Job Search': 3,
-  'Health':     2,
-  'Career':     4,
-  'Finances':   3
-};
-
 OAD._parseNaturalDate = function (str) {
   if (!str) return null;
   if (typeof OAD.Mailroom === 'undefined' || typeof OAD.Mailroom.parseText !== 'function') return null;
@@ -1064,7 +700,8 @@ OAD._parseNaturalDate = function (str) {
 
 OAD._cheLeadDays = function (thread) {
   if (thread.lead_time_days != null) return thread.lead_time_days;
-  return OAD.CHE_LEAD_DAYS[thread.life_area] || 3;
+  var leads = (OAD.Config && OAD.Config.cheLeadDays) || {};
+  return leads[thread.life_area] || leads['Default'] || 3;
 };
 
 OAD._cheTitleSimilarity = function (a, b) {

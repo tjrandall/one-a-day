@@ -1047,6 +1047,7 @@ OAD.renderTodayView = function () {
     const isOverdue = OAD.cadenceOverdue(c);
     const badge = isOverdue ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
     const rowClass = 'ds-row ds-cadence ds-row-' + (isOverdue ? 'overdue' : 'today');
+    const dateHtml = c.next_due ? '<span class="ds-meta-tag" style="margin-right:12px">' + OAD.esc(OAD.formatDate(c.next_due)) + '</span>' : '';
     return '<div class="' + rowClass + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
@@ -1055,6 +1056,7 @@ OAD.renderTodayView = function () {
           '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
+        dateHtml +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
           'aria-label="Mark ' + OAD.esc(c.title) + ' done" ' +
           'onclick="event.stopPropagation();OAD._dailyMarkCadenceDone(' + c.id + ')">Mark Done</button>' +
@@ -1301,6 +1303,7 @@ OAD.renderDailyView = function () {
     const isOverdue = OAD.cadenceOverdue(c);
     const badge = isOverdue ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
     const rowClass = 'ds-row ds-cadence ds-row-' + (isOverdue ? 'q1' : 'q2');
+    const dateHtml = c.next_due ? '<span class="ds-meta-tag" style="margin-right:12px">' + OAD.esc(OAD.formatDate(c.next_due)) + '</span>' : '';
     return '<div class="' + rowClass + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
@@ -1309,6 +1312,7 @@ OAD.renderDailyView = function () {
           '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
+        dateHtml +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
           'aria-label="Mark ' + OAD.esc(c.title) + ' done" ' +
           'onclick="event.stopPropagation();OAD._dailyMarkCadenceDone(' + c.id + ')">Mark Done</button>' +
@@ -1750,6 +1754,7 @@ OAD.renderMatrixView = function () {
     const isOverdue = OAD.cadenceOverdue(c);
     const badge = isOverdue ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
     const rowClass = 'ds-row ds-cadence ds-row-' + (isOverdue ? 'q1' : 'q2');
+    const dateHtml = c.next_due ? '<span class="ds-meta-tag" style="margin-right:12px">' + OAD.esc(OAD.formatDate(c.next_due)) + '</span>' : '';
     return '<div class="' + rowClass + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-cadence" aria-label="Cadence">📅 cadence</span>' +
@@ -1758,6 +1763,7 @@ OAD.renderMatrixView = function () {
           '<div class="ds-row-sub">' + OAD.esc(OAD.formatRecurrence(c)) +
             (isOverdue && c.consequences ? ' — ' + OAD.esc(c.consequences) : '') + '</div>' +
         '</div>' +
+        dateHtml +
         '<button class="success" style="font-size:12px;padding:5px 12px;flex-shrink:0" ' +
           'aria-label="Mark ' + OAD.esc(c.title) + ' done" ' +
           'onclick="event.stopPropagation();OAD._dailyMarkCadenceDone(' + c.id + ')">Mark Done</button>' +

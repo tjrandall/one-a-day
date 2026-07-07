@@ -1415,6 +1415,73 @@ OAD.openSettingsModal = function () {
       </div>
       ` : ''}
     </div>
+    ${OAD.isSuperAdmin() ? `
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
+      <h3 style="margin-top:0;margin-bottom:12px;font-size:14px">System Variables</h3>
+      
+      <div style="margin-bottom:12px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">Runway Risk Benchmarks (weeks)</div>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label>Federal Min</label>
+            <input id="f-runway-fed-min" type="number" value="${OAD.Config.runwayBenchmarks.federal.minWeeks}">
+          </div>
+          <div class="field" style="flex:1">
+            <label>Federal Max</label>
+            <input id="f-runway-fed-max" type="number" value="${OAD.Config.runwayBenchmarks.federal.maxWeeks}">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label>Commercial Min</label>
+            <input id="f-runway-com-min" type="number" value="${OAD.Config.runwayBenchmarks.commercial.minWeeks}">
+          </div>
+          <div class="field" style="flex:1">
+            <label>Commercial Max</label>
+            <input id="f-runway-com-max" type="number" value="${OAD.Config.runwayBenchmarks.commercial.maxWeeks}">
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:12px">
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">Week Load Weights</div>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label>Edge Multiplier</label>
+            <input id="f-weekload-edge" type="number" value="${OAD.Config.weekLoadWeights.edgeMultiplier}">
+          </div>
+          <div class="field" style="flex:1">
+            <label>Cadence Weight</label>
+            <input id="f-weekload-cadence" type="number" value="${OAD.Config.weekLoadWeights.cadenceWeight}">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label>Busy Threshold</label>
+            <input id="f-weekload-busy" type="number" value="${OAD.Config.weekLoadWeights.busyThreshold}">
+          </div>
+          <div class="field" style="flex:1">
+            <label>Heavy Threshold</label>
+            <input id="f-weekload-heavy" type="number" value="${OAD.Config.weekLoadWeights.heavyThreshold}">
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div style="font-weight:600;font-size:13px;margin-bottom:4px">TRY Score Thresholds</div>
+        <div class="field-row">
+          <div class="field" style="flex:1">
+            <label>Success (Green) &ge;</label>
+            <input id="f-try-success" type="number" value="${OAD.Config.tryScoreThresholds.success}">
+          </div>
+          <div class="field" style="flex:1">
+            <label>Warning (Orange) &ge;</label>
+            <input id="f-try-warning" type="number" value="${OAD.Config.tryScoreThresholds.warning}">
+          </div>
+        </div>
+      </div>
+    </div>
+    ` : ''}
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
       <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
       <p class="text-muted text-sm" style="margin-bottom:10px">
@@ -1487,6 +1554,31 @@ OAD._saveSettings = async function () {
   if (gmailFilterInput) {
     OAD.Config.gmailSearchFilter = gmailFilterInput.value.trim() || '';
     localStorage.setItem('oad_gmail_filter', OAD.Config.gmailSearchFilter);
+  }
+
+  // Save system variables if SuperAdmin
+  if (OAD.isSuperAdmin()) {
+    if (document.getElementById('f-runway-fed-min')) {
+      OAD.Config.runwayBenchmarks.federal.minWeeks = parseInt(document.getElementById('f-runway-fed-min').value, 10) || 17;
+      OAD.Config.runwayBenchmarks.federal.maxWeeks = parseInt(document.getElementById('f-runway-fed-max').value, 10) || 22;
+      OAD.Config.runwayBenchmarks.commercial.minWeeks = parseInt(document.getElementById('f-runway-com-min').value, 10) || 6;
+      OAD.Config.runwayBenchmarks.commercial.maxWeeks = parseInt(document.getElementById('f-runway-com-max').value, 10) || 8;
+      localStorage.setItem('oad_runway_benchmarks', JSON.stringify(OAD.Config.runwayBenchmarks));
+    }
+    
+    if (document.getElementById('f-weekload-edge')) {
+      OAD.Config.weekLoadWeights.edgeMultiplier = parseFloat(document.getElementById('f-weekload-edge').value) || 2;
+      OAD.Config.weekLoadWeights.cadenceWeight = parseFloat(document.getElementById('f-weekload-cadence').value) || 20;
+      OAD.Config.weekLoadWeights.busyThreshold = parseFloat(document.getElementById('f-weekload-busy').value) || 50;
+      OAD.Config.weekLoadWeights.heavyThreshold = parseFloat(document.getElementById('f-weekload-heavy').value) || 150;
+      localStorage.setItem('oad_week_load_weights', JSON.stringify(OAD.Config.weekLoadWeights));
+    }
+
+    if (document.getElementById('f-try-success')) {
+      OAD.Config.tryScoreThresholds.success = parseFloat(document.getElementById('f-try-success').value) || 80;
+      OAD.Config.tryScoreThresholds.warning = parseFloat(document.getElementById('f-try-warning').value) || 60;
+      localStorage.setItem('oad_try_score_thresholds', JSON.stringify(OAD.Config.tryScoreThresholds));
+    }
   }
 
   if (selectedLocale !== oldLocale) {

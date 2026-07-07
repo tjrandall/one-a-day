@@ -156,7 +156,8 @@ OAD.renderCommandCenter = function () {
   });
   
   const tryScore = totalPlanned === 0 ? 0 : Math.round((totalRetained / totalPlanned) * 100);
-  const tryColor = tryScore >= 80 ? 'var(--success)' : tryScore >= 60 ? 'orange' : 'var(--critical)';
+  const thresholds = (window.OAD && window.OAD.Config && window.OAD.Config.tryScoreThresholds) || { success: 80, warning: 60 };
+  const tryColor = tryScore >= thresholds.success ? 'var(--success)' : tryScore >= thresholds.warning ? 'orange' : 'var(--critical)';
 
   // Build the breakdown (by Director for CCO, by Counselor for Directors)
   const breakdown = {};
@@ -225,18 +226,7 @@ OAD.renderCommandCenter = function () {
           <div style="display:flex; align-items:center; gap:12px">
             <span class="ds-date" style="margin:0">Demo Role:</span>
             <select id="role-select" onchange="OAD.changeDemoRole(this.value)" style="padding:4px; border-radius:4px; border:1px solid var(--border); font-size:12px; background:var(--surface2); color:var(--text)">
-              <option value="CCO" ${OAD._demoRole === 'CCO' ? 'selected' : ''}>CCO (All Data)</option>
-              <option value="Director Alpha" ${OAD._demoRole === 'Director Alpha' ? 'selected' : ''}>Director Alpha (All Counselors)</option>
-              <option value="Counselor 1" ${OAD._demoRole === 'Counselor 1' ? 'selected' : ''}>Counselor 1</option>
-              <option value="Counselor 2" ${OAD._demoRole === 'Counselor 2' ? 'selected' : ''}>Counselor 2</option>
-              <option value="Counselor 3" ${OAD._demoRole === 'Counselor 3' ? 'selected' : ''}>Counselor 3</option>
-              <option value="Counselor 4" ${OAD._demoRole === 'Counselor 4' ? 'selected' : ''}>Counselor 4</option>
-              <option value="Counselor 5" ${OAD._demoRole === 'Counselor 5' ? 'selected' : ''}>Counselor 5</option>
-              <option value="Counselor 6" ${OAD._demoRole === 'Counselor 6' ? 'selected' : ''}>Counselor 6</option>
-              <option value="Counselor 7" ${OAD._demoRole === 'Counselor 7' ? 'selected' : ''}>Counselor 7</option>
-              <option value="Counselor 8" ${OAD._demoRole === 'Counselor 8' ? 'selected' : ''}>Counselor 8</option>
-              <option value="Counselor 9" ${OAD._demoRole === 'Counselor 9' ? 'selected' : ''}>Counselor 9</option>
-              <option value="Counselor 10" ${OAD._demoRole === 'Counselor 10' ? 'selected' : ''}>Counselor 10</option>
+              ${(window.OAD.Demo && window.OAD.Demo.getRolesHtml) ? window.OAD.Demo.getRolesHtml(OAD._demoRole) : ''}
               <option disabled>──────────</option>
               <option value="Operations (CIC)">Operations & Logistics (Map View)</option>
             </select>

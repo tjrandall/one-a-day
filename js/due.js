@@ -5,8 +5,8 @@ OAD.Due = {};
 // from inside OAD.pressure()'s own call chain via getDayLoad — never calls OAD.pressure(),
 // so it can't recurse.
 OAD.Due.activeThreadsRaw = function () {
-  return (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
+  var q = new window.OAD.Models.QueueManager(OAD.getVisibleThreads() || [], []);
+  return q.getActiveThreadsRaw();
 };
 
 // Pressure-scored + sorted convenience wrapper for surfaces that display/rank threads.
@@ -15,41 +15,24 @@ OAD.Due.activeThreadsRaw = function () {
 // OAD.pressure() (unsuppressed) calls OAD.getDayLoad(), which must not turn around and call
 // this function, since this function calls OAD.pressure() on every thread.
 OAD.Due.activeThreads = function () {
-  return OAD.Due.activeThreadsRaw()
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
+  var q = new window.OAD.Models.QueueManager(OAD.getVisibleThreads() || [], []);
+  return q.getActiveThreads();
 };
 
 // The activeByUUID/childrenByParentUUID/computeSuppressedChildUUIDs block that used to be
 // copy-pasted identically across renderTodayView/renderDailyView/renderMatrixView.
 OAD.Due.suppressionContext = function (activeThreads, todayStr, focusUUID, horizonStr) {
-  var activeByUUID = {};
-  activeThreads.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-  var childrenByParentUUID = {};
-  activeThreads.forEach(function (t) {
-    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-      (childrenByParentUUID[t.parent_uuid] = childrenByParentUUID[t.parent_uuid] || []).push(t);
-    }
-  });
-
-  var suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, focusUUID, horizonStr);
-  var visibleThreads = activeThreads.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
-
-  return { activeByUUID: activeByUUID, childrenByParentUUID: childrenByParentUUID, suppressedUUIDs: suppressedUUIDs, visibleThreads: visibleThreads };
+  var q = new window.OAD.Models.QueueManager([], []);
+  return q.getSuppressionContext(activeThreads, todayStr, focusUUID, horizonStr);
 };
 
-// The Overdue / Today / Week / No-Date split (renderDailyView's shape). Mirrors current
-// behavior exactly: "today" does NOT exclude threads also caught by "overdue" (a thread due
-// today with a passed next_action_time is both) — existing behavior, not changed here.
+/**
+ * Groups visible threads into mutually exclusive temporal buckets:
+ * Overdue, Today, Week (up to 7 days out), and No Date.
+ */
 OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
-  return {
-    overdue: visibleThreads.filter(OAD.isActionOverdue),
-    today:   visibleThreads.filter(function (t) { return t.next_action_date === todayStr; }),
-    week:    visibleThreads.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str; })
-               .sort(function (a, b) { return a.next_action_date.localeCompare(b.next_action_date); }),
-    noDate:  visibleThreads.filter(function (t) { return !t.next_action_date; })
-  };
+  var q = new window.OAD.Models.QueueManager([], []);
+  return q.getBuckets(visibleThreads, todayStr, in7Str);
 };
 
 // Whether a cadence counts as "due" on a specific calendar day — not overdue (relative to
@@ -62,28 +45,22 @@ OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
 // today was still being tallied into that day's item count by a hand-rolled check that skipped
 // this exclusion).
 OAD.Due.isCadenceDueOn = function (cadence, dateStr) {
-  return !OAD.cadenceOverdue(cadence) && cadence.next_due === dateStr && !OAD.cadenceDoneThisPeriod(cadence);
+  var q = new window.OAD.Models.QueueManager([], []);
+  return q.isCadenceDueOn(cadence, dateStr);
 };
 
 // Cadence overdue/today/week split — mirrors the cadence filter that used to be duplicated
 // 3x in render.js.
 OAD.Due.cadenceBuckets = function (cadences, todayStr, in7Str) {
-  return {
-    overdue: cadences.filter(OAD.cadenceOverdue),
-    today:   cadences.filter(function (c) { return OAD.Due.isCadenceDueOn(c, todayStr); }),
-    week:    cadences.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); })
-               .sort(function (a, b) { return a.next_due.localeCompare(b.next_due); })
-  };
+  var q = new window.OAD.Models.QueueManager([], cadences);
+  return q.getCadenceBuckets(todayStr, in7Str);
 };
 
 // One call for the full dashboard pipeline. Scores the active list exactly once — getFocusUUID
 // and the suppression/bucket pipeline below all reuse this same scored array.
 OAD.Due.dashboardData = function (todayStr, in7Str) {
-  var active = OAD.Due.activeThreads();
-  var focusUUID = OAD.getFocusUUID(active);
-  var ctx = OAD.Due.suppressionContext(active, todayStr, focusUUID, in7Str);
-  var buckets = OAD.Due.buckets(ctx.visibleThreads, todayStr, in7Str);
-  return Object.assign({ active: active, focusUUID: focusUUID }, ctx, buckets);
+  var q = new window.OAD.Models.QueueManager(OAD.getVisibleThreads() || [], []);
+  return q.getDashboardData(todayStr, in7Str);
 };
 
 // Self-diagnostic, callable from the console (OAD.Due.selfCheck()) against live data. Checks

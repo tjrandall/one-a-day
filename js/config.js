@@ -30,6 +30,55 @@ OAD.Config = {
     busyThreshold: 50,
     heavyThreshold: 150
   },
+  tryScoreThresholds: JSON.parse(localStorage.getItem('oad_try_score_thresholds')) || {
+    success: 80,
+    warning: 60
+  },
+  areaKeywords: JSON.parse(localStorage.getItem('oad_area_keywords')) || {
+    'Job Search': ['job board', 'job search', 'job hunt', 'weekly job', 'apply to'],
+    'Career': ['job', 'work', 'career', 'employ', 'hire', 'interview', 'resume'],
+    'Health': ['health', 'doctor', 'medical', 'therapy', 'mental', 'physical'],
+    'Family': ['family', 'parent', 'sibling', 'spouse', 'kid', 'child', 'mom', 'dad'],
+    'Finances': ['money', 'finance', 'bank', 'debt', 'loan', 'tax', 'budget', 'invest'],
+    'Relationships': ['friend', 'partner', 'relationship', 'social'],
+    'Education': ['school', 'class', 'degree', 'cert', 'course', 'learn', 'study'],
+    'Housing': ['house', 'rent', 'lease', 'mortgage', 'apartment', 'move'],
+    'Legal': ['legal', 'court', 'law', 'attorney', 'contract', 'va ', 'vr&e', 'vre']
+  },
+  pressureThresholds: JSON.parse(localStorage.getItem('oad_pressure_thresholds')) || {
+    high: 60,
+    mid: 30
+  },
+  focusReasonStrings: JSON.parse(localStorage.getItem('oad_focus_reason_strings')) || {
+    stalled: 'stalled',
+    ballInCourt: 'ball in their court',
+    waitingOnResponse: 'waiting on response',
+    overdueSuffix: 'd overdue',
+    dueToday: 'due today',
+    at: ' at ',
+    unverifiedAssumption: 'unverified assumption',
+    blockingPrefix: 'blocking ',
+    blockedByPrefix: 'blocked by ',
+    threadSingular: ' thread',
+    threadPlural: ' threads',
+    sessionSingular: ' session',
+    sessionPlural: ' sessions',
+    behindDeadlineSuffix: ' behind deadline',
+    deadlineInPrefix: 'deadline in ',
+    daysSuffix: 'd',
+    shiftCollision: '⚠ SHIFT COLLISION',
+    prioritySuffix: ' priority',
+    separator: ' · '
+  },
+  cheLeadDays: JSON.parse(localStorage.getItem('oad_che_lead_days')) || {
+    'Education':  5,
+    'Job Search': 3,
+    'Health':     2,
+    'Career':     4,
+    'Finances':   3,
+    'Default':    3
+  },
+  defaultArea: localStorage.getItem('oad_default_area') || 'Personal Growth',
   demoMode: window.location.port === '8081' || window.location.pathname.includes('demo')
 };
 

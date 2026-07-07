@@ -233,7 +233,7 @@ OAD.addInsight = function (id, insight) {
 };
 
 OAD.makeThread = function (overrides) {
-  return Object.assign({
+  var data = Object.assign({
     uuid: OAD._generateUUID(), // stable identifier — used for export/import matching
     id: null,
     created_at: new Date().toISOString(),
@@ -270,6 +270,7 @@ OAD.makeThread = function (overrides) {
     stage: null, // job-application pipeline stage; null unless this is a leaf application thread
     runway_ack_until: null // Runway Risk snooze — ISO date; suppressed from banner/card until this date passes
   }, overrides);
+  return (window.OAD.Models && window.OAD.Models.Thread) ? new window.OAD.Models.Thread(data) : data;
 };
 
 OAD.nextCadenceId = function () {
@@ -278,7 +279,7 @@ OAD.nextCadenceId = function () {
 };
 
 OAD.makeCadence = function (overrides) {
-  return Object.assign({
+  var data = Object.assign({
     id: null,
     title: '',
     life_area: 'finances',
@@ -289,6 +290,7 @@ OAD.makeCadence = function (overrides) {
     notes: '',
     consequences: ''
   }, overrides);
+  return (window.OAD.Models && window.OAD.Models.Cadence) ? new window.OAD.Models.Cadence(data) : data;
 };
 
 OAD.addCadence = function (cadence) {
@@ -401,7 +403,7 @@ OAD.bulkImport = function (arr) {
 // ── Habit data model ─────────────────────────────────────────────────
 
 OAD.makeHabit = function (overrides) {
-  return Object.assign({
+  var data = Object.assign({
     id: null,
     title: '',
     life_area: 'Personal Growth',
@@ -415,6 +417,7 @@ OAD.makeHabit = function (overrides) {
     phase: 'active',          // active | check-in | dormant
     why: ''
   }, overrides);
+  return (window.OAD.Models && window.OAD.Models.Habit) ? new window.OAD.Models.Habit(data) : data;
 };
 
 OAD.nextHabitId = function () {
@@ -893,7 +896,7 @@ OAD.exportThreads = function () {
 // ── Idea data model ───────────────────────────────────────────────────
 
 OAD.makeIdea = function (overrides) {
-  return Object.assign({
+  var data = Object.assign({
     id:             null,
     title:          '',
     notes:          '',
@@ -904,6 +907,7 @@ OAD.makeIdea = function (overrides) {
     energy_required: 'medium', // low | medium | high
     tags:           []
   }, overrides);
+  return (window.OAD.Models && window.OAD.Models.Idea) ? new window.OAD.Models.Idea(data) : data;
 };
 
 OAD.nextIdeaId = function () {
@@ -984,8 +988,12 @@ OAD._normalizeDB = function () {
   OAD.DB.saved_views      = OAD.DB.saved_views      || [];
   OAD.DB.persona          = OAD.DB.persona          || {};
   OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
+  if (!Array.isArray(OAD.DB.persona.what_is_not_working)) OAD.DB.persona.what_is_not_working = [];
+  if (!OAD.DB.persona.tone_calibration) OAD.DB.persona.tone_calibration = {};
+
   let _maxId = 0;
   OAD.DB.threads.forEach(function(t) { if (t.id && t.id > _maxId) _maxId = t.id; });
+  
   // Backfill UUIDs, parent_uuid, date_push_count, connection UUIDs, life area, null titles
   OAD.DB.threads.forEach(function (t) {
     if (!t.id) { _maxId++; t.id = _maxId; }
