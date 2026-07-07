@@ -949,29 +949,15 @@ OAD.renderTodayView = function () {
   const todayStr = todayDt.toISOString().slice(0, 10);
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
-  // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
-
-  const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
-
-  const activeByUUID = {};
-  active.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-  const childrenByParentUUID = {};
-  active.forEach(function (t) {
-    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-      if (!childrenByParentUUID[t.parent_uuid]) childrenByParentUUID[t.parent_uuid] = [];
-      childrenByParentUUID[t.parent_uuid].push(t);
-    }
-  });
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
 
-  const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
+  // ── Threads ────────────────────────────────────────────────────────
+  const due = OAD.Due.dashboardData(todayStr, in7Str);
+  const childrenByParentUUID = due.childrenByParentUUID;
+  const filteredActive = due.visibleThreads;
+
+  const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
 
   const q1Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
   const q2Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q2');
@@ -980,10 +966,10 @@ OAD.renderTodayView = function () {
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
-  
-  const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
+  const cadenceBuckets = OAD.Due.cadenceBuckets(cads, todayStr, in7Str);
+  const overdueCadences = cadenceBuckets.overdue;
+  const todayCadences   = cadenceBuckets.today;
+  const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1155,7 +1141,7 @@ OAD.renderTodayView = function () {
                             bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems) +
                             dormantBucketHtml;
 
-  const focusThread = OAD.selectFocusThread();
+  const focusThread = due.active.find(function (t) { return t.uuid === due.focusUUID; }) || null;
   var focusCardHtml = '';
   if (focusThread) {
     const fpc   = OAD.pressureClass(focusThread._score);
@@ -1211,35 +1197,21 @@ OAD.renderDailyView = function () {
   const todayStr = todayDt.toISOString().slice(0, 10);
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
+  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  const in7Str = in7Dt.toISOString().slice(0, 10);
+
   // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
+  const due = OAD.Due.dashboardData(todayStr, in7Str);
+  const childrenByParentUUID = due.childrenByParentUUID;
+  const filteredActive = due.visibleThreads;
 
   const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
 
-  const activeByUUID = {};
-  active.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-  const childrenByParentUUID = {};
-  active.forEach(function (t) {
-    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-      if (!childrenByParentUUID[t.parent_uuid]) childrenByParentUUID[t.parent_uuid] = [];
-      childrenByParentUUID[t.parent_uuid].push(t);
-    }
-  });
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
-
-  const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
-
   // Filter threads into the standard buckets
-  const overdueThreads = filteredActive.filter(OAD.isActionOverdue);
-  const todayThreads   = filteredActive.filter(t => t.next_action_date === todayStr);
-  const weekThreads    = filteredActive.filter(t => t.next_action_date > todayStr && t.next_action_date <= in7Str).sort((a, b) => a.next_action_date.localeCompare(b.next_action_date));
-  const activeThreads  = filteredActive.filter(t => !t.next_action_date);
+  const overdueThreads = due.overdue;
+  const todayThreads   = due.today;
+  const weekThreads    = due.week;
+  const activeThreads  = due.noDate;
 
   // Cycle detection
   const cycles = OAD.detectCycles();
@@ -1247,10 +1219,10 @@ OAD.renderDailyView = function () {
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
-  
-  const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
+  const cadenceBuckets = OAD.Due.cadenceBuckets(cads, todayStr, in7Str);
+  const overdueCadences = cadenceBuckets.overdue;
+  const todayCadences   = cadenceBuckets.today;
+  const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1449,7 +1421,7 @@ OAD.renderDailyView = function () {
   }
 
   // ── Focus Now card ─────────────────────────────────────────────────
-  const focusThread = OAD.selectFocusThread();
+  const focusThread = due.active.find(function (t) { return t.uuid === due.focusUUID; }) || null;
   var focusCardHtml = '';
   if (focusThread) {
     const fpc   = OAD.pressureClass(focusThread._score);
@@ -1509,7 +1481,7 @@ OAD.renderDailyView = function () {
       var dayDt = new Date(todayDt);
       dayDt.setDate(dayDt.getDate() + di);
       var dayStr = dayDt.toISOString().slice(0, 10);
-      var threadCount  = active.filter(function (t) { return t.next_action_date === dayStr; }).length;
+      var threadCount  = due.active.filter(function (t) { return t.next_action_date === dayStr; }).length;
       var cadenceCount = cads.filter(function (c)  { return c.next_due === dayStr; }).length;
       var total = threadCount + cadenceCount; // still shown as "N items" — the label below no longer comes from this raw count
       var loadScore = OAD.calculateDayLoadScore(dayStr);
@@ -1570,7 +1542,7 @@ OAD.renderDailyView = function () {
   const persona = OAD.DB.persona;
   const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
-  const scores = active.map(t => t._score);
+  const scores = due.active.map(t => t._score);
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
   const avgCls = OAD.pressureClass(avgPressure);
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
@@ -1601,12 +1573,12 @@ OAD.renderDailyView = function () {
       '<div class="ds-metrics-grid">' +
         '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
           '<div class="ds-metric-title">Active Tasks</div>' +
-          '<div class="ds-metric-value">' + active.length + '</div>' +
+          '<div class="ds-metric-value">' + due.active.length + '</div>' +
           '<div class="ds-metric-desc">In progress</div>' +
         '</div>' +
         '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
           '<div class="ds-metric-title">Stalled Tasks</div>' +
-          '<div class="ds-metric-value stalled">' + active.filter(t => t.status === 'stalled').length + '</div>' +
+          '<div class="ds-metric-value stalled">' + due.active.filter(t => t.status === 'stalled').length + '</div>' +
           '<div class="ds-metric-desc">Need attention</div>' +
         '</div>' +
         '<div class="ds-metric-card">' +
@@ -1679,27 +1651,13 @@ OAD.renderMatrixView = function () {
   const todayStr = todayDt.toISOString().slice(0, 10);
   const dateLabel = todayDt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
 
-  // ── Threads ────────────────────────────────────────────────────────
-  const active = (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; })
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
-
-  const activeByUUID = {};
-  active.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-  const childrenByParentUUID = {};
-  active.forEach(function (t) {
-    if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-      if (!childrenByParentUUID[t.parent_uuid]) childrenByParentUUID[t.parent_uuid] = [];
-      childrenByParentUUID[t.parent_uuid].push(t);
-    }
-  });
   const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
   const in7Str = in7Dt.toISOString().slice(0, 10);
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
 
-  const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
+  // ── Threads ────────────────────────────────────────────────────────
+  const due = OAD.Due.dashboardData(todayStr, in7Str);
+  const childrenByParentUUID = due.childrenByParentUUID;
+  const filteredActive = due.visibleThreads;
 
   // Eisenhower Matrix Categorization
   const q1Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
@@ -1709,10 +1667,10 @@ OAD.renderMatrixView = function () {
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
-  
-  const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
-  const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
-  const weekCadences    = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); }).sort((a, b) => a.next_due.localeCompare(b.next_due));
+  const cadenceBuckets = OAD.Due.cadenceBuckets(cads, todayStr, in7Str);
+  const overdueCadences = cadenceBuckets.overdue;
+  const todayCadences   = cadenceBuckets.today;
+  const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
   const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
@@ -1878,7 +1836,7 @@ OAD.renderMatrixView = function () {
                             bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems);
 
   // ── Focus Now card ─────────────────────────────────────────────────
-  const focusThread = OAD.selectFocusThread();
+  const focusThread = due.active.find(function (t) { return t.uuid === due.focusUUID; }) || null;
   var focusCardHtml = '';
   if (focusThread) {
     const fpc   = OAD.pressureClass(focusThread._score);

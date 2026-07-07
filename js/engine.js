@@ -271,8 +271,8 @@ OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, 
 // The uuid of whatever thread Focus Now is currently showing — the primary due-now/overdue
 // pick if one exists, otherwise the "get ahead" upcoming suggestion. Centralized so every
 // caller (rendering AND suppression) agrees on what "the current focus" means.
-OAD.getFocusUUID = function () {
-  var t = OAD.selectFocusThread() || OAD.selectFutureFocusSuggestion();
+OAD.getFocusUUID = function (activeThreads) {
+  var t = OAD.selectFocusThread(activeThreads) || OAD.selectFutureFocusSuggestion(activeThreads);
   return t ? t.uuid : null;
 };
 
@@ -638,11 +638,15 @@ OAD.applySavedView = function (threads, view) {
   return list;
 };
 
-OAD.selectFocusThread = function () {
+// activeThreads (optional): a precomputed, pressure-scored active-thread list (the shape
+// OAD.Due.activeThreads() returns). Pass it when the caller already has one, so this doesn't
+// trigger a second full pressure-scoring pass over every active thread; omit it to have this
+// compute its own (behavior-identical to always omitting it).
+OAD.selectFocusThread = function (activeThreads) {
   var todayStr = OAD.todayStr();
   var isWaitingActioned = function (t) { return t.status === 'waiting' && t.user_action_complete; };
-  var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
+  var allActive = activeThreads || OAD.Due.activeThreads();
+  var byScoreDesc = function (a, b) { return b._score - a._score; };
 
   // Focus Now means "what should I work on right now" — scope to today + overdue first.
   // Previously this sorted the ENTIRE active backlog by raw pressure with no date filter at
@@ -653,22 +657,20 @@ OAD.selectFocusThread = function () {
   // Primary: not blocked, not waiting+actioned
   var candidates = dueNow
     .filter(function (t) { return !OAD.isBlocked(t) && !isWaitingActioned(t); })
-    .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-    .sort(function (a, b) { return b._score - a._score; });
+    .slice()
+    .sort(byScoreDesc);
 
   // Secondary: allow blocked threads (still excludes waiting+actioned)
   if (!candidates.length) {
     candidates = dueNow
       .filter(function (t) { return !isWaitingActioned(t); })
-      .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-      .sort(function (a, b) { return b._score - a._score; });
+      .slice()
+      .sort(byScoreDesc);
   }
 
   // Last resort: include waiting+actioned threads if nothing else qualifies
   if (!candidates.length) {
-    candidates = dueNow
-      .map(function (t) { return Object.assign({}, t, { _score: OAD.pressure(t) }); })
-      .sort(function (a, b) { return b._score - a._score; });
+    candidates = dueNow.slice().sort(byScoreDesc);
   }
 
   if (!candidates.length) return null;
@@ -680,15 +682,16 @@ OAD.selectFocusThread = function () {
 // offers the nearest upcoming item as an optional "get ahead" suggestion, distinct from an
 // actual recommendation. Nearest date first, tie-broken by pressure. Mirrors the spirit of
 // TOAT's celebrate-when-empty pattern: an empty Focus Now is good news, not a dead end.
-OAD.selectFutureFocusSuggestion = function () {
+// activeThreads (optional): see OAD.selectFocusThread's header comment — same deduplication
+// purpose.
+OAD.selectFutureFocusSuggestion = function (activeThreads) {
   var todayStr = OAD.todayStr();
-  var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
+  var allActive = activeThreads || OAD.Due.activeThreads();
   var upcoming = allActive.filter(function (t) { return t.next_action_date && t.next_action_date > todayStr; });
   if (!upcoming.length) return null;
-  upcoming.sort(function (a, b) {
+  upcoming = upcoming.slice().sort(function (a, b) {
     if (a.next_action_date !== b.next_action_date) return a.next_action_date < b.next_action_date ? -1 : 1;
-    return OAD.pressure(b) - OAD.pressure(a);
+    return b._score - a._score;
   });
   return upcoming[0];
 };
@@ -722,13 +725,17 @@ OAD.focusReason = function (t) {
   return parts.join(' · ') || t.priority + ' priority';
 };
 
-// Returns the sum of pressure scores for all non-closed threads whose next_action_date
-// matches dateStr. Uses pressure(t, true) — the _inBleedUp flag prevents getDayLoad
-// from being called recursively, giving a stable base score for each peer thread.
+// Returns the sum of pressure scores for all active threads (demo-scoped, excluding
+// dormant/inbox — same definition as everywhere else via OAD.Due.activeThreadsRaw) whose
+// next_action_date matches dateStr. Uses pressure(t, true) — the _suppressSideEffects flag
+// prevents getDayLoad from being called recursively, giving a stable base score for each peer
+// thread. Must consume the RAW (unscored) active list, never OAD.Due.activeThreads() — that
+// calls OAD.pressure() unsuppressed on every thread, which would call back into getDayLoad
+// and recurse infinitely.
 OAD.getDayLoad = function (dateStr) {
   if (!dateStr) return 0;
-  return (OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && t.next_action_date === dateStr; })
+  return OAD.Due.activeThreadsRaw()
+    .filter(function (t) { return t.next_action_date === dateStr; })
     .reduce(function (sum, t) { return sum + OAD.pressure(t, true); }, 0);
 };
 
@@ -750,8 +757,8 @@ OAD.calculateDayLoadScore = function (dateStr) {
 
   var pressureSum = OAD.getDayLoad(dateStr);
 
-  var dayThreads = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
-    .filter(function (t) { return t.status !== 'closed' && t.next_action_date === dateStr; });
+  var dayThreads = OAD.Due.activeThreadsRaw()
+    .filter(function (t) { return t.next_action_date === dateStr; });
   var edgeSum = dayThreads.reduce(function (sum, t) {
     var ctx = OAD.getGraphContext(t.id);
     return sum + ctx.blocks.length + ctx.blockedBy.length + ctx.enables.length + ctx.relates.length;
