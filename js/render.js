@@ -110,7 +110,7 @@ OAD.renderHeaderActions = function () {
         </div>
       </div>
 
-      <button class="ghost" onclick="OAD.renderCommandCenter()" style="font-weight:600;color:var(--primary)" data-i18n="myTeam">My Team</button>
+      ${typeof OAD.renderCommandCenter === 'function' ? '<button class="ghost" onclick="OAD.renderCommandCenter()" style="font-weight:600;color:var(--primary)" data-i18n="myTeam">My Team</button>' : ''}
       <button class="ghost" onclick="OAD.openSettingsModal()" data-i18n="settings">Settings</button>
       <button id="che-badge" class="ghost" onclick="OAD.openHealthPanel()" style="display:none;font-size:12px;padding:4px 10px;font-weight:600"></button>
     `;

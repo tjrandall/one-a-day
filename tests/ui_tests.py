@@ -172,6 +172,69 @@ def test_mark_cadence_done_advances_next_due(page):
                "next_due lands on a Wednesday (days_of_week: [3])")
 
 
+def test_command_center_nav_present_when_demo_module_loaded(page):
+    """
+    "My Team" (Command Center) is entirely fq-demo-module content (js/dashboard.js was
+    relocated to modules/demo/dashboard.js). In the normal case — module present, as it is
+    in this harness — the nav button must render and renderCommandCenter() must actually work,
+    not just exist.
+    """
+    print("\ntest_command_center_nav_present_when_demo_module_loaded")
+    result = page.evaluate("""() => {
+        // renderHeaderActions() is normally called from _bootAfterAuth (tests/tests.js),
+        // which this harness's test-mode dismiss flow doesn't route through — call it
+        // directly here, same as real boot does.
+        OAD.renderHeaderActions();
+        var header = document.querySelector('.header-actions');
+        var hasButton = header.innerHTML.includes('OAD.renderCommandCenter()');
+        var renderOk = true, renderError = null;
+        try {
+            OAD.renderCommandCenter();
+        } catch (e) {
+            renderOk = false;
+            renderError = e.message;
+        }
+        return { isFunction: typeof OAD.renderCommandCenter === 'function', hasButton, renderOk, renderError };
+    }""")
+    _assert(result["isFunction"], "OAD.renderCommandCenter is defined when the demo module loads")
+    _assert(result["hasButton"], "the My Team nav button is present in the rendered header")
+    _assert(result["renderOk"], f"renderCommandCenter() runs without throwing (error: {result['renderError']})")
+
+
+def test_app_degrades_gracefully_without_demo_module(browser_type):
+    """
+    Simulates the fq-demo submodule being entirely absent (e.g. a checkout that skipped
+    `git submodule update`, or the module repo being unreachable). The app -- core, not the
+    demo module -- must still boot cleanly with zero JS errors, and the My Team nav button
+    must simply not render rather than pointing at an undefined function.
+    """
+    print("\ntest_app_degrades_gracefully_without_demo_module")
+    browser = browser_type.launch()
+    page = browser.new_page()
+    page_errors = []
+    page.on("pageerror", lambda exc: page_errors.append(str(exc)))
+    page.route("**/modules/demo/*.js", lambda route: route.abort())
+
+    page.goto(f"{BASE_URL}/?tests=true")
+    page.wait_for_selector("#test-overlay")
+    _dismiss_overlay(page)
+
+    result = page.evaluate("""() => {
+        var header = document.querySelector('.header-actions');
+        return {
+            renderCommandCenterType: typeof OAD.renderCommandCenter,
+            demoType: typeof OAD.Demo,
+            hasButton: header.innerHTML.includes('OAD.renderCommandCenter()')
+        };
+    }""")
+    browser.close()
+
+    _assert(not page_errors, f"zero JS errors when the demo module fails to load (got: {page_errors})")
+    _assert_eq(result["renderCommandCenterType"], "undefined", "OAD.renderCommandCenter is genuinely undefined, not a stub")
+    _assert_eq(result["demoType"], "undefined", "OAD.Demo (roles) is also genuinely undefined")
+    _assert(not result["hasButton"], "the My Team nav button correctly does not render, rather than pointing at an undefined function")
+
+
 # ── Harness ────────────────────────────────────────────────────────────────────
 
 def run_tests():
@@ -192,8 +255,12 @@ def run_tests():
         # 3. Run UI tests
         test_cadence_recurrence_edit_round_trip(page)
         test_mark_cadence_done_advances_next_due(page)
+        test_command_center_nav_present_when_demo_module_loaded(page)
 
         browser.close()
+
+        # 4. Separate browser context: demo module deliberately blocked
+        test_app_degrades_gracefully_without_demo_module(p.chromium)
 
     total = len(_passes) + len(_failures)
     print(f"\n{'─' * 40}")

@@ -2811,7 +2811,7 @@ OAD._executeAdmission = async function() {
 
   OAD.saveDB();
   OAD.closeModal();
-  if (OAD._lastView === 'CommandCenter') OAD.renderCommandCenter();
+  if (OAD._lastView === 'CommandCenter' && typeof OAD.renderCommandCenter === 'function') OAD.renderCommandCenter();
   else if (OAD._lastView === 'Matrix') OAD.renderMatrixView();
   else OAD.renderListView();
 };
