@@ -2652,6 +2652,34 @@ OAD.test('computeSuppressedChildUUIDs: suppresses a lower-urgency child under an
   OAD._assert(result.has('c1'), 'future-dated child should be suppressed under its parent');
 });
 
+OAD.test('computeSuppressedChildUUIDs: never suppresses a child due within the given horizon (This Week under-reporting bug)', function () {
+  // Real reported case: HVAC Repair (P85) and VA Orthopedic Consult (P82) both had active
+  // parents with no next_action_date of their own, and were due 5 days out — not today, not
+  // overdue — so the old "only exempt overdue-or-today" rule suppressed them out of the This
+  // Week list entirely, with no compensating detail anywhere (their parents didn't even render
+  // in a date bucket to show the child-summary badge). horizonStr fixes this: This Week passes
+  // its own 7-day window so anything it exists to show is never suppressed out of it.
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' }); // no next_action_date, mirrors the real parents
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-08' }); // 5 days out
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+
+  const withoutHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(withoutHorizon.has('c1'), 'sanity check: without a horizon, a child due 5 days out is still suppressed (old behavior)');
+
+  const withHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03', null, '2026-07-10');
+  OAD._assert(!withHorizon.has('c1'), 'a child due within the given horizon must never be suppressed');
+});
+
+OAD.test('computeSuppressedChildUUIDs: still suppresses a child due beyond the given horizon', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-08-01' }); // well beyond a 7-day horizon
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03', null, '2026-07-10');
+  OAD._assert(result.has('c1'), 'a child due well beyond the horizon should still be suppressed under its parent');
+});
+
 OAD.test('computeSuppressedChildUUIDs: never suppresses a child due today (Bug 5)', function () {
   const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
   const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-03' });
@@ -2738,6 +2766,53 @@ OAD.test('renderDailyView-style suppression pipeline: a child Focus Now would su
 
     const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, focusUUID);
     OAD._assert(!suppressedUUIDs.has('child-1'), 'a thread Focus Now is currently recommending must never be suppressed from the This Week list');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('renderDailyView-style suppression pipeline: This Week under-reporting bug, reproduced exactly — two high-pressure children with dateless active parents, neither the Focus Now pick', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in2 = new Date(); in2.setDate(in2.getDate() + 2);
+    const in2Str = in2.toISOString().slice(0, 10);
+    const in5 = new Date(); in5.setDate(in5.getDate() + 5);
+    const in5Str = in5.toISOString().slice(0, 10);
+    const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+
+    // Mirrors the real reported case exactly: HVAC Repair (P85) and VA Orthopedic Consult
+    // (P82), each a child of an active parent with no next_action_date of its own, due a few
+    // days out — plus something due sooner so Focus Now's pick is a third thread, meaning the
+    // focusUUID exemption alone can't save either of these two.
+    const parentA = OAD.makeThread({ id: 1, uuid: 'parent-a', title: 'Home — Sandwich Transition', status: 'open', priority: 'low' });
+    const parentB = OAD.makeThread({ id: 2, uuid: 'parent-b', title: 'VA Health & Claims Coordination', status: 'open', priority: 'low' });
+    const hvac = OAD.makeThread({ id: 3, uuid: 'hvac-repair', title: 'HVAC Repair', status: 'waiting', priority: 'high', parent_uuid: 'parent-a', next_action_date: in2Str });
+    const ortho = OAD.makeThread({ id: 4, uuid: 'va-orthopedic', title: 'VA Orthopedic Consult', status: 'open', priority: 'high', parent_uuid: 'parent-b', next_action_date: in2Str });
+    const dueSooner = OAD.makeThread({ id: 5, uuid: 'due-sooner', title: 'Due sooner, wins Focus Now', status: 'open', priority: 'medium', next_action_date: OAD.todayStr() });
+    OAD.DB.threads = [parentA, parentB, hvac, ortho, dueSooner];
+
+    const focusUUID = OAD.getFocusUUID();
+    OAD._assertEqual(focusUUID, 'due-sooner', 'sanity check: Focus Now picks the item due today, not either 2-days-out child');
+
+    const active = OAD.DB.threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox');
+    const activeByUUID = {};
+    active.forEach(t => { activeByUUID[t.uuid] = t; });
+    const childrenByParentUUID = {};
+    active.forEach(t => {
+      if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
+        (childrenByParentUUID[t.parent_uuid] = childrenByParentUUID[t.parent_uuid] || []).push(t);
+      }
+    });
+
+    const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, focusUUID, in7Str);
+    OAD._assert(!suppressedUUIDs.has('hvac-repair'), 'HVAC Repair must not be suppressed from This Week, even though it is not the Focus Now pick');
+    OAD._assert(!suppressedUUIDs.has('va-orthopedic'), 'VA Orthopedic Consult must not be suppressed from This Week, even though it is not the Focus Now pick');
+
+    const weekThreads = active.filter(t => !suppressedUUIDs.has(t.uuid) && t.next_action_date > todayStr && t.next_action_date <= in7Str);
+    OAD._assert(weekThreads.some(t => t.uuid === 'hvac-repair'), 'HVAC Repair must actually appear in the This Week list');
+    OAD._assert(weekThreads.some(t => t.uuid === 'va-orthopedic'), 'VA Orthopedic Consult must actually appear in the This Week list');
   } finally {
     OAD.DB.threads = orig;
   }

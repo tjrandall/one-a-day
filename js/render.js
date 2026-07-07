@@ -967,7 +967,9 @@ OAD.renderTodayView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
+  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  const in7Str = in7Dt.toISOString().slice(0, 10);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -978,8 +980,6 @@ OAD.renderTodayView = function () {
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });
@@ -1229,15 +1229,15 @@ OAD.renderDailyView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
+  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  const in7Str = in7Dt.toISOString().slice(0, 10);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
   // Filter threads into the standard buckets
   const overdueThreads = filteredActive.filter(OAD.isActionOverdue);
   const todayThreads   = filteredActive.filter(t => t.next_action_date === todayStr);
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
   const weekThreads    = filteredActive.filter(t => t.next_action_date > todayStr && t.next_action_date <= in7Str).sort((a, b) => a.next_action_date.localeCompare(b.next_action_date));
   const activeThreads  = filteredActive.filter(t => !t.next_action_date);
 
@@ -1695,7 +1695,9 @@ OAD.renderMatrixView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
+  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  const in7Str = in7Dt.toISOString().slice(0, 10);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID(), in7Str);
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -1707,8 +1709,6 @@ OAD.renderMatrixView = function () {
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
-  const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
-  const in7Str = in7Dt.toISOString().slice(0, 10);
   
   const overdueCadences = cads.filter(function (c) { return OAD.cadenceOverdue(c); });
   const todayCadences   = cads.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); });

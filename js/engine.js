@@ -231,24 +231,36 @@ OAD.getOverdueDays = function (thread) {
 };
 
 // Single source of truth for which children get nested under their parent's summary badge
-// instead of listed flatly in the Overdue/Today/Week buckets. A child that's overdue or due
-// today is NEVER suppressed — nesting it away is only safe for lower-urgency children, since
-// the parent may have no next_action_date of its own and never appear in any date bucket,
-// which would otherwise hide the child's urgency completely (Bug 5, weekly load investigation).
+// instead of listed flatly in the Overdue/Today/Week buckets.
 //
-// focusUUID (optional): whatever OAD.getFocusUUID() currently returns is also never suppressed.
-// Focus Now's selection functions don't know about this suppression rule at all (they just
-// filter by status), so without this exemption a child due later this week — not today, not
-// overdue — could be Focus Now's own top recommendation while being simultaneously invisible
-// in the This Week list it's supposed to be summarized from. Whatever Focus Now is telling you
-// to work on can never be a thing you can't find anywhere else.
-OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, todayStr, focusUUID) {
+// horizonStr (defaults to todayStr): a child is NEVER suppressed if it's overdue, or its
+// next_action_date falls anywhere between today and horizonStr, inclusive. This used to be
+// "overdue or due exactly today" only — which was a much worse bug than it looked: the This
+// Week bucket's whole reason for existing is to surface things due in the next 7 days, so a
+// child due in 2-6 days (not today, not overdue) was being suppressed out of the very list
+// that exists to show it, with no compensating detail — the child-summary badge on the
+// parent's row (below) shows only a subtask count + one "Next:" hint, and the parent itself
+// often has no next_action_date of its own, so it may not render in This Week (or anywhere
+// date-scoped) at all. Confirmed against real data: the two highest-pressure threads due that
+// week (P85, P82) were both invisible in This Week this way. Callers pass their own bucket's
+// horizon (e.g. the This Week bucket passes its own 7-days-out date) so "never suppress
+// something this view exists to show" holds for whichever window is actually being rendered,
+// while a child due well beyond that horizon (the original Bug 5 case) still safely nests
+// under its parent's summary.
+//
+// focusUUID (optional): whatever OAD.getFocusUUID() currently returns is also never suppressed,
+// for the same reason — Focus Now's selection functions don't consult this suppression rule at
+// all, so without this exemption its own top pick could still slip past the horizon check in
+// an edge case and be invisible in the very list it's supposedly summarized from.
+OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, todayStr, focusUUID, horizonStr) {
   var suppressed = new Set();
+  var horizon = horizonStr || todayStr;
   Object.keys(childrenByParentUUID || {}).forEach(function (puuid) {
     var parent = activeByUUID[puuid];
     if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) {
-      if (OAD.isActionOverdue(c) || c.next_action_date === todayStr) return;
+      if (OAD.isActionOverdue(c)) return;
+      if (c.next_action_date && c.next_action_date <= horizon) return;
       if (focusUUID && c.uuid === focusUUID) return;
       suppressed.add(c.uuid);
     });
