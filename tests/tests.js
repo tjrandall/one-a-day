@@ -2304,7 +2304,7 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
 OAD.test('strict ID-driven engine and focus selection excludes blocked threads', function () {
   const originalThreads = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10); // matches selectFocusThread()'s own todayStr basis
+    const todayStr = OAD.todayStr(); // matches selectFocusThread()'s own todayStr basis
     const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'high', next_action_date: todayStr, connections: [] };
     const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'open', life_area: 'Work', priority: 'high', next_action_date: todayStr, connections: [{ to_uuid: 'uuid-a', to_label: 'Task A', edge_type: 'blocks' }] };
 
@@ -2768,7 +2768,7 @@ OAD.test('getDailyToat: dormant thread is never selected', function () {
 OAD.test('selectFocusThread: dormant thread is never returned', function () {
   const orig = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Dormant high priority', status: 'dormant', priority: 'critical', next_action: 'do something', next_action_date: todayStr }),
       OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something else', next_action_date: todayStr })
@@ -2879,7 +2879,7 @@ OAD.test('pressure: inbox status is 0, matching dormant', function () {
 OAD.test('selectFocusThread: inbox thread is never returned', function () {
   const orig = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Inbox capture', status: 'inbox', priority: 'critical', next_action_date: todayStr }),
       OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open low priority', status: 'open', priority: 'low', next_action: 'do something', next_action_date: todayStr })
@@ -2922,7 +2922,7 @@ OAD.test('pressure: waiting+actioned pressure is 35% of base', function () {
 OAD.test('selectFocusThread: waiting+actioned excluded when alternatives exist', function () {
   const orig = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Actioned waiting', status: 'waiting', priority: 'critical', user_action_complete: true, next_action: 'sent email', next_action_date: todayStr }),
       OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Open thread', status: 'open', priority: 'medium', next_action: 'do something', next_action_date: todayStr })
@@ -2938,7 +2938,7 @@ OAD.test('selectFocusThread: waiting+actioned excluded when alternatives exist',
 OAD.test('selectFocusThread: waiting+actioned returned as last resort when nothing else', function () {
   const orig = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Only actioned waiting', status: 'waiting', priority: 'high', user_action_complete: true, next_action: 'waiting for reply', next_action_date: todayStr })
     ];
@@ -2955,7 +2955,7 @@ OAD.test('selectFocusThread: waiting+actioned returned as last resort when nothi
 OAD.test('selectFocusThread: a lower-pressure item due today outranks a higher-pressure item due later — the exact reported bug', function () {
   const orig = OAD.DB.threads;
   try {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
     const future = new Date(); future.setDate(future.getDate() + 5);
     const futureStr = future.toISOString().slice(0, 10);
 
@@ -3031,6 +3031,27 @@ OAD.test('selectFutureFocusSuggestion: returns null when nothing is upcoming eit
   } finally {
     OAD.DB.threads = orig;
   }
+});
+
+// ── Tests: OAD.todayStr() (Focus Now "due today" one-day-off bug) ──────
+// Regression for: Focus Now labeled a next-day thread "due today" in the evening while the
+// dashboard/"This Week" list (which already zeroes to local midnight before ISO conversion)
+// showed the correct date for the same thread at the same moment. Root cause: plain
+// `new Date().toISOString().slice(0,10)` converts the current instant straight to UTC, which
+// rolls to the next calendar date once local time is late enough in the evening — before
+// selectFocusThread/selectFutureFocusSuggestion/focusReason were switched to OAD.todayStr(),
+// they computed their own unsafe version of this independently.
+
+OAD.test('todayStr: matches the local calendar date, not a raw UTC conversion', function () {
+  const now = new Date();
+  const expected = now.getFullYear() + '-' +
+    String(now.getMonth() + 1).padStart(2, '0') + '-' +
+    String(now.getDate()).padStart(2, '0');
+  OAD._assertEqual(OAD.todayStr(), expected, 'todayStr() should equal the local Y-M-D regardless of time of day or UTC offset');
+});
+
+OAD.test('todayStr: is stable across repeated calls within the same local day', function () {
+  OAD._assertEqual(OAD.todayStr(), OAD.todayStr(), 'two calls in the same test tick should agree');
 });
 
 // ── Tests: reopen no longer misfires the closure wizard (Bug 4) ─────────

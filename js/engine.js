@@ -394,6 +394,20 @@ OAD.calculateRunwayRisk = function (goalThreadId) {
 
 OAD._DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
+// Today's date as a local-calendar-day string. Zeroes to local midnight before converting
+// to ISO — plain `new Date().toISOString().slice(0,10)` converts the current instant
+// straight to UTC, so once local time is late enough in the evening that UTC has already
+// rolled to the next date, it silently returns tomorrow's date instead of today's. This bit
+// Focus Now specifically (selectFocusThread/focusReason both did the unsafe conversion),
+// while the dashboard/"This Week" views were already safe via this same zero-then-convert
+// pattern — hence the same thread showing "due today" in one widget and its correct date in
+// the other.
+OAD.todayStr = function () {
+  var d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString().slice(0, 10);
+};
+
 OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
   const ref = fromDate ? new Date(fromDate + 'T00:00:00') : new Date();
   ref.setHours(0, 0, 0, 0);
@@ -597,7 +611,7 @@ OAD.applySavedView = function (threads, view) {
 };
 
 OAD.selectFocusThread = function () {
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var todayStr = OAD.todayStr();
   var isWaitingActioned = function (t) { return t.status === 'waiting' && t.user_action_complete; };
   var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
     .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
@@ -639,7 +653,7 @@ OAD.selectFocusThread = function () {
 // actual recommendation. Nearest date first, tie-broken by pressure. Mirrors the spirit of
 // TOAT's celebrate-when-empty pattern: an empty Focus Now is good news, not a dead end.
 OAD.selectFutureFocusSuggestion = function () {
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var todayStr = OAD.todayStr();
   var allActive = (OAD.getVisibleThreads ? OAD.getVisibleThreads() : OAD.DB.threads || [])
     .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
   var upcoming = allActive.filter(function (t) { return t.next_action_date && t.next_action_date > todayStr; });
@@ -653,7 +667,7 @@ OAD.selectFutureFocusSuggestion = function () {
 
 // Builds a human-readable reason string explaining why a thread is the focus.
 OAD.focusReason = function (t) {
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var todayStr = OAD.todayStr();
   var parts = [];
   if (t.status === 'stalled')  parts.push('stalled');
   if (t.status === 'waiting' && t.user_action_complete) parts.push('ball in their court');
