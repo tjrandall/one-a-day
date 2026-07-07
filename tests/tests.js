@@ -2818,6 +2818,89 @@ OAD.test('renderDailyView-style suppression pipeline: This Week under-reporting 
   }
 });
 
+// ── Tests: OAD.Due — single source of truth for "what's due" ─────────
+// Unlike the hand-rolled pipelines above (which predate OAD.Due and still test
+// computeSuppressedChildUUIDs directly), these call the real production entry point,
+// OAD.Due.dashboardData(), so they prove the actual consumer code agrees — not just that the
+// underlying suppression primitive is correct in isolation.
+
+OAD.test('OAD.Due.dashboardData: two dateless active parents each with a high-pressure child due ~2 days out both appear in .week (regression — the exact reported bug)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in2 = new Date(); in2.setDate(in2.getDate() + 2);
+    const in2Str = in2.toISOString().slice(0, 10);
+    const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+
+    // Mirrors the real reported case: HVAC Repair (P85) and VA Orthopedic Consult (P82), each
+    // a child of an active parent with no next_action_date of its own, due a few days out —
+    // plus something due sooner (low pressure noise) so Focus Now's pick is a third thread.
+    const parentA = OAD.makeThread({ id: 1, uuid: 'due-parent-a', title: 'Home — Sandwich Transition', status: 'open', priority: 'low' });
+    const parentB = OAD.makeThread({ id: 2, uuid: 'due-parent-b', title: 'VA Health & Claims Coordination', status: 'open', priority: 'low' });
+    const hvac = OAD.makeThread({ id: 3, uuid: 'due-hvac-repair', title: 'HVAC Repair', status: 'waiting', priority: 'high', parent_uuid: 'due-parent-a', next_action_date: in2Str });
+    const ortho = OAD.makeThread({ id: 4, uuid: 'due-va-orthopedic', title: 'VA Orthopedic Consult', status: 'open', priority: 'high', parent_uuid: 'due-parent-b', next_action_date: in2Str });
+    const noise = OAD.makeThread({ id: 5, uuid: 'due-noise', title: 'Low-pressure noise, wins Focus Now', status: 'open', priority: 'low', next_action_date: todayStr });
+    OAD.DB.threads = [parentA, parentB, hvac, ortho, noise];
+
+    const data = OAD.Due.dashboardData(todayStr, in7Str);
+    OAD._assertEqual(data.focusUUID, 'due-noise', 'sanity check: Focus Now picks the item due today, not either 2-days-out child');
+    OAD._assert(data.week.some(t => t.uuid === 'due-hvac-repair'), 'HVAC Repair must appear in dashboardData().week');
+    OAD._assert(data.week.some(t => t.uuid === 'due-va-orthopedic'), 'VA Orthopedic Consult must appear in dashboardData().week');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('OAD.Due.dashboardData: whatever getFocusUUID() picks, if due in [today, in7Str], also shows up in that same call\'s today/week bucket', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in3 = new Date(); in3.setDate(in3.getDate() + 3);
+    const in3Str = in3.toISOString().slice(0, 10);
+    const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+
+    const t1 = OAD.makeThread({ id: 1, uuid: 'consist-t1', title: 'Due today, wins focus', status: 'stalled', priority: 'critical', next_action_date: todayStr });
+    const t2 = OAD.makeThread({ id: 2, uuid: 'consist-t2', title: 'Due later this week', status: 'open', priority: 'medium', next_action_date: in3Str });
+    OAD.DB.threads = [t1, t2];
+
+    const data = OAD.Due.dashboardData(todayStr, in7Str);
+    OAD._assert(!!data.focusUUID, 'sanity check: something should be focused');
+    const focusThread = data.active.find(t => t.uuid === data.focusUUID);
+    OAD._assert(!!focusThread, 'the focus pick must be present in dashboardData().active');
+    if (focusThread.next_action_date >= todayStr && focusThread.next_action_date <= in7Str) {
+      const inToday = data.today.some(t => t.uuid === data.focusUUID);
+      const inWeek  = data.week.some(t => t.uuid === data.focusUUID);
+      OAD._assert(inToday || inWeek, 'Focus Now\'s pick must also appear in the same call\'s today or week bucket, not just its own separate selection logic');
+    }
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('OAD.Due.selfCheck: returns ok with no issues on the "This Week under-reporting" scenario (proves the fix holds, not just that the bug is gone)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in2 = new Date(); in2.setDate(in2.getDate() + 2);
+    const in2Str = in2.toISOString().slice(0, 10);
+
+    const parentA = OAD.makeThread({ id: 1, uuid: 'self-parent-a', title: 'Home — Sandwich Transition', status: 'open', priority: 'low' });
+    const parentB = OAD.makeThread({ id: 2, uuid: 'self-parent-b', title: 'VA Health & Claims Coordination', status: 'open', priority: 'low' });
+    const hvac = OAD.makeThread({ id: 3, uuid: 'self-hvac-repair', title: 'HVAC Repair', status: 'waiting', priority: 'high', parent_uuid: 'self-parent-a', next_action_date: in2Str });
+    const ortho = OAD.makeThread({ id: 4, uuid: 'self-va-orthopedic', title: 'VA Orthopedic Consult', status: 'open', priority: 'high', parent_uuid: 'self-parent-b', next_action_date: in2Str });
+    const noise = OAD.makeThread({ id: 5, uuid: 'self-noise', title: 'Low-pressure noise, wins Focus Now', status: 'open', priority: 'low', next_action_date: todayStr });
+    OAD.DB.threads = [parentA, parentB, hvac, ortho, noise];
+
+    const result = OAD.Due.selfCheck();
+    OAD._assertEqual(result.ok, true, 'selfCheck should report no issues: ' + JSON.stringify(result.issues));
+    OAD._assertEqual(result.issues.length, 0, 'issues list should be empty');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
 OAD.test('ADE-003: shared identifier with prep→submit creates blocks edge', function () {
   const orig = OAD.DB.threads;
   const origSupp = OAD.DB.ade_suppressions;
