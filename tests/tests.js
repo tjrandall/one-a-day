@@ -2679,6 +2679,70 @@ OAD.test('computeSuppressedChildUUIDs: Patient life_area parent never suppresses
   OAD._assert(!result.has('c1'), 'children of a Patient life_area parent should never be suppressed');
 });
 
+OAD.test('computeSuppressedChildUUIDs: never suppresses the child matching focusUUID, even if due later this week (regression — "This Week excludes Focus Now" bug)', function () {
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-08' }); // 5 days out — not today, not overdue
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+
+  const withoutFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(withoutFocus.has('c1'), 'sanity check: without a focus exemption this child is suppressed like any other future-dated child');
+
+  const withFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03', 'c1');
+  OAD._assert(!withFocus.has('c1'), 'a child matching focusUUID must never be suppressed, regardless of its date');
+});
+
+OAD.test('getFocusUUID: returns selectFocusThread\'s uuid when something is due now, else selectFutureFocusSuggestion\'s', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const dueNow = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Due now', status: 'open', priority: 'high', next_action_date: OAD.todayStr() });
+    OAD.DB.threads = [dueNow];
+    OAD._assertEqual(OAD.getFocusUUID(), dueNow.uuid, 'should match selectFocusThread when something is due now');
+
+    const future = new Date(); future.setDate(future.getDate() + 3);
+    const upcoming = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Upcoming', status: 'open', priority: 'high', next_action_date: future.toISOString().slice(0, 10) });
+    OAD.DB.threads = [upcoming];
+    OAD._assertEqual(OAD.getFocusUUID(), upcoming.uuid, 'should fall back to selectFutureFocusSuggestion when nothing is due now');
+
+    OAD.DB.threads = [];
+    OAD._assertEqual(OAD.getFocusUUID(), null, 'should return null when there is nothing to focus on at all');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('renderDailyView-style suppression pipeline: a child Focus Now would suggest is never invisible from This Week (regression — the exact reported bug)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in5 = new Date(); in5.setDate(in5.getDate() + 5);
+    const in5Str = in5.toISOString().slice(0, 10);
+
+    const parent = OAD.makeThread({ id: 1, uuid: 'parent-1', title: 'Parent project', status: 'open', priority: 'low' }); // no next_action_date of its own
+    const child = OAD.makeThread({ id: 2, uuid: 'child-1', title: 'High-pressure child', status: 'stalled', priority: 'critical', parent_uuid: 'parent-1', next_action_date: in5Str });
+    OAD.DB.threads = [parent, child];
+
+    // Mirrors the exact pipeline renderDailyView/renderTodayView/renderMatrixView use.
+    const active = OAD.DB.threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox');
+    const activeByUUID = {};
+    active.forEach(t => { activeByUUID[t.uuid] = t; });
+    const childrenByParentUUID = {};
+    active.forEach(t => {
+      if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
+        (childrenByParentUUID[t.parent_uuid] = childrenByParentUUID[t.parent_uuid] || []).push(t);
+      }
+    });
+
+    const focusUUID = OAD.getFocusUUID();
+    OAD._assertEqual(focusUUID, 'child-1', 'sanity check: Focus Now should be suggesting this child (highest pressure, only upcoming item)');
+
+    const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, focusUUID);
+    OAD._assert(!suppressedUUIDs.has('child-1'), 'a thread Focus Now is currently recommending must never be suppressed from the This Week list');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
 OAD.test('ADE-003: shared identifier with prep→submit creates blocks edge', function () {
   const orig = OAD.DB.threads;
   const origSupp = OAD.DB.ade_suppressions;

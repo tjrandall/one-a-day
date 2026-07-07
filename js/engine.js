@@ -235,17 +235,33 @@ OAD.getOverdueDays = function (thread) {
 // today is NEVER suppressed — nesting it away is only safe for lower-urgency children, since
 // the parent may have no next_action_date of its own and never appear in any date bucket,
 // which would otherwise hide the child's urgency completely (Bug 5, weekly load investigation).
-OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, todayStr) {
+//
+// focusUUID (optional): whatever OAD.getFocusUUID() currently returns is also never suppressed.
+// Focus Now's selection functions don't know about this suppression rule at all (they just
+// filter by status), so without this exemption a child due later this week — not today, not
+// overdue — could be Focus Now's own top recommendation while being simultaneously invisible
+// in the This Week list it's supposed to be summarized from. Whatever Focus Now is telling you
+// to work on can never be a thing you can't find anywhere else.
+OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, todayStr, focusUUID) {
   var suppressed = new Set();
   Object.keys(childrenByParentUUID || {}).forEach(function (puuid) {
     var parent = activeByUUID[puuid];
     if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) {
       if (OAD.isActionOverdue(c) || c.next_action_date === todayStr) return;
+      if (focusUUID && c.uuid === focusUUID) return;
       suppressed.add(c.uuid);
     });
   });
   return suppressed;
+};
+
+// The uuid of whatever thread Focus Now is currently showing — the primary due-now/overdue
+// pick if one exists, otherwise the "get ahead" upcoming suggestion. Centralized so every
+// caller (rendering AND suppression) agrees on what "the current focus" means.
+OAD.getFocusUUID = function () {
+  var t = OAD.selectFocusThread() || OAD.selectFutureFocusSuggestion();
+  return t ? t.uuid : null;
 };
 
 OAD.deadlineState = function (thread) {

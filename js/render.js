@@ -967,7 +967,7 @@ OAD.renderTodayView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -1229,7 +1229,7 @@ OAD.renderDailyView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
@@ -1695,7 +1695,7 @@ OAD.renderMatrixView = function () {
       childrenByParentUUID[t.parent_uuid].push(t);
     }
   });
-  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
+  const suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, OAD.getFocusUUID());
 
   const filteredActive  = active.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
 
