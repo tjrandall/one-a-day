@@ -160,7 +160,7 @@ Pressure score: ${OAD.pressure(thread)}`;
     parsed = { observation: raw, blind_spot: '', challenge: '', next_move: '', assumption_flag: '' };
   }
 
-  parsed.date = new Date().toISOString().slice(0, 10);
+  parsed.date = OAD.todayStr();
   return parsed;
 };
 
@@ -224,7 +224,7 @@ Based on this, generate a proactive suggestion.`;
     throw new Error("Failed to parse proactive counsel response: " + raw);
   }
   
-  persona.last_proactive_scan = new Date().toISOString().slice(0, 10);
+  persona.last_proactive_scan = OAD.todayStr();
   parsed.uuid = OAD._generateUUID();
   parsed.date = persona.last_proactive_scan;
   
@@ -236,7 +236,7 @@ Based on this, generate a proactive suggestion.`;
 };
 
 OAD.genDailyIntercept = async function () {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = OAD.todayStr();
   const persona = OAD.DB.persona || {};
   
   const loadScore = typeof OAD.getDayLoad === 'function' ? OAD.getDayLoad(todayStr) : 0;

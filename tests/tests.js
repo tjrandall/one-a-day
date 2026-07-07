@@ -731,7 +731,8 @@ OAD.test('checkInHabit: no → streak 0', function () {
 });
 
 OAD.test('checkInHabit: consecutive yes from yesterday increments streak', function () {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yd = new Date(); yd.setHours(0, 0, 0, 0); yd.setDate(yd.getDate() - 1);
+  const yesterday = yd.toISOString().slice(0, 10);
   const h = OAD.addHabit(OAD.makeHabit({
     title: 'Streak continue',
     current_streak: 3, longest_streak: 3,
@@ -751,7 +752,8 @@ OAD.test('checkInHabit: yes today twice does not double-count streak', function 
 });
 
 OAD.test('checkInHabit: flip yes→no today undoes streak increment', function () {
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const yd = new Date(); yd.setHours(0, 0, 0, 0); yd.setDate(yd.getDate() - 1);
+  const yesterday = yd.toISOString().slice(0, 10);
   const h = OAD.addHabit(OAD.makeHabit({
     title: 'Flip yes to no',
     current_streak: 2, longest_streak: 2,

@@ -502,7 +502,7 @@ OAD.openGraphIntelligencePanel = function (threadId) {
 };
 
 OAD.checkDailyIntercept = async function () {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = OAD.todayStr();
   OAD.DB.persona = OAD.DB.persona || {};
   if (OAD.DB.persona.last_intercept_date === todayStr) return;
   
@@ -1317,7 +1317,7 @@ OAD._downloadExport = function () {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = 'one-a-day-' + new Date().toISOString().slice(0, 10) + '.json';
+  a.download = 'one-a-day-' + OAD.todayStr() + '.json';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -2475,7 +2475,7 @@ OAD._saveMailroomIntake = function () {
       status: 'open',
       priority,
       next_action_date,
-      evolution_log: [{ date: new Date().toISOString().slice(0, 10), note: 'Thread created via Mailroom Intake.' }]
+      evolution_log: [{ date: OAD.todayStr(), note: 'Thread created via Mailroom Intake.' }]
     };
     
     OAD.DB.threads = OAD.DB.threads || [];
@@ -2606,7 +2606,7 @@ OAD._executeAdmission = async function() {
   
   // 1. Add to Command Center Clients
   if (!OAD._demoClients) OAD._demoClients = [];
-  const today = new Date().toISOString().split('T')[0];
+  const today = OAD.todayStr();
   OAD._demoClients.push({
     name: name,
     counselor: counselor,

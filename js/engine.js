@@ -128,7 +128,7 @@ OAD.getEisenhowerQuadrant = function (thread) {
   const isImportant = thread.priority === 'critical' || thread.priority === 'high';
   let isUrgent = false;
 
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = OAD.todayStr();
   if (thread.next_action_date && thread.next_action_date <= todayStr) {
     isUrgent = true;
   }
@@ -337,7 +337,7 @@ OAD.calculateRunwayRisk = function (goalThreadId) {
   var goalThread = OAD.getThread(goalThreadId);
   if (!goalThread || !goalThread.deadline) return null;
 
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var todayStr = OAD.todayStr();
   var deadline = new Date(goalThread.deadline + 'T00:00:00');
   var benchmarks = (OAD.Config && OAD.Config.runwayBenchmarks) || {};
 
@@ -756,7 +756,7 @@ OAD.cadenceOverdue = function (cadence) {
 
 OAD.cadenceDoneThisPeriod = function (c) {
   if (!c) return false;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = OAD.todayStr();
   const overdue = OAD.cadenceOverdue(c);
   if (overdue) return false;
   

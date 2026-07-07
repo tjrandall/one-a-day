@@ -109,7 +109,7 @@ OAD.renderCommandCenter = function () {
         name: t.title.replace('[Patient] ', ''),
         counselor: meta.counselor || 'Counselor 1',
         checkout_type: meta.checkout_type || 'Active',
-        check_in_date: meta.check_in_date || new Date().toISOString().split('T')[0],
+        check_in_date: meta.check_in_date || OAD.todayStr(),
         discharge_date: meta.discharge_date,
         total_planned_days: parseInt(meta.total_planned_days) || 28,
         total_stay_days: parseInt(meta.total_stay_days) || 0

@@ -546,7 +546,7 @@ OAD.renderOverdueBanner = function () {
 OAD._isRunwayRiskSnoozed = function (trackUuid) {
   var track = OAD.getThreadByUUID(trackUuid);
   if (!track || !track.runway_ack_until) return false;
-  var todayStr = new Date().toISOString().slice(0, 10);
+  var todayStr = OAD.todayStr();
   return track.runway_ack_until >= todayStr;
 };
 
@@ -592,7 +592,7 @@ OAD.renderRunwayRiskBanner = function () {
 OAD.markCadenceDone = function (id) {
   const c = OAD.getCadence(id);
   if (!c) return;
-  c.last_completed = new Date().toISOString().slice(0, 10);
+  c.last_completed = OAD.todayStr();
   c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
   OAD.saveDB();
   OAD.renderOverdueBanner();
@@ -614,7 +614,7 @@ OAD.renderCadencePanel = function () {
   if (!panel) return;
 
   const cadences = OAD.getVisibleCadences();
-  const today    = new Date().toISOString().slice(0, 10);
+  const today    = OAD.todayStr();
 
   const items = cadences.length ? cadences.map(function (c) {
     const overdue        = OAD.cadenceOverdue(c);
@@ -827,7 +827,7 @@ OAD.renderHabitPanel = function () {
     return;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = OAD.todayStr();
   const todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
   const items = habits.map(function (h) {
@@ -1580,6 +1580,7 @@ OAD.renderDailyView = function () {
     
   if (hardDeadlineStr === '—' && window.OAD && OAD._demoRole) {
     const endOfQuarter = new Date();
+    endOfQuarter.setHours(0, 0, 0, 0);
     endOfQuarter.setMonth(Math.floor(endOfQuarter.getMonth() / 3) * 3 + 3, 0); // Last day of current quarter
     hardDeadlineStr = OAD.formatDate(endOfQuarter.toISOString().slice(0,10));
   }

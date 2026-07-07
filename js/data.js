@@ -215,7 +215,7 @@ OAD.isOffDay = function(dateStr, role) {
 OAD.addEvolution = function (id, note) {
   const t = OAD.getThread(id);
   if (!t) return;
-  t.evolution_log.push({ date: new Date().toISOString().slice(0, 10), note });
+  t.evolution_log.push({ date: OAD.todayStr(), note });
   OAD.saveDB();
 };
 
@@ -227,7 +227,7 @@ OAD.addInsight = function (id, insight) {
     thread_id: id,
     thread_title: t.title,
     insight,
-    date: new Date().toISOString().slice(0, 10)
+    date: OAD.todayStr()
   });
   OAD.saveDB();
 };
@@ -444,8 +444,9 @@ OAD.updateHabit = function (id, patch) {
 OAD.checkInHabit = function (id, done, note) {
   const h = OAD.getHabit(id);
   if (!h) return null;
-  const today     = new Date().toISOString().slice(0, 10);
-  const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const today     = OAD.todayStr();
+  const yesterdayDt = new Date(); yesterdayDt.setHours(0, 0, 0, 0); yesterdayDt.setDate(yesterdayDt.getDate() - 1);
+  const yesterday = yesterdayDt.toISOString().slice(0, 10);
   const alreadyToday = h.last_checked_in === today;
 
   if (done) {
@@ -735,7 +736,7 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
 };
 
 OAD.getDailyToat = function () {
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = OAD.todayStr();
   OAD.DB.toat = OAD.DB.toat || [];
 
   function isFriction(t) {
@@ -897,7 +898,7 @@ OAD.makeIdea = function (overrides) {
     title:          '',
     notes:          '',
     source:         '',
-    added_date:     new Date().toISOString().slice(0, 10),
+    added_date:     OAD.todayStr(),
     last_surfaced:  null,
     type:           'other',   // book | article | creative | project-seed | other
     energy_required: 'medium', // low | medium | high
