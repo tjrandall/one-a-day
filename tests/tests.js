@@ -1892,6 +1892,26 @@ OAD.test('cadenceDoneThisPeriod: identifies if a cadence has been completed in t
   OAD._assert(!OAD.cadenceDoneThisPeriod(c), 'Weekly cadence due today but not completed today should not be done this period');
 });
 
+OAD.test('OAD.Due.isCadenceDueOn: excludes an already-completed-today cadence (regression — This Week\'s Load over-counting bug)', function () {
+  // Real reported case: "Total Consecration to Jesus Through Mary" had next_due === today
+  // AND last_completed === today (already done for this period), but This Week's Load's
+  // per-day cadence tally used a naive `next_due === dateStr` check with no done-this-period
+  // exclusion, unlike OAD.Due.cadenceBuckets — so it double-counted a cadence that was already
+  // handled, showing 9 items for a day that genuinely only had 8.
+  const todayStr = OAD.todayStr();
+  const doneToday = OAD.makeCadence({ title: 'Done today', recurrence: 'weekly', next_due: todayStr, last_completed: todayStr });
+  OAD._assert(!OAD.Due.isCadenceDueOn(doneToday, todayStr), 'a cadence already completed for today must not count as due today');
+
+  const notDoneToday = OAD.makeCadence({ title: 'Not done today', recurrence: 'weekly', next_due: todayStr, last_completed: '1970-01-01' });
+  OAD._assert(OAD.Due.isCadenceDueOn(notDoneToday, todayStr), 'a genuinely undone cadence due today must still count');
+
+  const future = new Date(); future.setDate(future.getDate() + 3);
+  const futureStr = future.toISOString().slice(0, 10);
+  const dueLater = OAD.makeCadence({ title: 'Due later this week', recurrence: 'weekly', next_due: futureStr, last_completed: '1970-01-01' });
+  OAD._assert(OAD.Due.isCadenceDueOn(dueLater, futureStr), 'a cadence genuinely due on a future day must count for that day');
+  OAD._assert(!OAD.Due.isCadenceDueOn(dueLater, todayStr), 'that same cadence must not count for today, only its actual due date');
+});
+
 // ── Tests: Cycle and Critical Path ─────────────────────────────────────
 
 OAD.test('detectCycles: returns cycles', function () {

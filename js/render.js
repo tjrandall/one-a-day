@@ -1482,7 +1482,7 @@ OAD.renderDailyView = function () {
       dayDt.setDate(dayDt.getDate() + di);
       var dayStr = dayDt.toISOString().slice(0, 10);
       var threadCount  = due.active.filter(function (t) { return t.next_action_date === dayStr; }).length;
-      var cadenceCount = cads.filter(function (c)  { return c.next_due === dayStr; }).length;
+      var cadenceCount = cads.filter(function (c)  { return OAD.Due.isCadenceDueOn(c, dayStr); }).length;
       var total = threadCount + cadenceCount; // still shown as "N items" — the label below no longer comes from this raw count
       var loadScore = OAD.calculateDayLoadScore(dayStr);
       var labelKey = OAD.getDayLoadLabel(loadScore);

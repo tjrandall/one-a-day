@@ -52,12 +52,25 @@ OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
   };
 };
 
+// Whether a cadence counts as "due" on a specific calendar day — not overdue (relative to
+// actual today, not dateStr), its next_due matches dateStr exactly, and it hasn't already
+// been completed for this period. This is the one true predicate for "does this cadence
+// belong on day X" — cadenceBuckets below is just this applied to today/the week window, and
+// any other per-day tally (e.g. This Week's Load's daily heatmap) must go through this too
+// rather than re-deriving its own `next_due === dateStr` check, which silently double-counts
+// already-completed cadences (confirmed bug: a cadence due today but already marked done
+// today was still being tallied into that day's item count by a hand-rolled check that skipped
+// this exclusion).
+OAD.Due.isCadenceDueOn = function (cadence, dateStr) {
+  return !OAD.cadenceOverdue(cadence) && cadence.next_due === dateStr && !OAD.cadenceDoneThisPeriod(cadence);
+};
+
 // Cadence overdue/today/week split — mirrors the cadence filter that used to be duplicated
 // 3x in render.js.
 OAD.Due.cadenceBuckets = function (cadences, todayStr, in7Str) {
   return {
     overdue: cadences.filter(OAD.cadenceOverdue),
-    today:   cadences.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due === todayStr && !OAD.cadenceDoneThisPeriod(c); }),
+    today:   cadences.filter(function (c) { return OAD.Due.isCadenceDueOn(c, todayStr); }),
     week:    cadences.filter(function (c) { return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c); })
                .sort(function (a, b) { return a.next_due.localeCompare(b.next_due); })
   };
