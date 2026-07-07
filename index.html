@@ -64,11 +64,13 @@
 </script>
 <script src="js/demo_data_sync.js" onerror="void 0"></script>
 <script src="js/demo.config.js" onerror="void 0"></script>
-<script src="modules/demo/roles.js" onerror="void 0"></script>
 <script src="js/module.config.js" onerror="void 0"></script>
 <script src="js/config.js?v=37"></script>
 <script src="js/models.js?v=37"></script>
 <script src="js/data.js?v=37"></script>
+<!-- Demo role visibility rules register into core's OAD.register*VisibilityFilter hooks
+     (js/data.js) — must load after data.js defines them, before anything renders. -->
+<script src="modules/demo/roles.js" onerror="void 0"></script>
 <script src="js/engine.js?v=37"></script>
 <script src="js/due.js?v=37"></script>
 <script src="js/mailroom.js?v=37"></script>

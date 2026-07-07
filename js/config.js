@@ -79,7 +79,19 @@ OAD.Config = {
     'Default':    3
   },
   defaultArea: localStorage.getItem('oad_default_area') || 'Personal Growth',
+  dayNames: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+  timeSuffix: 'T00:00:00',
   demoMode: window.location.port === '8081' || window.location.pathname.includes('demo')
+  // Deliberately NOT here: cadence recurrence type strings ('monthly-1st', 'weekly', ...) and
+  // ADE rule ids/edge-type strings ('ADE-001', 'blocks', 'enables', ...). These look like
+  // "magic strings" but aren't business-tunable values — they're data-schema constants baked
+  // into every persisted cadence/edge record and cross-referenced by other hardcoded
+  // comparisons elsewhere (OAD.RECURRENCES in data.js, OAD.EDGE_TYPES, getGraphContext's
+  // edge_type checks, the cadence recurrence <select> options) that are NOT also
+  // config-driven. Editing one of these through a config screen would silently break every
+  // existing record already using the old value, without erroring anywhere — a real data
+  // integrity bug, not a config-hygiene improvement. An earlier pass extracted these anyway;
+  // reverted for correctness.
 };
 
 // --- SELF-HEALING HACK ---
@@ -159,9 +171,18 @@ OAD.t = function(key, fallback) {
   return OAD.TranslationCache[key] || fallback || key;
 };
 
-// Check if current user is SuperAdmin
+// Gates access to global, cross-user-impacting settings (System Variables, Life Areas).
+// This is single-tenant personal software with two identity paths, not a multi-tenant app
+// with a real role hierarchy:
+//   1. Real Supabase auth (js/modals.js _signIn/_signUp) — the app's actual owner. There is
+//      no separate "regular user" tier to restrict against once genuinely signed in.
+//   2. Demo mode (js/modals.js _signIn's local bypass) — sales/presentation personas signed
+//      in as 'demo-superadmin-id' (fixed sentinel, gitignored demo.config.js credentials) or
+//      as a specific role like 'Counselor 3' (OAD._userId set to that role's mock userId).
+//      Only the superadmin sentinel gets admin power here; every other demo persona is a
+//      restricted, role-scoped view for prospects and must never edit global config.
 OAD.isSuperAdmin = function() {
   if (OAD._userId === 'demo-superadmin-id') return true;
-  // Always true for this environment, ensuring no lockouts.
-  return true;
+  if (OAD.Config && OAD.Config.demoMode) return false;
+  return !!(OAD._userId && !OAD._userId.startsWith('demo-'));
 };

@@ -100,29 +100,24 @@ OAD.formatDisplayTitle = function (title) {
 };
 
 OAD._demoRole = localStorage.getItem('oad_demo_role') || 'CCO';
+
+// Role-based visibility is a module concern, not a core one — core has no business knowing
+// that "Counselor"/"Director"/"RA" are real role names. Any module (currently only fq-demo)
+// registers a filter function here; core just runs whatever's registered, in order, once
+// demoMode + a role are active. A module registering nothing means core shows everything,
+// same as real (non-demo) usage always has. See modules/demo/roles.js for the actual
+// clinical-role visibility rules this app ships with today.
+OAD._threadVisibilityFilters = [];
+OAD._cadenceVisibilityFilters = [];
+OAD.registerThreadVisibilityFilter = function (fn) { OAD._threadVisibilityFilters.push(fn); };
+OAD.registerCadenceVisibilityFilter = function (fn) { OAD._cadenceVisibilityFilters.push(fn); };
+
 OAD.getVisibleThreads = function() {
   let threads = OAD.DB.threads || [];
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
-    if (OAD._demoRole.startsWith('Counselor')) {
-      const validPatientUuids = threads
-        .filter(t => t.life_area === 'Patient' && t.metadata && t.metadata.counselor === OAD._demoRole)
-        .map(t => t.uuid);
-      
-      threads = threads.filter(t => {
-        if (t.life_area === 'Counselor' && t.metadata && t.metadata.counselor === OAD._demoRole) return true;
-        if (t.parent_uuid && validPatientUuids.includes(t.parent_uuid) && t.life_area === 'Counselor') return true;
-        return false;
-      });
-    } else if (OAD._demoRole.includes('Director')) {
-      const clinicalAreas = ['Director', 'Counselor', 'Patient', 'Case Manager', 'Medical', 'RA', 'Transportation'];
-      threads = threads.filter(t => clinicalAreas.includes(t.life_area));
-    } else if (OAD._demoRole === 'RA') {
-      threads = threads.filter(t => t.life_area === 'RA');
-    } else if (OAD._demoRole === 'Case Manager') {
-      threads = threads.filter(t => t.life_area === 'Case Manager');
-    } else if (OAD._demoRole === 'Medical') {
-      threads = threads.filter(t => t.life_area === 'Medical');
-    }
+    OAD._threadVisibilityFilters.forEach(function (fn) {
+      threads = fn(threads, OAD._demoRole);
+    });
   }
   return threads;
 };
@@ -130,11 +125,9 @@ OAD.getVisibleThreads = function() {
 OAD.getVisibleCadences = function() {
   let cadences = OAD.DB.cadences || [];
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
-    if (OAD._demoRole.startsWith('Counselor')) {
-      cadences = cadences.filter(c => c.metadata && c.metadata.counselor === OAD._demoRole);
-    } else if (OAD._demoRole === 'Director Alpha') {
-      cadences = cadences.filter(c => c.metadata && ['Counselor 1','Counselor 2','Counselor 3','Counselor 4','Counselor 5','Counselor 6','Counselor 7','Counselor 8','Counselor 9','Counselor 10'].includes(c.metadata.counselor));
-    }
+    OAD._cadenceVisibilityFilters.forEach(function (fn) {
+      cadences = fn(cadences, OAD._demoRole);
+    });
   }
   return cadences;
 };
@@ -990,6 +983,34 @@ OAD._normalizeDB = function () {
   OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
   if (!Array.isArray(OAD.DB.persona.what_is_not_working)) OAD.DB.persona.what_is_not_working = [];
   if (!OAD.DB.persona.tone_calibration) OAD.DB.persona.tone_calibration = {};
+
+  // Hydrate every persisted record into its real domain-model class. Records loaded from
+  // localStorage or Supabase arrive as plain JSON objects — without this, only entities
+  // created fresh this session (via makeThread/makeCadence/...) are real class instances,
+  // and everything actually loaded from storage silently falls back to the old procedural
+  // OAD.* functions via the `typeof x.getPressure === 'function'` guards scattered through
+  // the domain layer, instead of ever using their own methods.
+  //
+  // Upgrades objects IN PLACE via prototype swap rather than constructing new instances and
+  // replacing them in the array. Constructing new instances would silently orphan any code
+  // holding a reference to the original object across a _normalizeDB() call (it happened
+  // immediately — a test asserting on a captured thread reference after normalize broke,
+  // because the backfill loop below was then mutating a *different* new object, not the one
+  // the caller was holding). Object.setPrototypeOf preserves identity: same object, same
+  // reference everywhere it's already held, now with the class's methods available.
+  OAD._hydrate = function (list, Klass) {
+    if (!Klass) return list;
+    list.forEach(function (item) {
+      if (item && !(item instanceof Klass)) Object.setPrototypeOf(item, Klass.prototype);
+    });
+    return list;
+  };
+  if (OAD.Models) {
+    OAD._hydrate(OAD.DB.threads,  OAD.Models.Thread);
+    OAD._hydrate(OAD.DB.cadences, OAD.Models.Cadence);
+    OAD._hydrate(OAD.DB.habits,   OAD.Models.Habit);
+    OAD._hydrate(OAD.DB.ideas,    OAD.Models.Idea);
+  }
 
   let _maxId = 0;
   OAD.DB.threads.forEach(function(t) { if (t.id && t.id > _maxId) _maxId = t.id; });

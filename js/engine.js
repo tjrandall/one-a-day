@@ -212,7 +212,7 @@ OAD.calculateRunwayRisk = function (goalThreadId) {
   };
 };
 
-OAD._DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+OAD._DAY_NAMES = (OAD.Config && OAD.Config.dayNames) || ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 // Today's date as a local-calendar-day string. Zeroes to local midnight before converting
 // to ISO — plain `new Date().toISOString().slice(0,10)` converts the current instant
@@ -229,11 +229,15 @@ OAD.todayStr = function () {
 };
 
 OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
-  const ref = fromDate ? new Date(fromDate + 'T00:00:00') : new Date();
+  var suffix = (OAD.Config && OAD.Config.timeSuffix) || 'T00:00:00';
+
+  const ref = fromDate ? new Date(fromDate + suffix) : new Date();
   ref.setHours(0, 0, 0, 0);
   const y = ref.getFullYear();
   const m = ref.getMonth();
 
+  // Recurrence values are schema constants (OAD.RECURRENCES in data.js, the cadence form's
+  // <select> options) not config — see the note on OAD.Config in config.js for why.
   if (recurrence === 'monthly-1st')  return new Date(y, m + 1, 1).toISOString().slice(0, 10);
   if (recurrence === 'monthly-15th') {
     const candidate = new Date(y, m, 15);
@@ -613,6 +617,9 @@ OAD._ade001_sequential = function () {
     });
   });
 
+  // Rule ids and edge-type strings are schema constants (OAD.EDGE_TYPES in data.js,
+  // getGraphContext's edge_type comparisons) not config — see the note on OAD.Config in
+  // config.js for why.
   Object.keys(groups).forEach(function (prefix) {
     var g = groups[prefix];
     g.weeks.sort(function (a, b) { return a.n - b.n; });

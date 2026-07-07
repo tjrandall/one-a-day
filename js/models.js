@@ -406,78 +406,11 @@ class ThreadCollection {
   }
 }
 
-class QueueManager {
-  constructor(threads, cadences) {
-    this.threads = threads || [];
-    this.cadences = cadences || [];
-  }
-
-  getActiveThreadsRaw() {
-    return this.threads.filter(function (t) {
-      return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox';
-    });
-  }
-
-  getActiveThreads() {
-    return this.getActiveThreadsRaw()
-      .map(function (t) { return Object.assign({}, t, { _score: typeof t.getPressure === 'function' ? t.getPressure() : OAD.pressure(t) }); })
-      .sort(function (a, b) { return b._score - a._score; });
-  }
-
-  getSuppressionContext(activeThreads, todayStr, focusUUID, horizonStr) {
-    var activeByUUID = {};
-    activeThreads.forEach(function (t) { activeByUUID[t.uuid] = t; });
-
-    var childrenByParentUUID = {};
-    activeThreads.forEach(function (t) {
-      if (t.parent_uuid && activeByUUID[t.parent_uuid]) {
-        (childrenByParentUUID[t.parent_uuid] = childrenByParentUUID[t.parent_uuid] || []).push(t);
-      }
-    });
-
-    var suppressedUUIDs = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, focusUUID, horizonStr);
-    var visibleThreads = activeThreads.filter(function (t) { return !suppressedUUIDs.has(t.uuid); });
-
-    return { activeByUUID: activeByUUID, childrenByParentUUID: childrenByParentUUID, suppressedUUIDs: suppressedUUIDs, visibleThreads: visibleThreads };
-  }
-
-  getBuckets(visibleThreads, todayStr, in7Str) {
-    return {
-      overdue: visibleThreads.filter(function(t) { return typeof t.isActionOverdue === 'function' ? t.isActionOverdue() : OAD.isActionOverdue(t); }),
-      today:   visibleThreads.filter(function (t) { return t.next_action_date === todayStr && !(typeof t.isActionOverdue === 'function' ? t.isActionOverdue() : OAD.isActionOverdue(t)); }),
-      week:    visibleThreads.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str && !(typeof t.isActionOverdue === 'function' ? t.isActionOverdue() : OAD.isActionOverdue(t)); })
-                 .sort(function (a, b) { return a.next_action_date.localeCompare(b.next_action_date); }),
-      noDate:  visibleThreads.filter(function (t) { return !t.next_action_date || t.next_action_date > in7Str; })
-    };
-  }
-
-  isCadenceDueOn(cadence, dateStr) {
-    var overdue = typeof cadence.isOverdue === 'function' ? cadence.isOverdue() : OAD.cadenceOverdue(cadence);
-    var done = typeof cadence.isDoneThisPeriod === 'function' ? cadence.isDoneThisPeriod() : OAD.cadenceDoneThisPeriod(cadence);
-    return !overdue && cadence.next_due === dateStr && !done;
-  }
-
-  getCadenceBuckets(todayStr, in7Str) {
-    var self = this;
-    return {
-      overdue: this.cadences.filter(function(c) { return typeof c.isOverdue === 'function' ? c.isOverdue() : OAD.cadenceOverdue(c); }),
-      today:   this.cadences.filter(function (c) { return self.isCadenceDueOn(c, todayStr); }),
-      week:    this.cadences.filter(function (c) {
-                 var overdue = typeof c.isOverdue === 'function' ? c.isOverdue() : OAD.cadenceOverdue(c);
-                 var done = typeof c.isDoneThisPeriod === 'function' ? c.isDoneThisPeriod() : OAD.cadenceDoneThisPeriod(c);
-                 return !overdue && c.next_due > todayStr && c.next_due <= in7Str && !done;
-               }).sort(function (a, b) { return a.next_due.localeCompare(b.next_due); })
-    };
-  }
-
-  getDashboardData(todayStr, in7Str) {
-    var active = this.getActiveThreads();
-    var focusUUID = OAD.getFocusUUID(active);
-    var ctx = this.getSuppressionContext(active, todayStr, focusUUID, in7Str);
-    var buckets = this.getBuckets(ctx.visibleThreads, todayStr, in7Str);
-    return Object.assign({ active: active, focusUUID: focusUUID }, ctx, buckets);
-  }
-}
+// QueueManager was removed — it was instantiated fresh on every call, almost always with an
+// empty constructor (`new QueueManager([], [])`) while real data was passed in as method
+// arguments anyway, adding allocation overhead with no encapsulation benefit and a misleading
+// API. Its logic now lives directly in js/due.js as plain OAD.Due.* functions, matching this
+// codebase's existing idiom (see that file's top comment for the full reasoning).
 
 class Graph {
   constructor(threads) {
@@ -598,4 +531,3 @@ OAD.Models.Idea = Idea;
 OAD.Models.ThreadCollection = ThreadCollection;
 OAD.Models.Graph = Graph;
 OAD.Models.Track = Track;
-OAD.Models.QueueManager = QueueManager;

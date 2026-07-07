@@ -2506,9 +2506,13 @@ OAD.test('translation and configuration system core verification', async functio
   const prevLocale = OAD.Config.currentLocale;
   const prevTitle = OAD.Config.userGreetingTitle;
   const prevCache = JSON.parse(JSON.stringify(OAD.TranslationCache));
+  const prevUserId = OAD._userId;
 
   try {
-    OAD._assert(OAD.isSuperAdmin(), 'Current user environment must verify as SuperAdmin');
+    // isSuperAdmin() is real access control now, not a stub — must set up a real
+    // superadmin identity to exercise it, not rely on it being unconditionally true.
+    OAD._userId = 'demo-superadmin-id';
+    OAD._assert(OAD.isSuperAdmin(), 'demo-superadmin-id must verify as SuperAdmin');
 
     OAD.TranslationCache = {
       testScanButton: "Escanear correo de prueba",
@@ -2530,7 +2534,125 @@ OAD.test('translation and configuration system core verification', async functio
     OAD.Config.currentLocale = prevLocale;
     OAD.Config.userGreetingTitle = prevTitle;
     OAD.TranslationCache = prevCache;
+    OAD._userId = prevUserId;
     await OAD.loadLanguage();
+  }
+});
+
+OAD.test('isSuperAdmin: real access-control identity rules', function () {
+  const prevUserId = OAD._userId;
+  const prevDemoMode = OAD.Config.demoMode;
+  try {
+    OAD._userId = 'demo-superadmin-id';
+    OAD._assert(OAD.isSuperAdmin(), 'the fixed demo-superadmin sentinel is always SuperAdmin, in or out of demo mode');
+
+    OAD.Config.demoMode = true;
+    OAD._userId = 'demo-counselor-3-id';
+    OAD._assert(!OAD.isSuperAdmin(), 'a regular demo-role persona (e.g. a Counselor) must never be SuperAdmin');
+
+    OAD.Config.demoMode = false;
+    OAD._userId = 'a1b2c3d4-real-supabase-user-uuid';
+    OAD._assert(OAD.isSuperAdmin(), 'a genuinely signed-in, non-demo Supabase user is the app owner and is SuperAdmin');
+
+    OAD._userId = null;
+    OAD._assert(!OAD.isSuperAdmin(), 'nobody signed in must never be SuperAdmin');
+  } finally {
+    OAD._userId = prevUserId;
+    OAD.Config.demoMode = prevDemoMode;
+  }
+});
+
+OAD.test('getVisibleThreads/getVisibleCadences: core visibility-filter registration is generic, not role-aware', function () {
+  // Proves core's extension point itself works, independent of what fq-demo registers into
+  // it — core must have zero knowledge of role names, only "run whatever's registered".
+  const origThreads = OAD.DB.threads;
+  const origFilters = OAD._threadVisibilityFilters;
+  const prevDemoMode = OAD.Config.demoMode;
+  const prevRole = OAD._demoRole;
+  try {
+    const t1 = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Alpha', life_area: 'Anything' });
+    const t2 = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Beta', life_area: 'Anything' });
+    OAD.DB.threads = [t1, t2];
+
+    let seenRole = null;
+    OAD._threadVisibilityFilters = [function (threads, role) {
+      seenRole = role;
+      return threads.filter(function (t) { return t.title === 'Alpha'; });
+    }];
+
+    OAD.Config.demoMode = false;
+    OAD._assertEqual(OAD.getVisibleThreads().length, 2, 'non-demo mode must never run visibility filters, regardless of what is registered');
+
+    OAD.Config.demoMode = true;
+    OAD._demoRole = 'SomeArbitraryRoleCoreHasNeverHeardOf';
+    const visible = OAD.getVisibleThreads();
+    OAD._assertEqual(visible.length, 1, 'demo mode must run registered filters');
+    OAD._assertEqual(visible[0].title, 'Alpha', 'registered filter result must be used as-is');
+    OAD._assertEqual(seenRole, 'SomeArbitraryRoleCoreHasNeverHeardOf', 'core must pass whatever role is set through unmodified, proving it does not branch on role names itself');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._threadVisibilityFilters = origFilters;
+    OAD.Config.demoMode = prevDemoMode;
+    OAD._demoRole = prevRole;
+  }
+});
+
+OAD.test('fq-demo role visibility rules: Counselor sees only their own patient + counselor threads', function () {
+  const origThreads = OAD.DB.threads;
+  const prevDemoMode = OAD.Config.demoMode;
+  const prevRole = OAD._demoRole;
+  try {
+    const patientMine    = OAD.makeThread({ id: 1, uuid: 'p-mine', title: 'My Patient', life_area: 'Patient', metadata: { counselor: 'Counselor 1' } });
+    const patientOther    = OAD.makeThread({ id: 2, uuid: 'p-other', title: 'Other Patient', life_area: 'Patient', metadata: { counselor: 'Counselor 2' } });
+    const counselorTaskMine  = OAD.makeThread({ id: 3, uuid: 'c-mine', title: 'My task', life_area: 'Counselor', metadata: { counselor: 'Counselor 1' }, parent_uuid: 'p-mine' });
+    const counselorTaskOther = OAD.makeThread({ id: 4, uuid: 'c-other', title: 'Other task', life_area: 'Counselor', metadata: { counselor: 'Counselor 2' }, parent_uuid: 'p-other' });
+    const unrelated = OAD.makeThread({ id: 5, uuid: 'u-1', title: 'Unrelated', life_area: 'Career' });
+    OAD.DB.threads = [patientMine, patientOther, counselorTaskMine, counselorTaskOther, unrelated];
+
+    OAD.Config.demoMode = true;
+    OAD._demoRole = 'Counselor 1';
+    const visible = OAD.getVisibleThreads().map(function (t) { return t.uuid; });
+
+    OAD._assert(visible.indexOf('c-mine') !== -1, 'Counselor 1 must see their own counselor-task thread');
+    OAD._assert(visible.indexOf('c-other') === -1, 'Counselor 1 must not see another counselor\'s task thread');
+    OAD._assert(visible.indexOf('p-mine') === -1, 'Patient life_area threads themselves are not directly visible, only via the Counselor rollup — matches pre-existing behavior');
+    OAD._assert(visible.indexOf('u-1') === -1, 'Counselor must not see unrelated non-clinical threads');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.Config.demoMode = prevDemoMode;
+    OAD._demoRole = prevRole;
+  }
+});
+
+OAD.test('fq-demo role visibility rules: Director sees all clinical areas, RA/Case Manager/Medical see only their own, CCO sees everything', function () {
+  const origThreads = OAD.DB.threads;
+  const prevDemoMode = OAD.Config.demoMode;
+  const prevRole = OAD._demoRole;
+  try {
+    const clinical = OAD.makeThread({ id: 1, uuid: 'clin-1', title: 'Clinical', life_area: 'Counselor' });
+    const ra = OAD.makeThread({ id: 2, uuid: 'ra-1', title: 'RA task', life_area: 'RA' });
+    const caseManager = OAD.makeThread({ id: 3, uuid: 'cm-1', title: 'Case Manager task', life_area: 'Case Manager' });
+    const medical = OAD.makeThread({ id: 4, uuid: 'med-1', title: 'Medical task', life_area: 'Medical' });
+    const nonClinical = OAD.makeThread({ id: 5, uuid: 'nc-1', title: 'Non-clinical', life_area: 'Career' });
+    OAD.DB.threads = [clinical, ra, caseManager, medical, nonClinical];
+    OAD.Config.demoMode = true;
+
+    OAD._demoRole = 'Director Alpha';
+    let visible = OAD.getVisibleThreads().map(function (t) { return t.uuid; });
+    OAD._assert(visible.indexOf('clin-1') !== -1 && visible.indexOf('ra-1') !== -1 && visible.indexOf('cm-1') !== -1 && visible.indexOf('med-1') !== -1, 'Director must see all clinical areas');
+    OAD._assert(visible.indexOf('nc-1') === -1, 'Director must not see non-clinical threads');
+
+    OAD._demoRole = 'RA';
+    visible = OAD.getVisibleThreads().map(function (t) { return t.uuid; });
+    OAD._assertEqual(visible.join(','), 'ra-1', 'RA must see only RA life_area threads');
+
+    OAD._demoRole = 'CCO';
+    visible = OAD.getVisibleThreads().map(function (t) { return t.uuid; });
+    OAD._assertEqual(visible.length, 5, 'CCO must see everything, unfiltered');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.Config.demoMode = prevDemoMode;
+    OAD._demoRole = prevRole;
   }
 });
 
@@ -3037,6 +3159,33 @@ OAD.test('makeThread: created_at defaults to a valid ISO timestamp', function ()
   OAD._assert(!isNaN(new Date(t.created_at).getTime()), 'created_at should parse as a valid date');
 });
 
+OAD.test('_normalizeDB: hydrates plain-object threads/cadences into real domain-model instances, in place', function () {
+  const origThreads = OAD.DB.threads;
+  const origCadences = OAD.DB.cadences;
+  try {
+    const plainThread = { id: 9001, uuid: OAD._generateUUID(), title: 'Plain object thread', status: 'open',
+      next_action_date: '2020-01-01', connections: [] }; // deliberately overdue, to prove isOverdue() actually works
+    const plainCadence = { id: 9002, title: 'Plain object cadence', recurrence: 'weekly', next_due: '2020-01-01' };
+    OAD.DB.threads = [plainThread];
+    OAD.DB.cadences = [plainCadence];
+
+    OAD._assert(!(plainThread instanceof OAD.Models.Thread), 'sanity check: starts as a plain object, not a Thread');
+    OAD._normalizeDB();
+
+    OAD._assert(plainThread instanceof OAD.Models.Thread, 'thread must be a real Thread instance after normalize');
+    OAD._assert(typeof plainThread.isOverdue === 'function', 'hydrated thread must have its class methods available');
+    OAD._assert(plainThread.isOverdue(), 'hydrated thread method must actually work, not just exist (this one really is overdue)');
+    OAD._assertEqual(OAD.DB.threads[0], plainThread, 'hydration must upgrade the object in place — same reference, not a replacement — so any code already holding this reference keeps working');
+
+    OAD._assert(plainCadence instanceof OAD.Models.Cadence, 'cadence must be a real Cadence instance after normalize');
+    OAD._assert(typeof plainCadence.isOverdue === 'function', 'hydrated cadence must have its class methods available');
+    OAD._assert(plainCadence.isOverdue(), 'hydrated cadence method must actually work (this one really is overdue)');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.cadences = origCadences;
+  }
+});
+
 OAD.test('_normalizeDB: legacy thread without created_at backfills to null, not a fabricated date', function () {
   const orig = OAD.DB.threads;
   try {
@@ -3335,27 +3484,29 @@ OAD.test('_saveEditThread: reopening a closed thread does not trigger the closur
 
 // ── Tests: OAD.Due.buckets (Temporal Mutually Exclusive Buckets) ──────
 
-OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate (mutually exclusive)', function () {
+OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — today intentionally overlaps overdue', function () {
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
     return dt.toISOString().slice(0, 10);
   };
-  
+
   const todayStr = d(0);
   const in7Str = d(7);
-  
+
   // 1. Overdue: next_action_date is before today, or today but overdue by time
   const tOverdue1 = OAD.makeThread({ title: 'Overdue yesterday', next_action_date: d(-1) });
-  const tOverdue2 = OAD.makeThread({ title: 'Overdue today by time', next_action_date: todayStr, next_action_time: '00:01' }); 
-  
-  // 2. Today: next_action_date is today (no time or future time, we mock isActionOverdue to return false for this test)
+  const tOverdue2 = OAD.makeThread({ title: 'Overdue today by time', next_action_date: todayStr, next_action_time: '00:01' });
+
+  // 2. Today: next_action_date is today, not overdue by time
   const tToday = OAD.makeThread({ title: 'Due today', next_action_date: todayStr, next_action_time: '23:59' });
-  
+
   // 3. Week: strictly after today and <= in7Str
   const tWeek1 = OAD.makeThread({ title: 'Due tomorrow', next_action_date: d(1) });
   const tWeek7 = OAD.makeThread({ title: 'Due day 7', next_action_date: in7Str });
-  
-  // 4. No date or beyond week
+
+  // 4. noDate is genuinely "has no date" only — not a catch-all for "beyond the week window"
+  // too. A thread due 8 days out isn't in any bucket this function returns; that's correct
+  // for a widget scoped to "this week" specifically, not a gap.
   const tNoDate = OAD.makeThread({ title: 'No date', next_action_date: null });
   const tFar = OAD.makeThread({ title: 'Due day 8', next_action_date: d(8) });
 
@@ -3368,53 +3519,58 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate (mut
       if (t === tOverdue1 || t === tOverdue2) return true;
       return false;
     };
-    
+
     const buckets = OAD.Due.buckets(threads, todayStr, in7Str);
-    
+
     OAD._assertEqual(buckets.overdue.length, 2, 'overdue bucket has 2 threads');
     OAD._assert(buckets.overdue.includes(tOverdue1) && buckets.overdue.includes(tOverdue2), 'overdue bucket contains correct threads');
-    
-    OAD._assertEqual(buckets.today.length, 1, 'today bucket has 1 thread');
-    OAD._assert(buckets.today.includes(tToday), 'today bucket contains correct thread');
-    
+
+    // today deliberately does NOT exclude tOverdue2 — it's due today AND overdue by time,
+    // and hiding it from "today" the moment it crosses into overdue would make it disappear
+    // from the list a user is actively looking at right when it became urgent.
+    OAD._assertEqual(buckets.today.length, 2, 'today bucket has 2 threads — a due-today thread that is also overdue-by-time stays visible in both');
+    OAD._assert(buckets.today.includes(tToday) && buckets.today.includes(tOverdue2), 'today bucket contains both the plain due-today thread and the overdue-by-time one');
+
     OAD._assertEqual(buckets.week.length, 2, 'week bucket has 2 threads');
     OAD._assert(buckets.week.includes(tWeek1) && buckets.week.includes(tWeek7), 'week bucket contains correct threads');
-    
-    OAD._assertEqual(buckets.noDate.length, 2, 'nodate bucket has 2 threads (no date + far)');
-    OAD._assert(buckets.noDate.includes(tNoDate) && buckets.noDate.includes(tFar), 'nodate bucket contains correct threads');
-    
+
+    OAD._assertEqual(buckets.noDate.length, 1, 'nodate bucket has only the truly dateless thread');
+    OAD._assert(buckets.noDate.includes(tNoDate), 'nodate bucket contains the dateless thread');
+    OAD._assert(!buckets.noDate.includes(tFar), 'a thread due 8 days out is not "no date" — it just isn\'t in any of this function\'s buckets, which is correct for a this-week-scoped view');
+
   } finally {
     OAD.isActionOverdue = origIsActionOverdue;
   }
 });
 
-OAD.test('Due.buckets: ensures strict mutual exclusivity (no double counting)', function () {
+OAD.test('Due.buckets: a thread due today AND overdue-by-time appears in both buckets (deliberate, not a bug)', function () {
+  // Regression lock for a real incident: an earlier session silently added an exclusion
+  // (`&& !isActionOverdue(t)`) to the "today" bucket, reversing this intentional design
+  // decision, framed merely as "fixing double counting." No test caught the reversal at the
+  // time. This test exists specifically so that can't happen silently again.
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
     return dt.toISOString().slice(0, 10);
   };
-  
+
   const todayStr = d(0);
   const in7Str = d(7);
-  
-  // A thread that might theoretically be caught in multiple buckets if conditions overlap
-  const tricky = OAD.makeThread({ title: 'Tricky today overdue', next_action_date: todayStr });
-  
+
+  const tricky = OAD.makeThread({ title: 'Due today and overdue by time', next_action_date: todayStr });
+
   const origIsActionOverdue = OAD.isActionOverdue;
   try {
-    // If it's overdue, it should ONLY be in overdue, not in today.
     OAD.isActionOverdue = function(t) { return true; };
     const bucketsOverdue = OAD.Due.buckets([tricky], todayStr, in7Str);
-    OAD._assertEqual(bucketsOverdue.overdue.length, 1, 'tricky is overdue');
-    OAD._assertEqual(bucketsOverdue.today.length, 0, 'tricky is NOT in today when overdue');
-    OAD._assertEqual(bucketsOverdue.week.length, 0, 'tricky is NOT in week when overdue');
-    
-    // If it's not overdue, it should ONLY be in today.
+    OAD._assertEqual(bucketsOverdue.overdue.length, 1, 'appears in overdue');
+    OAD._assertEqual(bucketsOverdue.today.length, 1, 'ALSO appears in today — this is the deliberate overlap, not a bug');
+    OAD._assertEqual(bucketsOverdue.week.length, 0, 'never appears in week regardless');
+
     OAD.isActionOverdue = function(t) { return false; };
     const bucketsToday = OAD.Due.buckets([tricky], todayStr, in7Str);
-    OAD._assertEqual(bucketsToday.overdue.length, 0, 'tricky is NOT in overdue');
-    OAD._assertEqual(bucketsToday.today.length, 1, 'tricky IS in today');
-    OAD._assertEqual(bucketsToday.week.length, 0, 'tricky is NOT in week');
+    OAD._assertEqual(bucketsToday.overdue.length, 0, 'not overdue when not overdue');
+    OAD._assertEqual(bucketsToday.today.length, 1, 'still appears in today');
+    OAD._assertEqual(bucketsToday.week.length, 0, 'never appears in week regardless');
   } finally {
     OAD.isActionOverdue = origIsActionOverdue;
   }
