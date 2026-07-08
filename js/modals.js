@@ -1390,7 +1390,11 @@ OAD.openSettingsModal = function () {
       <label>Gemini API Key</label>
       <input id="f-gemini-api-key" type="password" value="${OAD.esc(OAD.GEMINI_API_KEY)}" placeholder="AIza..." style="margin-bottom:8px">
       <label>Gemini Model</label>
-      <input id="f-gemini-model" type="text" value="${OAD.esc(OAD.GEMINI_MODEL)}" placeholder="e.g. gemini-1.5-pro-latest">
+      <select id="f-gemini-model">
+        ${(window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.availableGeminiModels || []).map(m => 
+          `<option value="${m}" ${OAD.GEMINI_MODEL === m ? 'selected' : ''}>${m}</option>`
+        ).join('')}
+      </select>
     </div>
     <p class="text-muted text-sm" id="ai-provider-info">Keys are stored in localStorage — never sent anywhere except to the selected provider.</p>
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px">

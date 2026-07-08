@@ -1,10 +1,10 @@
 window.OAD = window.OAD || {};
 
-OAD.AI_PROVIDER = 'anthropic';
+OAD.AI_PROVIDER = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultProvider) || 'anthropic';
 OAD.API_KEY = '';
 OAD.GEMINI_API_KEY = '';
-OAD.MODEL = 'claude-3-5-sonnet-latest';
-OAD.GEMINI_MODEL = 'gemini-1.5-pro-latest';
+OAD.MODEL = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultClaudeModel) || 'claude-3-5-sonnet-latest';
+OAD.GEMINI_MODEL = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultGeminiModel) || 'gemini-2.5-pro';
 
 OAD.setAiSettings = function (provider, claudeKey, geminiKey, geminiModel) {
   OAD.AI_PROVIDER = provider;
@@ -28,7 +28,16 @@ OAD.loadApiKey = function () {
     const gk = localStorage.getItem('oad_gemini_api_key');
     if (gk) OAD.GEMINI_API_KEY = gk;
     const gm = localStorage.getItem('oad_gemini_model');
-    if (gm) OAD.GEMINI_MODEL = gm;
+    if (gm) {
+      const aiCfg = (window.OAD && OAD.Config && OAD.Config.aiConfig) || {};
+      const depr = aiCfg.deprecatedGeminiModels || [];
+      if (depr.indexOf(gm) !== -1) {
+        OAD.GEMINI_MODEL = aiCfg.defaultGeminiModel || 'gemini-2.5-pro';
+        try { localStorage.setItem('oad_gemini_model', OAD.GEMINI_MODEL); } catch(_) {}
+      } else {
+        OAD.GEMINI_MODEL = gm;
+      }
+    }
   } catch (_) { }
 };
 
@@ -41,13 +50,17 @@ OAD._llmCall = async function (messages, systemPrompt) {
 };
 
 OAD._claudeCall = async function (messages, systemPrompt) {
-  if (!OAD.API_KEY) throw new Error('No API key set. Open Settings to add your Anthropic API key.');
+  if (!OAD.API_KEY) throw new Error(OAD.t('err_no_anthropic_key'));
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const aiCfg = (window.OAD && OAD.Config && OAD.Config.aiConfig) || {};
+  const baseUrl = aiCfg.anthropicBaseUrl;
+  const anthropicVersion = aiCfg.anthropicVersion;
+
+  const res = await fetch(`${baseUrl}/${aiCfg.anthropicApiVersion}/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': OAD.API_KEY,
-      'anthropic-version': '2023-06-01',
+      'anthropic-version': anthropicVersion,
       'anthropic-dangerous-direct-browser-access': 'true',
       'content-type': 'application/json'
     },
@@ -61,7 +74,7 @@ OAD._claudeCall = async function (messages, systemPrompt) {
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `API error ${res.status}`);
+    throw new Error(err?.error?.message || (OAD.t('err_api_status') + ' ' + res.status));
   }
 
   const data = await res.json();
@@ -70,11 +83,14 @@ OAD._claudeCall = async function (messages, systemPrompt) {
 
 
 OAD._geminiCall = async function (messages, systemPrompt) {
-  if (!OAD.GEMINI_API_KEY) throw new Error('No API key set. Open Settings to add your Gemini API key.');
+  if (!OAD.GEMINI_API_KEY) throw new Error(OAD.t('err_no_gemini_key'));
+
+  const aiCfg = (window.OAD && OAD.Config && OAD.Config.aiConfig) || {};
+  const roleMap = aiCfg.geminiRoleMap || {};
 
   const body = {
     contents: messages.map(m => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
+      role: roleMap[m.role] || roleMap['default'],
       parts: [{ text: m.content }]
     }))
   };
@@ -83,7 +99,9 @@ OAD._geminiCall = async function (messages, systemPrompt) {
     body.system_instruction = { parts: [{ text: systemPrompt }] };
   }
 
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${OAD.GEMINI_MODEL}:generateContent?key=${OAD.GEMINI_API_KEY}`, {
+  const baseUrl = aiCfg.geminiBaseUrl;
+
+  const res = await fetch(`${baseUrl}/${aiCfg.geminiApiVersion}/models/${OAD.GEMINI_MODEL}:generateContent?key=${OAD.GEMINI_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
@@ -92,63 +110,60 @@ OAD._geminiCall = async function (messages, systemPrompt) {
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     if (res.status === 404) {
-      let names = 'failed to fetch list';
+      let names = OAD.t('err_failed_to_fetch_list');
       try {
-        const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${OAD.GEMINI_API_KEY}`);
+        const listRes = await fetch(`${baseUrl}/${aiCfg.geminiApiVersion}/models?key=${OAD.GEMINI_API_KEY}`);
         const listData = await listRes.json();
-        names = listData.models ? listData.models.map(m => m.name.replace('models/', '')).join(', ') : 'none';
+        names = listData.models ? listData.models.map(m => m.name.replace('models/', '')).join(', ') : OAD.t('err_none');
       } catch (e) {}
-      throw new Error(`Model ${OAD.GEMINI_MODEL} not found. Available models on your API key: ${names}`);
+      throw new Error(OAD.t('err_model_not_found_prefix') + ' ' + OAD.GEMINI_MODEL + ' ' + OAD.t('err_model_not_found_suffix') + ' ' + names);
     }
-    throw new Error(err?.error?.message || `Gemini API error ${res.status}`);
+    throw new Error(err?.error?.message || (OAD.t('err_gemini_status') + ' ' + res.status));
   }
 
   const data = await res.json();
   try {
     return data.candidates[0].content.parts[0].text;
   } catch(e) {
-    throw new Error("Failed to parse Gemini response");
+    throw new Error(OAD.t('err_parse_gemini'));
   }
 };
 
 OAD.genInsight = async function (thread) {
   const persona = OAD.DB.persona;
 
-  const systemPrompt = `You are a grounded, direct life-counsel engine for a personal operating system called One-A-Day.
-Your job: cut through noise, surface blind spots, and give actionable clarity.
-Tone: honest, warm, not preachy. Challenge assumptions gently. Never pad.
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.insight) || {};
+  
+  const systemPrompt = (promptTemplate.system || "")
+    .replace('{{assumption_tendencies}}', JSON.stringify(persona.assumption_tendencies || []))
+    .replace('{{working}}', JSON.stringify(persona.what_is_working || []))
+    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []))
+    .replace('{{pressure_level}}', persona.life_context?.pressure_level || 'moderate')
+    .replace('{{hard_deadline}}', persona.life_context?.hard_deadline ? `${persona.life_context.hard_deadline} — ${persona.life_context.hard_deadline_context}` : 'none')
+    .replace('{{challenge_tolerance}}', persona.tone_calibration?.challenge_tolerance || 'medium')
+    .replace('{{current_mode}}', persona.tone_calibration?.current_mode || 'supportive')
+    .replace('{{avoid_patterns}}', JSON.stringify(persona.tone_calibration?.avoid_patterns || []));
 
-User persona context:
-- Assumption tendencies: ${JSON.stringify(persona.assumption_tendencies)}
-- What is working: ${JSON.stringify(persona.what_is_working)}
-- What is not working: ${JSON.stringify(persona.what_is_not_working)}
-- Life context pressure: ${persona.life_context.pressure_level}
-- Hard deadline: ${persona.life_context.hard_deadline || 'none'} — ${persona.life_context.hard_deadline_context}
-- Tone calibration: challenge_tolerance=${persona.tone_calibration.challenge_tolerance}, mode=${persona.tone_calibration.current_mode}
-- Avoid: ${JSON.stringify(persona.tone_calibration.avoid_patterns)}
-
-Respond ONLY with valid JSON in this exact shape:
-{
-  "observation": "...",
-  "blind_spot": "...",
-  "challenge": "...",
-  "next_move": "...",
-  "assumption_flag": "..."
-}
-No markdown, no explanation outside the JSON object.`;
-
-  const userMsg = `Thread to analyze:
-Title: ${thread.title}
-Area: ${thread.life_area}
-Status: ${thread.status}
-Priority: ${thread.priority}
-Closing condition: ${thread.closing_condition} (type: ${thread.closing_condition_type}, met: ${thread.closing_condition_met})
-Current assumption: ${thread.current_assumption} (verified: ${thread.assumption_verified})
-Next action: ${thread.next_action} by ${thread.next_action_date} via ${thread.next_action_channel} with ${thread.next_action_contact}
-Contingency: trigger ${thread.contingency_trigger_date} → ${thread.contingency_action} → escalate: ${thread.contingency_escalation}
-Connections: ${JSON.stringify(thread.connections)}
-Evolution log (last 5): ${JSON.stringify((thread.evolution_log || []).slice(-5))}
-Pressure score: ${OAD.pressure(thread)}`;
+  const userMsg = (promptTemplate.user || "")
+    .replace('{{title}}', thread.title || '')
+    .replace('{{life_area}}', thread.life_area || '')
+    .replace('{{status}}', thread.status || '')
+    .replace('{{priority}}', thread.priority || '')
+    .replace('{{closing_condition}}', thread.closing_condition || '')
+    .replace('{{closing_condition_type}}', thread.closing_condition_type || '')
+    .replace('{{closing_condition_met}}', thread.closing_condition_met || 'false')
+    .replace('{{current_assumption}}', thread.current_assumption || '')
+    .replace('{{assumption_verified}}', thread.assumption_verified || 'false')
+    .replace('{{next_action}}', thread.next_action || '')
+    .replace('{{next_action_date}}', thread.next_action_date || '')
+    .replace('{{next_action_channel}}', thread.next_action_channel || '')
+    .replace('{{next_action_contact}}', thread.next_action_contact || '')
+    .replace('{{contingency_trigger_date}}', thread.contingency_trigger_date || '')
+    .replace('{{contingency_action}}', thread.contingency_action || '')
+    .replace('{{contingency_escalation}}', thread.contingency_escalation || '')
+    .replace('{{connections}}', JSON.stringify(thread.connections || []))
+    .replace('{{evolution_log}}', JSON.stringify((thread.evolution_log || []).slice(-5)))
+    .replace('{{pressure}}', OAD.pressure(thread));
 
   const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
 
@@ -166,23 +181,23 @@ Pressure score: ${OAD.pressure(thread)}`;
 
 OAD.draftEmail = async function (tid) {
   const thread = OAD.getThread(tid);
-  if (!thread) throw new Error('Thread not found');
+  if (!thread) throw new Error(OAD.t('err_thread_not_found'));
 
-  const systemPrompt = `You are a professional email drafter. Write clear, direct emails that get responses.
-Never add filler phrases. Be concise. Output ONLY the email body (no subject line, no explanation).`;
-
-  const userMsg = `Draft a professional email for this thread:
-Title: ${thread.title}
-Next action: ${thread.next_action}
-Contact: ${thread.next_action_contact}
-Channel: ${thread.next_action_channel}
-Context: ${(thread.evolution_log || []).map(e => e.note).join(' | ')}
-Goal: move this forward toward the closing condition: ${thread.closing_condition}`;
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.draftEmail) || {};
+  
+  const systemPrompt = promptTemplate.system || "";
+  const userMsg = (promptTemplate.user || "")
+    .replace('{{title}}', thread.title || '')
+    .replace('{{next_action}}', thread.next_action || '')
+    .replace('{{next_action_contact}}', thread.next_action_contact || '')
+    .replace('{{next_action_channel}}', thread.next_action_channel || '')
+    .replace('{{context}}', (thread.evolution_log || []).map(e => e.note).join(' | '))
+    .replace('{{closing_condition}}', thread.closing_condition || '');
 
   return await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
 };
 
-OAD.genProactiveCounsel = async function () {
+OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
   const persona = OAD.DB.persona;
   
   const heat = typeof OAD.getLifeAreaHeat === 'function' ? OAD.getLifeAreaHeat() : [];
@@ -191,28 +206,25 @@ OAD.genProactiveCounsel = async function () {
     .map(function(t) { return { title: t.title, area: t.life_area }; })
     .slice(0, 5);
   
-  const systemPrompt = `You are the proactive counsel engine for One-A-Day.
-Your job is to look at the user's life areas and stalled threads, and suggest exactly ONE new thread (proposal) they haven't thought of, or a connection they are missing.
-Use patterns from people in similar situations.
-Tone: honest, warm, not preachy.
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.proactiveCounsel) || {};
+  
+  const systemPrompt = (promptTemplate.system || "")
+    .replace('{{assumption_tendencies}}', JSON.stringify(persona?.assumption_tendencies || []))
+    .replace('{{working}}', JSON.stringify(persona?.what_is_working || []))
+    .replace('{{not_working}}', JSON.stringify(persona?.what_is_not_working || []));
 
-User persona context:
-- Assumption tendencies: ${JSON.stringify(persona.assumption_tendencies)}
-- What is working: ${JSON.stringify(persona.what_is_working)}
-- What is not working: ${JSON.stringify(persona.what_is_not_working)}
+  let userMsg = (promptTemplate.user || "")
+    .replace('{{heat}}', JSON.stringify(heat))
+    .replace('{{stalledThreads}}', JSON.stringify(stalledThreads));
 
-Respond ONLY with valid JSON in this exact shape:
-{
-  "title": "Proposed thread title",
-  "life_area": "Matching life area",
-  "closing_condition": "What real-world outcome closes this?",
-  "rationale": "Why are you suggesting this? What blind spot does it cover?"
-}
-No markdown, no explanation outside the JSON object.`;
-
-  const userMsg = `Current Life Area Heat: ${JSON.stringify(heat)}
-Top Stalled Threads: ${JSON.stringify(stalledThreads)}
-Based on this, generate a proactive suggestion.`;
+  if (feedbackStr && replaceUuid) {
+    const existing = (OAD.DB.proposals || []).find(p => p.uuid === replaceUuid);
+    if (existing) {
+      userMsg += `\n\nPREVIOUS PROPOSAL: ${JSON.stringify(existing)}`;
+      userMsg += `\nUSER FEEDBACK: ${feedbackStr}`;
+      userMsg += `\nGenerate a NEW proposal that directly addresses the feedback.`;
+    }
+  }
 
   const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
 
@@ -221,15 +233,21 @@ Based on this, generate a proactive suggestion.`;
     const match = raw.match(/\{[\s\S]*\}/);
     parsed = JSON.parse(match ? match[0] : raw);
   } catch (_) {
-    throw new Error("Failed to parse proactive counsel response: " + raw);
+    throw new Error(OAD.t('err_parse_counsel') + " " + raw);
   }
   
   persona.last_proactive_scan = OAD.todayStr();
-  parsed.uuid = OAD._generateUUID();
+  parsed.uuid = replaceUuid || OAD._generateUUID();
   parsed.date = persona.last_proactive_scan;
   
   OAD.DB.proposals = OAD.DB.proposals || [];
-  OAD.DB.proposals.push(parsed);
+  if (replaceUuid) {
+    const idx = OAD.DB.proposals.findIndex(p => p.uuid === replaceUuid);
+    if (idx !== -1) OAD.DB.proposals[idx] = parsed;
+    else OAD.DB.proposals.push(parsed);
+  } else {
+    OAD.DB.proposals.push(parsed);
+  }
   OAD.saveDB();
   
   return parsed;
@@ -242,27 +260,41 @@ OAD.genDailyIntercept = async function () {
   const loadScore = typeof OAD.getDayLoad === 'function' ? OAD.getDayLoad(todayStr) : 0;
   const overdueCadences = (OAD.DB.cadences || []).filter(c => OAD.cadenceOverdue(c)).map(c => c.title);
   const stalledThreads = (OAD.DB.threads || []).filter(t => t.status === 'stalled').map(t => t.title);
-  const criticalThreads = (OAD.DB.threads || []).filter(t => t.priority === 'critical' && t.status !== 'closed').map(t => t.title);
   
-  const systemPrompt = `You are the executive coach engine for One-A-Day.
-Your job is to provide the morning briefing (Daily Intercept).
-Tone: direct, tactical, no-nonsense.
+  // Feed the AI exactly what the user is staring at on their dashboard today
+  const overdueThreads = (OAD.DB.threads || []).filter(t => OAD.isActionOverdue(t) && t.status !== 'closed' && t.status !== 'dormant');
+  const todayThreads = (OAD.DB.threads || []).filter(t => t.next_action_date === todayStr && t.status !== 'closed' && !OAD.isActionOverdue(t));
+  
+  let agendaLines = [];
+  if (overdueThreads.length > 0) {
+    agendaLines.push("OVERDUE TASKS:");
+    overdueThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}] ${t.title}`));
+  }
+  if (todayThreads.length > 0) {
+    agendaLines.push("DUE TODAY:");
+    todayThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}] ${t.title}`));
+  }
+  if (agendaLines.length === 0) {
+    agendaLines.push("No tasks due today or overdue.");
+  }
+  
+  // Also pass the absolute highest pressure looming task (if it's not already on today's agenda) to check for blind spots
+  const highestLooming = (OAD.DB.threads || [])
+    .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && t.next_action_date !== todayStr && !OAD.isActionOverdue(t))
+    .sort((a, b) => OAD.pressure(b) - OAD.pressure(a))[0];
+  
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.dailyIntercept) || {};
+  
+  const systemPrompt = (promptTemplate.system || "")
+    .replace('{{working}}', JSON.stringify(persona.what_is_working || []))
+    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []));
 
-User persona context:
-- Working: ${JSON.stringify(persona.what_is_working)}
-- Not working: ${JSON.stringify(persona.what_is_not_working)}
-
-Output valid JSON only:
-{
-  "focus": "One sentence on what must be crushed today.",
-  "avoidance": "One sentence calling out what they are avoiding (based on stalled/overdue).",
-  "reality_check": "One sentence challenging their capacity or assumptions today."
-}`;
-
-  const userMsg = `Day Load Score: ${loadScore}
-Overdue Cadences: ${JSON.stringify(overdueCadences)}
-Stalled Threads: ${JSON.stringify(stalledThreads)}
-Critical Threads: ${JSON.stringify(criticalThreads)}`;
+  const userMsg = (promptTemplate.user || "")
+    .replace('{{loadScore}}', loadScore)
+    .replace('{{overdueCadences}}', JSON.stringify(overdueCadences))
+    .replace('{{stalledThreads}}', JSON.stringify(stalledThreads))
+    .replace('{{agendaLines}}', agendaLines.join('\\n'))
+    .replace('{{highestLooming}}', highestLooming ? `[Pressure: ${OAD.pressure(highestLooming)}] ${highestLooming.title}` : 'None');
 
   const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
 
@@ -270,30 +302,23 @@ Critical Threads: ${JSON.stringify(criticalThreads)}`;
     const match = raw.match(/\{[\s\S]*\}/);
     return JSON.parse(match ? match[0] : raw);
   } catch (_) {
-    throw new Error("Failed to parse Daily Intercept.");
+    throw new Error(OAD.t('err_parse_intercept'));
   }
 };
 
 OAD.extractPersonaLesson = async function (threadTitle, pushCount, userReason) {
   const persona = OAD.DB.persona || {};
-  const systemPrompt = `You are the executive coach engine for One-A-Day.
-The user just procrastinated on a thread ${pushCount} times and gave an excuse.
-Analyze if this reveals a deeper pattern that should be added to their Persona.
-Output valid JSON only:
-{
-  "warrants_update": true,
-  "target_list": "assumption_tendencies",
-  "proposed_addition": "Short, punchy statement of the blind spot.",
-  "coach_message": "What to tell the user about why you are adding this."
-}
-If this is just a one-off and doesn't reveal a deeper pattern, return {"warrants_update": false}.
-Note: "target_list" must be exactly "assumption_tendencies" or "what_is_not_working".`;
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.personaLesson) || {};
+  
+  const systemPrompt = (promptTemplate.system || "")
+    .replace('{{pushCount}}', pushCount);
 
-  const userMsg = `Thread: "${threadTitle}"
-Procrastinated: ${pushCount} times
-User's excuse: "${userReason}"
-Current Assumption Tendencies: ${JSON.stringify(persona.assumption_tendencies)}
-Current What's Not Working: ${JSON.stringify(persona.what_is_not_working)}`;
+  const userMsg = (promptTemplate.user || "")
+    .replace('{{title}}', threadTitle)
+    .replace('{{pushCount}}', pushCount)
+    .replace('{{userReason}}', userReason)
+    .replace('{{assumption_tendencies}}', JSON.stringify(persona.assumption_tendencies || []))
+    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []));
 
   const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
   try {

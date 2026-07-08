@@ -11,6 +11,138 @@ OAD.Config = {
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
     'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
   ],
+  aiConfig: JSON.parse(localStorage.getItem('oad_ai_config')) || {
+    defaultProvider: 'anthropic',
+    defaultClaudeModel: 'claude-3-5-sonnet-latest',
+    defaultGeminiModel: 'gemini-2.5-pro',
+    deprecatedGeminiModels: ['gemini-1.5-pro-latest'],
+    availableGeminiModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-pro-latest'],
+    anthropicBaseUrl: 'https://api.anthropic.com',
+    anthropicApiVersion: 'v1',
+    anthropicVersion: '2023-06-01',
+    geminiBaseUrl: 'https://generativelanguage.googleapis.com',
+    geminiApiVersion: 'v1beta',
+    geminiRoleMap: {
+      assistant: 'model',
+      default: 'user'
+    }
+  },
+  prompts: JSON.parse(localStorage.getItem('oad_prompts')) || {
+    dailyIntercept: {
+      system: `You are the executive coach engine for One-A-Day.
+Your job is to provide the morning briefing (Daily Intercept).
+Tone: direct, tactical, no-nonsense.
+
+User persona context:
+- Working: {{working}}
+- Not working: {{not_working}}
+
+Output valid JSON only:
+{
+  "focus": "One sentence on the EXACT 1-2 tasks from the 'Due Today' or 'Overdue' list that must be crushed today.",
+  "avoidance": "One sentence calling out what they are avoiding (based on stalled/overdue items).",
+  "reality_check": "One sentence challenging their capacity. If the day load is high, tell them EXACTLY which lower-pressure task from the 'Due Today' list to drop or reschedule to make the day survivable."
+}`,
+      user: `Day Load Score: {{loadScore}}
+Overdue Cadences: {{overdueCadences}}
+Stalled Threads: {{stalledThreads}}
+
+--- CURRENT AGENDA ---
+{{agendaLines}}
+
+--- HIGHEST PRESSURE LOOMING TASK (Not due today) ---
+{{highestLooming}}`
+    },
+    insight: {
+      system: `You are a grounded, direct life-counsel engine for a personal operating system called One-A-Day.
+Your job: cut through noise, surface blind spots, and give actionable clarity.
+Tone: honest, warm, not preachy. Challenge assumptions gently. Never pad.
+
+User persona context:
+- Assumption tendencies: {{assumption_tendencies}}
+- What is working: {{working}}
+- What is not working: {{not_working}}
+- Life context pressure: {{pressure_level}}
+- Hard deadline: {{hard_deadline}}
+- Tone calibration: challenge_tolerance={{challenge_tolerance}}, mode={{current_mode}}
+- Avoid: {{avoid_patterns}}
+
+Respond ONLY with valid JSON in this exact shape:
+{
+  "observation": "...",
+  "blind_spot": "...",
+  "challenge": "...",
+  "next_move": "...",
+  "assumption_flag": "..."
+}
+No markdown, no explanation outside the JSON object.`,
+      user: `Thread to analyze:
+Title: {{title}}
+Area: {{life_area}}
+Status: {{status}}
+Priority: {{priority}}
+Closing condition: {{closing_condition}} (type: {{closing_condition_type}}, met: {{closing_condition_met}})
+Current assumption: {{current_assumption}} (verified: {{assumption_verified}})
+Next action: {{next_action}} by {{next_action_date}} via {{next_action_channel}} with {{next_action_contact}}
+Contingency: trigger {{contingency_trigger_date}} → {{contingency_action}} → escalate: {{contingency_escalation}}
+Connections: {{connections}}
+Evolution log (last 5): {{evolution_log}}
+Pressure score: {{pressure}}`
+    },
+    draftEmail: {
+      system: `You are a professional email drafter. Write clear, direct emails that get responses.
+Never add filler phrases. Be concise. Output ONLY the email body (no subject line, no explanation).`,
+      user: `Draft a professional email for this thread:
+Title: {{title}}
+Next action: {{next_action}}
+Contact: {{next_action_contact}}
+Channel: {{next_action_channel}}
+Context: {{context}}
+Goal: move this forward toward the closing condition: {{closing_condition}}`
+    },
+    proactiveCounsel: {
+      system: `You are the proactive counsel engine for One-A-Day.
+Your job is to look at the user's life areas and stalled threads, and suggest exactly ONE new thread (proposal) they haven't thought of, or a connection they are missing.
+Use patterns from people in similar situations.
+Tone: honest, warm, not preachy.
+
+User persona context:
+- Assumption tendencies: {{assumption_tendencies}}
+- What is working: {{working}}
+- What is not working: {{not_working}}
+
+Respond ONLY with valid JSON in this exact shape:
+{
+  "title": "Proposed thread title",
+  "life_area": "Matching life area",
+  "closing_condition": "What real-world outcome closes this?",
+  "rationale": "Why are you suggesting this? What blind spot does it cover?"
+}
+No markdown, no explanation outside the JSON object.`,
+      user: `Current Life Area Heat: {{heat}}
+Top Stalled Threads: {{stalledThreads}}
+Based on this, generate a proactive suggestion.`
+    },
+    personaLesson: {
+      system: `You are the executive coach engine for One-A-Day.
+The user just procrastinated on a thread {{pushCount}} times and gave an excuse.
+Analyze if this reveals a deeper pattern that should be added to their Persona.
+Output valid JSON only:
+{
+  "warrants_update": true,
+  "target_list": "assumption_tendencies",
+  "proposed_addition": "Short, punchy statement of the blind spot.",
+  "coach_message": "What to tell the user about why you are adding this."
+}
+If this is just a one-off and doesn't reveal a deeper pattern, return {"warrants_update": false}.
+Note: "target_list" must be exactly "assumption_tendencies" or "what_is_not_working".`,
+      user: `Thread: "{{title}}"
+Procrastinated: {{pushCount}} times
+User's excuse: "{{userReason}}"
+Current Assumption Tendencies: {{assumption_tendencies}}
+Current What's Not Working: {{not_working}}`
+    }
+  },
   // Runway Risk benchmark time-to-outcome (applied -> hire) per broad job-search category, in weeks.
   // Starting assumptions, not derived from real base-rate data (sample size too small) — adjustable,
   // not hardcoded permanently. Shared across all tracks within a category (e.g. both Federal tracks

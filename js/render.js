@@ -758,6 +758,17 @@ OAD._deleteIdeaConfirm = function (id) {
 
 // ── Proposals panel ──────────────────────────────────────────────────
 
+OAD.generateProposal = async function(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Scanning Life Graph…'; }
+  try {
+    await OAD.genProactiveCounsel();
+    OAD.renderProposalsPanel();
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Generate Counsel'; }
+    alert('AI Error: ' + err.message);
+  }
+};
+
 OAD.renderProposalsPanel = function () {
   OAD._lastView = 'Proposals';
   OAD.highlightNav('renderProposalsPanel');
@@ -768,8 +779,19 @@ OAD.renderProposalsPanel = function () {
   if (!panel) return;
 
   const proposals = OAD.DB.proposals || [];
+  
+  const generateBtnHtml = `<button class="primary" onclick="OAD.generateProposal(this)" style="margin-left:auto; font-size:13px;">✨ Generate Counsel</button>`;
+
   if (!proposals.length) {
-    panel.innerHTML = '<div class="detail-empty">No proactive proposals. The AI will generate them based on your life graph.</div>';
+    panel.innerHTML = `
+      <div class="idea-panel">
+        <div class="idea-panel-header" style="display:flex; align-items:center; gap:16px;">
+          <h2 style="margin:0">Proactive Counsel Proposals</h2>
+          ${generateBtnHtml}
+        </div>
+        <p class="text-muted text-sm idea-subtitle">AI-synthesized threads surfaced from your life graph heat and stalled patterns.</p>
+        <div class="detail-empty" style="margin-top:32px;">No proactive proposals yet. Click Generate Counsel to have the AI scan your graph.</div>
+      </div>`;
     return;
   }
 
@@ -783,6 +805,7 @@ OAD.renderProposalsPanel = function () {
       '<div class="idea-notes"><strong>Closing condition:</strong> ' + OAD.esc(p.closing_condition) + '</div>' +
       '<div class="idea-actions">' +
         '<button class="idea-promote-btn" onclick="OAD._acceptProposal(\'' + OAD.esc(p.uuid) + '\')">✓ Accept & Promote</button>' +
+        '<button class="ghost" style="font-size:12px;padding:4px 10px;" onclick="OAD.openRefineProposalModal(\'' + OAD.esc(p.uuid) + '\')">✍ Refine</button>' +
         '<button class="ghost" style="font-size:12px;padding:4px 10px;color:var(--critical)" onclick="OAD._rejectProposal(\'' + OAD.esc(p.uuid) + '\')">✗ Reject</button>' +
       '</div>' +
     '</div>';
@@ -790,12 +813,57 @@ OAD.renderProposalsPanel = function () {
 
   panel.innerHTML =
     '<div class="idea-panel">' +
-      '<div class="idea-panel-header">' +
-        '<h2>Proactive Counsel Proposals</h2>' +
+      '<div class="idea-panel-header" style="display:flex; align-items:center; gap:16px;">' +
+        '<h2 style="margin:0">Proactive Counsel Proposals</h2>' +
+        generateBtnHtml +
       '</div>' +
       '<p class="text-muted text-sm idea-subtitle">AI-synthesized threads surfaced from your life graph heat and stalled patterns.</p>' +
       proposals.map(proposalCard).join('') +
     '</div>';
+};
+
+OAD.openRefineProposalModal = function(uuid) {
+  const proposals = OAD.DB.proposals || [];
+  const p = proposals.find(function(x) { return x.uuid === uuid; });
+  if (!p) return;
+
+  OAD.openModal(`
+    <h2>Refine Proposal</h2>
+    <div style="margin-bottom:16px">
+      <strong>Original:</strong> ${OAD.esc(p.title)}<br>
+      <span class="text-sm text-muted">${OAD.esc(p.rationale)}</span>
+    </div>
+    <div class="field">
+      <label>Feedback for the Coach:</label>
+      <textarea id="refine-feedback-input" rows="3" placeholder="e.g., Make this more about finding work by Nov 27..."></textarea>
+    </div>
+    <div class="modal-footer">
+      <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
+      <button class="primary" onclick="OAD._submitRefineProposal(event, '${OAD.esc(uuid)}')">Refine Proposal</button>
+    </div>
+  `);
+};
+
+OAD._submitRefineProposal = async function(event, uuid) {
+  const input = document.getElementById('refine-feedback-input');
+  if (!input) return;
+  const feedback = input.value.trim();
+  if (!feedback) return;
+
+  const btn = event.target;
+  const ogText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Generating...';
+
+  try {
+    await OAD.genProactiveCounsel(feedback, uuid);
+    OAD.closeModal();
+    OAD.renderProposalsPanel();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = ogText;
+    alert('AI Error: ' + err.message);
+  }
 };
 
 OAD._acceptProposal = function(uuid) {
@@ -1186,6 +1254,51 @@ OAD.renderTodayView = function () {
 
 
 
+OAD._dailyInterceptData = null;
+
+OAD.loadDailyIntercept = async function(btn) {
+  const container = document.getElementById('daily-intercept-content');
+  if (!container) return;
+  
+  if (btn) btn.disabled = true;
+  container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-size:13px"><span class="loading-spinner" aria-hidden="true">⏳</span> Analyzing load and generating executive briefing...</div>';
+  
+  try {
+    const data = await OAD.genDailyIntercept();
+    OAD._dailyInterceptData = data;
+    OAD.renderDailyInterceptContent();
+  } catch (err) {
+    container.innerHTML = '<div style="padding:16px;color:var(--critical);font-size:13px;background:rgba(243,139,168,0.1);border:1px solid var(--critical);border-radius:12px;">⚠ Error: ' + OAD.esc(err.message) + '</div>';
+    if (btn) btn.disabled = false;
+  }
+};
+
+OAD.renderDailyInterceptContent = function() {
+  const container = document.getElementById('daily-intercept-content');
+  if (!container) return;
+  const data = OAD._dailyInterceptData;
+  if (!data) {
+    container.innerHTML = '<div style="padding:16px;display:flex;align-items:center;justify-content:space-between;background:rgba(136,85,221,0.05);border:1px solid rgba(136,85,221,0.2);border-radius:12px;">' +
+      '<div style="font-size:13px;color:var(--text-main)"><strong style="color:var(--primary)">Morning Briefing:</strong> Not yet generated for today.</div>' +
+      '<button class="primary btn-sm" onclick="OAD.loadDailyIntercept(this)" style="font-size:12px;padding:6px 12px;cursor:pointer">Generate Now</button>' +
+      '</div>';
+    return;
+  }
+  
+  container.innerHTML = 
+    '<div style="background:rgba(136,85,221,0.08);border:1px solid rgba(136,85,221,0.3);border-radius:12px;padding:16px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">' +
+        '<span style="font-size:16px" aria-hidden="true">🧠</span>' +
+        '<span style="font-size:12px;font-weight:700;color:var(--primary);letter-spacing:1px;text-transform:uppercase">Daily Intercept</span>' +
+      '</div>' +
+      '<div style="display:flex;flex-direction:column;gap:12px">' +
+        '<div style="font-size:14px;line-height:1.5"><strong style="color:var(--text-main)">🎯 Focus:</strong> <span style="color:var(--text-muted)">' + OAD.esc(data.focus) + '</span></div>' +
+        '<div style="font-size:14px;line-height:1.5"><strong style="color:var(--critical)">⚠ Avoidance:</strong> <span style="color:var(--text-muted)">' + OAD.esc(data.avoidance) + '</span></div>' +
+        '<div style="font-size:14px;line-height:1.5"><strong style="color:orange">⚡ Reality Check:</strong> <span style="color:var(--text-muted)">' + OAD.esc(data.reality_check) + '</span></div>' +
+      '</div>' +
+    '</div>';
+};
+
 OAD.renderDailyView = function () {
   OAD._lastView = 'Daily';
   OAD.highlightNav('renderDailyView');
@@ -1573,6 +1686,8 @@ OAD.renderDailyView = function () {
           '<button class="success" onclick="OAD.openNewThreadModal()">+ New Task</button>' +
         '</div>' +
       '</header>' +
+      
+      '<div id="daily-intercept-content" style="margin-bottom:20px;"></div>' +
 
       '<div class="ds-metrics-grid">' +
         '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
@@ -1638,6 +1753,8 @@ OAD.renderDailyView = function () {
         '</div>' +
       '</div>' +
     '</div>';
+    
+  setTimeout(OAD.renderDailyInterceptContent, 0);
 };
 
 

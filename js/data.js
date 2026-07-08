@@ -215,7 +215,13 @@ OAD.addEvolution = function (id, note) {
 OAD.addInsight = function (id, insight) {
   const t = OAD.getThread(id);
   if (!t) return;
+  
+  if (!t.ai_insights) t.ai_insights = [];
   t.ai_insights.push(insight);
+  
+  if (!OAD.DB.persona) OAD.DB.persona = {};
+  if (!OAD.DB.persona.counsel_history) OAD.DB.persona.counsel_history = [];
+  
   OAD.DB.persona.counsel_history.push({
     thread_id: id,
     thread_title: t.title,

@@ -26,5 +26,17 @@
   "newThread": "+ New",
   "searchPlaceholder": "Search threads…",
   "no_toats_title": "No TOATs to see here",
-  "no_toats_desc": "All tasks are on track. Focus Now!"
+  "no_toats_desc": "All tasks are on track. Focus Now!",
+  "err_no_anthropic_key": "No API key set. Open Settings to add your Anthropic API key.",
+  "err_api_status": "API error",
+  "err_no_gemini_key": "No API key set. Open Settings to add your Gemini API key.",
+  "err_model_not_found_prefix": "Model",
+  "err_model_not_found_suffix": "not found. Available models on your API key:",
+  "err_gemini_status": "Gemini API error",
+  "err_parse_gemini": "Failed to parse Gemini response",
+  "err_thread_not_found": "Thread not found",
+  "err_parse_counsel": "Failed to parse proactive counsel response:",
+  "err_parse_intercept": "Failed to parse Daily Intercept.",
+  "err_failed_to_fetch_list": "failed to fetch list",
+  "err_none": "none"
 }
