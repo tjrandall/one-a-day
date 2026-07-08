@@ -2240,25 +2240,141 @@ OAD.test('cycle: detectCycles identifies circular dependencies', function () {
 OAD.test('list: filter caching preserves search and status states', function () {
   const originalSearch = OAD._activeListSearch;
   const originalStatus = OAD._activeListStatus;
-  
+
   try {
     OAD._activeListSearch = 'test-query';
     OAD._activeListStatus = 'stalled';
-    
+
     // Call renderListView (mocked panel setup)
     const mockPanel = document.createElement('div');
     mockPanel.id = 'detail-content';
     document.body.appendChild(mockPanel);
-    
+
     OAD.renderListView();
-    
+
     OAD._assertEqual(OAD._activeListSearch, 'test-query', 'Search query should be retained');
     OAD._assertEqual(OAD._activeListStatus, 'stalled', 'Status filter should be retained');
-    
+
     document.body.removeChild(mockPanel);
   } finally {
     OAD._activeListSearch = originalSearch;
     OAD._activeListStatus = originalStatus;
+  }
+});
+
+OAD.test('list: search matches title, closing condition, and next action — no longer matches life_area (dedicated dropdown handles that now)', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalSearch = OAD._activeListSearch;
+  const originalStatus = OAD._activeListStatus;
+  const originalArea = OAD._activeListArea;
+  const originalSavedViewId = OAD._activeSavedViewId;
+
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-content';
+  document.body.appendChild(mockPanel);
+
+  try {
+    OAD._activeSavedViewId = null;
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Renew passport', closing_condition: 'Passport received in mail', next_action: 'Submit application', life_area: 'Legal' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Unrelated thread', closing_condition: 'Something else entirely', next_action: 'Do a different thing', life_area: 'Legal' })
+    ];
+
+    function visibleTitles(query) {
+      OAD._activeListSearch = query;
+      OAD._activeListStatus = 'all';
+      OAD._activeListArea = '';
+      OAD.renderListView();
+      return document.getElementById('list-tab-threads').innerHTML;
+    }
+
+    OAD._assert(visibleTitles('passport').includes('Renew passport'), 'search matches title');
+    OAD._assert(visibleTitles('received in mail').includes('Renew passport'), 'search matches closing_condition');
+    OAD._assert(visibleTitles('submit application').includes('Renew passport'), 'search matches next_action');
+    const legalResults = visibleTitles('legal');
+    OAD._assert(!legalResults.includes('Renew passport') && !legalResults.includes('Unrelated thread'),
+      'search no longer matches life_area by free text — that is the dedicated area dropdown\'s job now');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = originalThreads;
+    OAD._activeListSearch = originalSearch;
+    OAD._activeListStatus = originalStatus;
+    OAD._activeListArea = originalArea;
+    OAD._activeSavedViewId = originalSavedViewId;
+  }
+});
+
+OAD.test('list: life area dropdown filters independently of the search box', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalSearch = OAD._activeListSearch;
+  const originalStatus = OAD._activeListStatus;
+  const originalArea = OAD._activeListArea;
+  const originalSavedViewId = OAD._activeSavedViewId;
+
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-content';
+  document.body.appendChild(mockPanel);
+
+  try {
+    OAD._activeSavedViewId = null;
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Health thing', life_area: 'Health' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Career thing', life_area: 'Career' })
+    ];
+
+    OAD._activeListSearch = '';
+    OAD._activeListStatus = 'all';
+    OAD._activeListArea = 'Health';
+    OAD.renderListView();
+    const html = document.getElementById('list-tab-threads').innerHTML;
+
+    OAD._assert(html.includes('Health thing'), 'area filter includes the matching-area thread');
+    OAD._assert(!html.includes('Career thing'), 'area filter excludes the non-matching-area thread');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = originalThreads;
+    OAD._activeListSearch = originalSearch;
+    OAD._activeListStatus = originalStatus;
+    OAD._activeListArea = originalArea;
+    OAD._activeSavedViewId = originalSavedViewId;
+  }
+});
+
+OAD.test('list: "All except Closed" status preset excludes only closed threads', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalSearch = OAD._activeListSearch;
+  const originalStatus = OAD._activeListStatus;
+  const originalArea = OAD._activeListArea;
+  const originalSavedViewId = OAD._activeSavedViewId;
+
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-content';
+  document.body.appendChild(mockPanel);
+
+  try {
+    OAD._activeSavedViewId = null;
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Open one', status: 'open' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Stalled one', status: 'stalled' }),
+      OAD.makeThread({ id: 3, uuid: OAD._generateUUID(), title: 'Closed one', status: 'closed' })
+    ];
+
+    OAD._activeListSearch = '';
+    OAD._activeListArea = '';
+    OAD._activeListStatus = 'not-closed';
+    OAD.renderListView();
+    const html = document.getElementById('list-tab-threads').innerHTML;
+
+    OAD._assert(html.includes('Open one'), 'not-closed preset includes open threads');
+    OAD._assert(html.includes('Stalled one'), 'not-closed preset includes stalled threads');
+    OAD._assert(!html.includes('Closed one'), 'not-closed preset excludes closed threads');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = originalThreads;
+    OAD._activeListSearch = originalSearch;
+    OAD._activeListStatus = originalStatus;
+    OAD._activeListArea = originalArea;
+    OAD._activeSavedViewId = originalSavedViewId;
   }
 });
 

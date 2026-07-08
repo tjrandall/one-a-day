@@ -2623,6 +2623,7 @@ OAD.renderListView = function () {
 
   if (OAD._activeListSearch === undefined) OAD._activeListSearch = '';
   if (OAD._activeListStatus === undefined) OAD._activeListStatus = 'all';
+  if (OAD._activeListArea === undefined) OAD._activeListArea = '';
   if (OAD._activeSavedViewId === undefined) OAD._activeSavedViewId = null;
 
   const threads = OAD.getVisibleThreads();
@@ -2638,10 +2639,15 @@ OAD.renderListView = function () {
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
 
-  const statusOptions = ['all', 'inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
-    const label = s === 'all' ? 'All States' : s.charAt(0).toUpperCase() + s.slice(1);
+  const statusOptions = ['all', 'not-closed', 'inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
+    const label = s === 'all' ? 'All States' : s === 'not-closed' ? 'All except Closed' : s.charAt(0).toUpperCase() + s.slice(1);
     const selected = s === OAD._activeListStatus ? 'selected' : '';
     return `<option value="${s}" ${selected}>${label}</option>`;
+  }).join('');
+
+  const areaOptions = (OAD.LIFE_AREAS || []).map(a => {
+    const selected = a === OAD._activeListArea ? 'selected' : '';
+    return `<option value="${OAD.esc(a)}" ${selected}>${OAD.esc(a)}</option>`;
   }).join('');
 
   panel.innerHTML = `
@@ -2662,7 +2668,11 @@ OAD.renderListView = function () {
       </div>
 
       <div class="list-tab-toolbar">
-        <input type="text" id="list-tab-search" placeholder="Search tasks by title or life area…" value="${OAD.esc(OAD._activeListSearch)}" oninput="OAD.filterListTab()">
+        <input type="text" id="list-tab-search" placeholder="Search tasks by title, closing condition, or next action…" value="${OAD.esc(OAD._activeListSearch)}" oninput="OAD.filterListTab()">
+        <select id="list-tab-area" ${OAD._activeSavedViewId ? 'disabled title="Life area is controlled by the active Graph View"' : ''} onchange="OAD.filterListTab()">
+          <option value="">All Life Areas</option>
+          ${areaOptions}
+        </select>
         <select id="list-tab-status" ${OAD._activeSavedViewId ? 'disabled title="Status is controlled by the active Graph View"' : ''} onchange="OAD.filterListTab()">
           ${statusOptions}
         </select>
@@ -2691,12 +2701,15 @@ OAD.applySavedViewFromToolbar = function () {
 OAD.filterListTab = function () {
   const searchInput = document.getElementById('list-tab-search');
   const statusSelect = document.getElementById('list-tab-status');
+  const areaSelect   = document.getElementById('list-tab-area');
 
   if (searchInput) OAD._activeListSearch = searchInput.value;
   if (statusSelect && !OAD._activeSavedViewId) OAD._activeListStatus = statusSelect.value;
+  if (areaSelect && !OAD._activeSavedViewId) OAD._activeListArea = areaSelect.value;
 
   const query = (OAD._activeListSearch || '').toLowerCase();
   const statusFilter = OAD._activeListStatus || 'all';
+  const areaFilter = OAD._activeListArea || '';
 
   const cycles = OAD.detectCycles();
   const cycleThreadIds = new Set(cycles.flat());
@@ -2707,14 +2720,19 @@ OAD.filterListTab = function () {
     ? OAD.applySavedView(OAD.getVisibleThreads(), activeSavedView)
     : OAD.getVisibleThreads()
         .filter(t => {
-          const matchesStatus = statusFilter === 'all' || t.status === statusFilter;
-          return matchesStatus;
+          const matchesStatus = statusFilter === 'all'
+            || (statusFilter === 'not-closed' ? t.status !== 'closed' : t.status === statusFilter);
+          const matchesArea = !areaFilter || t.life_area === areaFilter;
+          return matchesStatus && matchesArea;
         })
         .map(t => ({ ...t, _score: OAD.pressure(t) }))
         .sort((a, b) => b._score - a._score)
   )
     .map(t => ({ ...t, _score: t._score != null ? t._score : OAD.pressure(t) }))
-    .filter(t => !query || (t.title || '').toLowerCase().includes(query) || (t.life_area || '').toLowerCase().includes(query));
+    .filter(t => !query
+      || (t.title             || '').toLowerCase().includes(query)
+      || (t.closing_condition || '').toLowerCase().includes(query)
+      || (t.next_action       || '').toLowerCase().includes(query));
 
   const container = document.getElementById('list-tab-threads');
   if (!container) return;
