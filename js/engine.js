@@ -508,7 +508,7 @@ OAD.calculateDayLoadScore = function (dateStr) {
   }, 0);
 
   var cadenceCount = (OAD.getVisibleCadences ? OAD.getVisibleCadences() : OAD.DB.cadences || [])
-    .filter(function (c) { return c.next_due === dateStr; }).length;
+    .filter(function (c) { return OAD.Due.isCadenceDueOn(c, dateStr); }).length;
 
   return pressureSum + (edgeSum * edgeMultiplier) + (cadenceCount * cadenceWeight);
 };
