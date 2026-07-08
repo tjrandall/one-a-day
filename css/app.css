@@ -25,7 +25,7 @@
   --accent-dim: #0080801a;
   --critical: #fa5252;
   --high: #fd7e14;
-  --medium: #fcc419;
+  --medium: #8a6200;   /* was #fcc419 (1.61:1 on white, WCAG AA fail); darkened within the same amber/gold hue to clear 4.5:1 (measures 5.49:1) — shared token, fixes every usage at once */
   --low: var(--fq-brand-green);
   --waiting: var(--fq-brand-teal);
   --stalled: #e64980;
@@ -367,12 +367,19 @@ header .header-actions { margin-left: auto; display: flex; gap: 8px; }
 }
 
 /* ── Next Action Card ── */
+/* This card is the one dark-surface exception in an otherwise all-light theme, so its text
+   colors are overridden locally here rather than via --text/--text-muted (those tokens are
+   correct as-is for every other, light-surface usage — 60+ call sites — and must stay dark).
+   #1a1a2e background: --text-fixed-light-* below hold at 14.4:1 / 6.99:1 against it (WCAG AA
+   requires 4.5:1 for normal text; both clear it with margin). */
 .next-action-card {
   border-color: var(--accent-dim);
   background: #1a1a2e;
+  color: #e8ecf5;
 }
+.next-action-card .card-title { color: #9aa5c9; }
 .next-action-text { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
-.next-action-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 16px; flex-wrap: wrap; }
+.next-action-meta { font-size: 13px; color: #9aa5c9; display: flex; gap: 16px; flex-wrap: wrap; }
 
 /* ── AI Insight Card ── */
 .insight-card { border-color: #2a2a50; }
