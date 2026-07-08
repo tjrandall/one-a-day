@@ -414,19 +414,74 @@ OAD.openPersonaUpdateModal = function (lesson) {
   const encodedLesson = encodeURIComponent(JSON.stringify(lesson));
   OAD.openModal(`
     <h2>Coach Observation</h2>
-    <p style="margin-bottom: 16px; color: var(--text-muted);">${OAD.esc(lesson.coach_message)}</p>
-    <div class="field" style="margin-bottom: 16px;">
-      <label>Proposed Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
-      <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
-        ${OAD.esc(lesson.proposed_addition)}
+    <div id="coach-observation-content">
+      <p style="margin-bottom: 16px; color: var(--text-muted);">${OAD.esc(lesson.coach_message)}</p>
+      <div class="field" style="margin-bottom: 16px;">
+        <label>Proposed Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
+        <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
+          ${OAD.esc(lesson.proposed_addition)}
+        </div>
       </div>
-    </div>
-    <div class="modal-footer">
-      <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
-      <button class="success" onclick="OAD._acceptPersonaUpdate('${encodedLesson}')">Accept Update</button>
+      <div class="field" style="margin-bottom: 16px;">
+        <label>Push Back / Provide Context (Optional):</label>
+        <textarea id="coach-rebuttal" placeholder="If the coach lacks context (e.g., waiting on government bureaucracy), explain it here..." style="width:100%; height:60px; padding:8px; border:1px solid var(--border); border-radius:4px;"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
+        <button class="primary" id="rebut-btn" onclick="OAD._rebutPersonaUpdate('${encodedLesson}')">Refute</button>
+        <button class="success" onclick="OAD._acceptPersonaUpdate('${encodedLesson}')">Accept Update</button>
+      </div>
     </div>
   `);
 };
+
+OAD._rebutPersonaUpdate = async function (encodedLesson) {
+  const rebuttal = document.getElementById('coach-rebuttal').value.trim();
+  if (!rebuttal) {
+    alert("Please provide context to refute the observation.");
+    return;
+  }
+  
+  const btn = document.getElementById('rebut-btn');
+  btn.disabled = true;
+  btn.textContent = 'Thinking...';
+  
+  try {
+    const lesson = JSON.parse(decodeURIComponent(encodedLesson));
+    const response = await OAD.refutePersonaLesson(lesson, rebuttal);
+    
+    let html = `<h2>Coach Response</h2>
+      <p style="margin-bottom: 16px; color: ${response.conceded ? 'var(--success)' : 'var(--danger)'}; font-weight: 500;">${OAD.esc(response.coach_response)}</p>`;
+      
+    if (response.warrants_update && response.proposed_addition) {
+       lesson.proposed_addition = response.proposed_addition;
+       const newEncoded = encodeURIComponent(JSON.stringify(lesson));
+       html += `
+       <div class="field" style="margin-bottom: 16px;">
+        <label>Revised Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
+        <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
+          ${OAD.esc(lesson.proposed_addition)}
+        </div>
+       </div>
+       <div class="modal-footer">
+        <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
+        <button class="success" onclick="OAD._acceptPersonaUpdate('${newEncoded}')">Accept Revised Update</button>
+       </div>
+       `;
+    } else {
+       html += `<div class="modal-footer">
+        <button class="secondary" onclick="OAD.closeModal()">Close</button>
+       </div>`;
+    }
+    
+    document.getElementById('coach-observation-content').innerHTML = html;
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Refute';
+    alert("Error processing rebuttal: " + e.message);
+  }
+};
+
 
 OAD._acceptPersonaUpdate = function (encodedLesson) {
   const lesson = JSON.parse(decodeURIComponent(encodedLesson));

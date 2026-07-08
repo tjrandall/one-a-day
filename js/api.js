@@ -328,3 +328,26 @@ OAD.extractPersonaLesson = async function (threadTitle, pushCount, userReason) {
     return { warrants_update: false };
   }
 };
+
+OAD.refutePersonaLesson = async function (lesson, rebuttal) {
+  const systemPrompt = `You are a proactive executive coach. You recently observed the user and proposed adding a behavioral trait to their persona. The user has pushed back with a rebuttal.
+Analyze their rebuttal. If they are right (e.g. it's an external blocker they can't control, government bureaucracy, etc.), concede the point, validate their context, and withdraw the trait update (or suggest an alternative structural fix like 'Update the thread closing condition to reflect the external dependency'). If they are just making excuses, politely but firmly hold your ground and propose a modified trait.
+
+Output strictly in JSON format:
+{
+  "conceded": true/false,
+  "coach_response": "A direct, 1-2 sentence response to their rebuttal. Do not be condescending.",
+  "warrants_update": true/false, // Set to true ONLY if you still want to push a revised trait. False if you are withdrawing it completely.
+  "proposed_addition": "A revised trait to add, if applicable, otherwise empty string."
+}`;
+
+  const userMsg = `Original Coach Message: ${lesson.coach_message}\nOriginal Proposed Trait: ${lesson.proposed_addition}\nUser's Rebuttal: ${rebuttal}`;
+  
+  const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
+  try {
+    const match = raw.match(/\{[\s\S]*\}/);
+    return JSON.parse(match ? match[0] : raw);
+  } catch (_) {
+    return { conceded: false, coach_response: "I could not process the rebuttal.", warrants_update: false, proposed_addition: "" };
+  }
+};
