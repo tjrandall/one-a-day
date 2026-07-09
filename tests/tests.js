@@ -1966,6 +1966,77 @@ OAD.test('getEisenhowerQuadrant: deadline takes precedence over next_action_date
   OAD._assertEqual(OAD.getEisenhowerQuadrant(farDeadline), 'Q2', 'far deadline should be Q2 even though next_action_date is today (deadline wins when both set)');
 });
 
+OAD.test('renderInboxAlertBanner: creates a real, clickable banner when inbox items exist, with the true count', function () {
+  const savedThreads = OAD.DB.threads;
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-panel';
+  document.body.appendChild(mockPanel);
+
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Capture A', status: 'inbox' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Capture B', status: 'inbox' }),
+      OAD.makeThread({ id: 3, uuid: OAD._generateUUID(), title: 'Real work', status: 'open', priority: 'high' })
+    ];
+
+    OAD.renderInboxAlertBanner();
+    const banner = document.getElementById('inbox-alert-banner');
+    OAD._assert(!!banner, 'banner should be created when inbox items exist');
+    OAD._assert(banner.innerHTML.indexOf('2 items') !== -1, 'banner should show the true inbox count (2), not a hardcoded value');
+    OAD._assert(banner.innerHTML.indexOf('OAD.renderInboxPanel()') !== -1, 'banner should route to the real Inbox panel, not a synthetic thread id');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = savedThreads;
+  }
+});
+
+OAD.test('renderInboxAlertBanner: removes itself once the inbox is actually empty (not snoozable)', function () {
+  const savedThreads = OAD.DB.threads;
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-panel';
+  document.body.appendChild(mockPanel);
+
+  try {
+    OAD.DB.threads = [OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Capture A', status: 'inbox' })];
+    OAD.renderInboxAlertBanner();
+    OAD._assert(!!document.getElementById('inbox-alert-banner'), 'banner should exist while inbox has items');
+
+    OAD.DB.threads = [];
+    OAD.renderInboxAlertBanner();
+    OAD._assert(!document.getElementById('inbox-alert-banner'), 'banner should be removed once the inbox is empty — no snooze mechanism to accidentally leave it dismissed');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = savedThreads;
+  }
+});
+
+OAD.test('renderInboxAlertBanner: does not affect Focus Now, pressure, or DueEngine active-thread counts', function () {
+  const savedThreads = OAD.DB.threads;
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-panel';
+  document.body.appendChild(mockPanel);
+
+  try {
+    const todayStr = OAD.todayStr();
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Capture A', status: 'inbox' }),
+      OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Real work', status: 'open', priority: 'low', next_action: 'do it', next_action_date: todayStr })
+    ];
+
+    OAD.renderInboxAlertBanner();
+
+    const active = OAD.Due.activeThreadsRaw();
+    OAD._assertEqual(active.length, 1, 'the inbox item must not appear in activeThreadsRaw — no synthetic thread injected');
+    OAD._assertEqual(active[0].id, 2, 'only the real open thread should be active');
+
+    const focus = OAD.selectFocusThread();
+    OAD._assert(!!focus && focus.id === 2, 'Focus Now should still pick the real work, not be hijacked by an inbox reminder');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = savedThreads;
+  }
+});
+
 OAD.test('proposals: accepting a proposal creates an active thread', function () {
   const savedProposals = (OAD.DB.proposals || []).slice();
   const savedThreads = (OAD.DB.threads || []).slice();
@@ -2181,6 +2252,10 @@ OAD._finishBoot = function () {
 
   if (typeof OAD.renderRunwayRiskBanner === 'function') {
     OAD.renderRunwayRiskBanner();
+  }
+
+  if (typeof OAD.renderInboxAlertBanner === 'function') {
+    OAD.renderInboxAlertBanner();
   }
 
   if (typeof OAD.runADE === 'function') {

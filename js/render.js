@@ -207,10 +207,6 @@ OAD.renderPersonaBar = function () {
 };
 
 OAD.selectThread = function (id) {
-  if (id == -999) {
-    if (typeof OAD.renderInboxPanel === 'function') OAD.renderInboxPanel();
-    return;
-  }
   OAD._activeId = id;
   OAD.renderList();
   OAD.renderDetail(id);
@@ -221,6 +217,10 @@ OAD.refreshActiveView = function () {
 
   if (typeof OAD.renderRunwayRiskBanner === 'function') {
     OAD.renderRunwayRiskBanner();
+  }
+
+  if (typeof OAD.renderInboxAlertBanner === 'function') {
+    OAD.renderInboxAlertBanner();
   }
 
   if (OAD._lastView === 'Graph') {
@@ -591,6 +591,40 @@ OAD.renderRunwayRiskBanner = function () {
       '<button class="secondary" style="font-size:12px;padding:5px 12px" onclick="OAD.acknowledgeRunwayRisk(\'' + r.trackUuid + '\'); OAD.renderRunwayRiskBanner(); if (OAD._activeId === ' + r.goalThreadId + ') OAD.renderDetail(' + r.goalThreadId + ');">Acknowledge (1wk)</button>' +
       '</div>';
   }).join('');
+};
+
+// Daily critical reminder that Inbox items exist and need triage — without the Inbox nav
+// button or the Matrix's Inbox quadrant, unprocessed captures are easy to never see again.
+// Deliberately NOT snoozable/acknowledgeable like the Runway Risk banner above: the whole
+// point is it must not be dismissible into oblivion the way the inbox items themselves
+// currently are. It only goes away when the inbox is actually emptied. Real data only — no
+// synthetic thread, no injection into activeThreadsRaw()/the pressure pipeline; this reads
+// OAD.getVisibleThreads() directly and renders its own banner, so it can't affect Focus Now,
+// This Week's Load, or the Matrix view's own quadrant counts.
+OAD.renderInboxAlertBanner = function () {
+  var inboxCount = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'inbox'; }).length;
+
+  var banner = document.getElementById('inbox-alert-banner');
+  if (!inboxCount) {
+    if (banner) banner.remove();
+    return;
+  }
+
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'inbox-alert-banner';
+    var detailPanel = document.getElementById('detail-panel');
+    if (!detailPanel) return;
+    detailPanel.insertBefore(banner, detailPanel.firstChild);
+  }
+
+  banner.innerHTML =
+    '<div class="overdue-item" style="border-left-color:var(--critical)">' +
+      '<span class="overdue-label">INBOX</span>' +
+      '<strong>' + inboxCount + ' item' + (inboxCount !== 1 ? 's' : '') + ' need' + (inboxCount === 1 ? 's' : '') + ' triage</strong>' +
+      '<span class="overdue-consequence"> — unprocessed captures don\'t become real threads until you sort them</span>' +
+      '<button class="ghost" style="margin-left:auto;font-size:12px;padding:5px 12px" onclick="OAD.renderInboxPanel()">Open Inbox</button>' +
+    '</div>';
 };
 
 OAD.markCadenceDone = function (id) {
