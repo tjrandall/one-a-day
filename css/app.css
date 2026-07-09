@@ -1046,7 +1046,12 @@ button.success:hover { opacity: .88; }
 /* Eisenhower Matrix Grid */
 .eisenhower-matrix {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, 1fr), not plain 1fr: a bare 1fr track still sizes to its content's min-content
+     width by default, so one row with a long unwrapped line (real data — e.g. a thread with a
+     long next_action) blows the whole grid out to thousands of px wide instead of wrapping/
+     ellipsis-ing within its cell. Confirmed against the 7/9 export before this fix: columns
+     measured ~6950px/~10460px instead of filling the viewport. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   margin-bottom: 24px;
 }

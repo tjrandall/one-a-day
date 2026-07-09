@@ -207,6 +207,10 @@ OAD.renderPersonaBar = function () {
 };
 
 OAD.selectThread = function (id) {
+  if (id == -999) {
+    if (typeof OAD.renderInboxPanel === 'function') OAD.renderInboxPanel();
+    return;
+  }
   OAD._activeId = id;
   OAD.renderList();
   OAD.renderDetail(id);
@@ -1205,8 +1209,8 @@ OAD.renderTodayView = function () {
 
   const bottomBucketsHtml = bucket('q1', '🔥', 'Do First (Q1)', q1Items) +
                             bucket('q2', '📅', 'Schedule (Q2)', q2Items) +
-                            bucket('q3', '🗣️', 'Delegate (Q3)', q3Items) +
-                            bucket('q4', '🗑️', 'Eliminate (Q4)', q4Items) +
+                            bucket('q3', '🗣️', 'Waiting (Q3)', q3Items) +
+                            bucket('q4', '🗑️', 'Inbox (Q4)', q4Items) +
                             bucket('habits', '✦', 'Active Habits', habitItems) +
                             bucket('cadences', '📅', 'Upcoming Cadences', cadenceItems) +
                             dormantBucketHtml;
@@ -1778,13 +1782,27 @@ OAD.renderMatrixView = function () {
   // ── Threads ────────────────────────────────────────────────────────
   const due = OAD.Due.dashboardData(todayStr, in7Str);
   const childrenByParentUUID = due.childrenByParentUUID;
-  const filteredActive = due.visibleThreads;
+  // Two separate, non-overlapping candidate pools rather than one filtered-after-the-fact list:
+  // Q1/Q2 (open threads) come from due.visibleThreads, so they keep the same parent/child
+  // suppression as every other DueEngine consumer (an open child folded into its parent's badge
+  // stays folded here too, for consistency with Today/Week). Q3/Q4 (waiting/dormant/inbox) are
+  // pulled directly, unsuppressed — suppression is specifically about decluttering non-urgent
+  // *open* children, and Q3's whole purpose is the opposite of that (every waiting/dormant/inbox
+  // thread must stay individually visible, "not forgotten" per the brief) — running them through
+  // suppression first silently folded some waiting children into their parent's badge and
+  // undercounted Q3 (caught via the 7/9 export: 29 waiting + 7 dormant = 36 expected, only 27
+  // rendered before this fix).
+  const openVisible = due.visibleThreads.filter(t => t.status === 'open');
+  const waitingDormantInbox = (OAD.getVisibleThreads() || [])
+    .filter(t => t.status === 'waiting' || t.status === 'dormant' || t.status === 'inbox')
+    .map(t => Object.assign({}, t, { _score: OAD.pressure(t) }));
+  const quadrantCandidates = openVisible.concat(waitingDormantInbox);
 
   // Eisenhower Matrix Categorization
-  const q1Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
-  const q2Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q2');
-  const q3Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q3');
-  const q4Threads = filteredActive.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
+  const q1Threads = quadrantCandidates.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q1');
+  const q2Threads = quadrantCandidates.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q2');
+  const q3Threads = quadrantCandidates.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q3');
+  const q4Threads = quadrantCandidates.filter(t => OAD.getEisenhowerQuadrant(t) === 'Q4');
 
   // ── Cadences ───────────────────────────────────────────────────────
   const cads = OAD.getVisibleCadences() || [];
@@ -1854,11 +1872,14 @@ OAD.renderMatrixView = function () {
     }
 
     const rowClass = 'ds-row ds-thread ds-row-' + context + (children.length ? ' ds-row-parent' : '');
+    const priorityPill = '<span class="pill ' + OAD.esc(t.priority) + '" style="font-size:10px;padding:1px 6px">' + OAD.esc(t.priority) + '</span>';
+    const areaTag = t.life_area ? '<span class="pill" style="font-size:10px;padding:1px 6px;background:var(--surface2);color:var(--text-muted)">' + OAD.esc(t.life_area) + '</span>' : '';
     return '<div class="' + rowClass + '" role="button" aria-label="' + OAD.esc(t.title) + '" onclick="OAD.selectThread(' + t.id + ')">' +
       '<div class="ds-row-main">' +
         '<span class="pressure-badge ' + pc + '" aria-label="Pressure ' + t._score + '">' + t._score + '</span>' +
         '<div class="ds-row-text">' +
           '<div class="ds-row-title">' + OAD.esc(t.title) + badge + cycleBadge + '</div>' +
+          '<div class="ds-row-tags" style="display:flex;gap:6px;margin-top:2px">' + priorityPill + areaTag + '</div>' +
           (t.next_action ? '<div class="ds-row-sub">' + OAD.esc(t.next_action) + '</div>' : '<div class="ds-row-sub ds-no-action">No next action set</div>') +
           childSummaryHtml +
         '</div>' +
@@ -1948,8 +1969,8 @@ OAD.renderMatrixView = function () {
   const matrixHtml = '<div class="eisenhower-matrix">' +
     quadrantHtml('q1', 'Do First', q1Items, 'Urgent & Important') +
     quadrantHtml('q2', 'Schedule', q2Items, 'Important, Not Urgent') +
-    quadrantHtml('q3', 'Delegate / Assess', q3Items, 'Urgent, Not Important') +
-    quadrantHtml('q4', 'Eliminate / Ignore', q4Items, 'Not Urgent, Not Important') +
+    quadrantHtml('q3', 'Waiting', q3Items, 'Not actionable right now — stay visible, not forgotten') +
+    quadrantHtml('q4', 'Inbox', q4Items, 'Needs triage into a real thread or archive') +
   '</div>';
 
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);

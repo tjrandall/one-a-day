@@ -1945,7 +1945,25 @@ OAD.test('getEisenhowerQuadrant: correctly maps high priority + overdue to Q1', 
   const t = OAD.makeThread({ title: 'A', status: 'open', priority: 'high', next_action_date: '2000-01-01' });
   OAD._assertEqual(OAD.getEisenhowerQuadrant(t), 'Q1', 'High priority and overdue should be Q1');
   const t2 = OAD.makeThread({ title: 'B', status: 'open', priority: 'medium', next_action_date: '2099-01-01' });
-  OAD._assertEqual(OAD.getEisenhowerQuadrant(t2), 'Q4', 'Medium priority and not urgent should be Q4');
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(t2), 'Q2', 'Open, not urgent, and not important falls into Q2 by default (no Q5)');
+});
+
+OAD.test('getEisenhowerQuadrant: status-based Q3/Q4 win regardless of priority/urgency', function () {
+  const waiting = OAD.makeThread({ title: 'W', status: 'waiting', priority: 'critical', next_action_date: '2000-01-01' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(waiting), 'Q3', 'waiting status is always Q3, even if urgent+important');
+  const dormant = OAD.makeThread({ title: 'D', status: 'dormant', priority: 'low' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(dormant), 'Q3', 'dormant status is always Q3');
+  const inbox = OAD.makeThread({ title: 'I', status: 'inbox', priority: 'critical', next_action_date: '2000-01-01' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(inbox), 'Q4', 'inbox status is always Q4, even if urgent+important');
+  const closed = OAD.makeThread({ title: 'C', status: 'closed', priority: 'critical' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(closed), null, 'closed threads belong in no quadrant');
+});
+
+OAD.test('getEisenhowerQuadrant: deadline takes precedence over next_action_date for urgency when both are set', function () {
+  const nearDeadline = OAD.makeThread({ title: 'ND', status: 'open', priority: 'high', deadline: OAD.todayStr(), next_action_date: '2099-01-01' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(nearDeadline), 'Q1', 'deadline today should be Q1 even though next_action_date is far out');
+  const farDeadline = OAD.makeThread({ title: 'FD', status: 'open', priority: 'high', deadline: '2099-01-01', next_action_date: OAD.todayStr() });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(farDeadline), 'Q2', 'far deadline should be Q2 even though next_action_date is today (deadline wins when both set)');
 });
 
 OAD.test('proposals: accepting a proposal creates an active thread', function () {

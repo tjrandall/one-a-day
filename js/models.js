@@ -43,30 +43,32 @@ class Thread {
     return { daysRemaining: daysRemaining, weeksRemaining: weeksRemaining, sessionsRemaining: sessionsRemaining, onTrack: onTrack, behindBy: behindBy };
   }
 
+  // Computed at render time from status/priority/deadline/next_action_date — no persisted
+  // quadrant field, so this never drifts out of sync with the source data (per
+  // CLAUDE_CODE_BRIEF_eisenhower_quadrant_view.md). Q3/Q4 are status-based (waiting/dormant,
+  // inbox), not the textbook "urgent-but-unimportant"/"neither" — for a one-person system
+  // those textbook buckets aren't actionable, whereas "what's blocked on someone else" and
+  // "what hasn't been triaged yet" are. Status branches are mutually exclusive, so evaluation
+  // order doesn't actually matter here, but is written in the brief's Q1→Q4 order for clarity.
+  // Returns null for closed threads — they don't belong in any quadrant of a triage view.
   getEisenhowerQuadrant() {
+    if (this.status === 'waiting' || this.status === 'dormant') return 'Q3';
+    if (this.status === 'inbox') return 'Q4';
+    if (this.status !== 'open') return null;
+
     const isImportant = this.priority === 'critical' || this.priority === 'high';
-    let isUrgent = false;
-
     const todayStr = OAD.todayStr();
-    if (this.next_action_date && this.next_action_date <= todayStr) {
-      isUrgent = true;
-    }
+    const tomorrowDt = new Date(todayStr + 'T00:00:00');
+    tomorrowDt.setDate(tomorrowDt.getDate() + 1);
+    const tomorrowStr = tomorrowDt.toISOString().slice(0, 10);
 
-    if (!isUrgent && this.deadline) {
-      const ds = this.getDeadlineState();
-      if (ds && (!ds.onTrack || ds.daysRemaining <= 7)) {
-        isUrgent = true;
-      }
-    }
+    const isUrgent = this.deadline
+      ? this.deadline <= tomorrowStr
+      : !!(this.next_action_date && this.next_action_date <= todayStr);
 
-    if (!isUrgent && this.getPressure() >= 60) {
-      isUrgent = true;
-    }
-
-    if (isImportant && isUrgent) return 'Q1';
-    if (isImportant && !isUrgent) return 'Q2';
-    if (!isImportant && isUrgent) return 'Q3';
-    return 'Q4';
+    // Q2 is also the deliberate catch-all for anything open that isn't Q1 (including
+    // medium/low priority) — the brief explicitly says not to invent a Q5 for the leftover case.
+    return (isImportant && isUrgent) ? 'Q1' : 'Q2';
   }
 
   getPressure(_suppressSideEffects, _visited) {
