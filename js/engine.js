@@ -104,6 +104,24 @@ OAD.getOverdueDays = function (thread) {
   return new window.OAD.Models.Thread(thread).getDaysOverdue();
 };
 
+// "Has a hard external deadline, and it has passed" — deliberately distinct from
+// isActionOverdue above (see Thread.isDeadlineOverdue()'s comment in js/models.js). Drives the
+// "Overdue Tasks" bucket (OAD.Due.buckets) per ticket-overdue-filter-fix.md.
+OAD.isDeadlineOverdue = function (thread) {
+  if (thread && typeof thread.isDeadlineOverdue === 'function') {
+    return thread.isDeadlineOverdue();
+  }
+  return new window.OAD.Models.Thread(thread).isDeadlineOverdue();
+};
+
+OAD.getDeadlineOverdueDays = function (thread) {
+  if (!thread) return 0;
+  if (typeof thread.getDeadlineDaysOverdue === 'function') {
+    return thread.getDeadlineDaysOverdue();
+  }
+  return new window.OAD.Models.Thread(thread).getDeadlineDaysOverdue();
+};
+
 // Single source of truth for which children get nested under their parent's summary badge
 // instead of listed flatly in the Overdue/Today/Week buckets.
 //
@@ -134,6 +152,13 @@ OAD.computeSuppressedChildUUIDs = function (childrenByParentUUID, activeByUUID, 
     if (parent && parent.life_area === 'Patient') return;
     childrenByParentUUID[puuid].forEach(function (c) {
       if (OAD.isActionOverdue(c)) return;
+      // A child whose own hard deadline has passed must stay individually visible for the
+      // same reason an action-overdue child does — otherwise the deadline-based "Overdue
+      // Tasks" bucket (OAD.Due.buckets, per ticket-overdue-filter-fix.md) could silently fold
+      // a genuinely-overdue-by-deadline child into its parent's summary badge, reproducing the
+      // exact Bug 4/5 failure mode this exemption list already exists to prevent — just for a
+      // due-signal this function didn't know about yet.
+      if (OAD.isDeadlineOverdue(c)) return;
       if (c.next_action_date && c.next_action_date <= horizon) return;
       if (focusUUID && c.uuid === focusUUID) return;
       suppressed.add(c.uuid);

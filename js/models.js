@@ -19,6 +19,26 @@ class Thread {
     return Math.max(1, Math.ceil(hoursOverdue / 24));
   }
 
+  // Distinct signal from isOverdue() above: that one means "the next action I intended to take
+  // is late" (useful even while blocked/waiting — e.g. "waiting" threads legitimately have a
+  // past next_action_date, that's not a bug, see js/due.js). This one means "there is a hard
+  // external deadline and it has passed" — a smaller, stricter set. Per
+  // ticket-overdue-filter-fix.md: the "Overdue Tasks" bucket (OAD.Due.buckets) uses this, not
+  // isOverdue(), so a thread legitimately waiting on someone else's response doesn't count as
+  // overdue just because its own next-action date has come and gone.
+  isDeadlineOverdue() {
+    var dt = OAD._combineDateTime(this.deadline, this.deadline_time);
+    if (!dt) return false;
+    return dt < new Date();
+  }
+
+  getDeadlineDaysOverdue() {
+    var dt = OAD._combineDateTime(this.deadline, this.deadline_time);
+    if (!dt || dt >= new Date()) return 0;
+    var hoursOverdue = (new Date() - dt) / 3600000;
+    return Math.max(1, Math.ceil(hoursOverdue / 24));
+  }
+
   getDeadlineState() {
     if (!this.deadline) return null;
     const today = new Date();

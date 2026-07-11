@@ -55,10 +55,23 @@ OAD.Due.suppressionContext = function (activeThreads, todayStr, focusUUID, horiz
  * passed is legitimately both, and hiding it from "Today" once it crosses into "Overdue" would
  * make it disappear from the list a user is actively looking at right when it became urgent.
  * This is deliberate, tested behavior — see the exclusivity test in tests.js — not an oversight.
+ *
+ * "Overdue" specifically means deadline-overdue (OAD.isDeadlineOverdue — a hard external
+ * deadline has passed), NOT action-overdue (a scheduled next_action_date has passed). Per
+ * ticket-overdue-filter-fix.md: a `waiting` thread's next_action_date passing is normal and
+ * expected (blocked on someone else's response), not a sign the thread is actually overdue —
+ * routing this bucket through next_action_date produced ~20 false positives against real data
+ * (22 shown, only 2 genuinely had a passed deadline). Today/Week/NoDate below are unaffected —
+ * they're still next_action_date-based, which is correct for "what's on my plate this week."
  */
 OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
   return {
-    overdue: visibleThreads.filter(function (t) { return typeof t.isActionOverdue === 'function' ? t.isActionOverdue() : OAD.isActionOverdue(t); }),
+    // Calls the OAD.isDeadlineOverdue wrapper directly, not a t.isDeadlineOverdue-first ternary
+    // like the other predicates here — Thread.isDeadlineOverdue() and OAD.isDeadlineOverdue()
+    // share a name (unlike isOverdue()/OAD.isActionOverdue's deliberately different names), so
+    // a ternary would always resolve to the instance method and make OAD.isDeadlineOverdue
+    // unmockable in tests. The wrapper already dispatches to the instance method itself.
+    overdue: visibleThreads.filter(function (t) { return OAD.isDeadlineOverdue(t); }),
     today:   visibleThreads.filter(function (t) { return t.next_action_date === todayStr; }),
     week:    visibleThreads.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str; })
                .sort(function (a, b) { return a.next_action_date.localeCompare(b.next_action_date); }),

@@ -1084,6 +1084,43 @@ OAD.test('isActionOverdue: a specific time later today that has not passed is NO
   OAD._assert(!OAD.isActionOverdue(t), 'a commitment later today that has not happened yet should not be flagged overdue');
 });
 
+// ── Tests: isDeadlineOverdue (ticket-overdue-filter-fix.md) ──────────
+
+OAD.test('isDeadlineOverdue: distinct from isActionOverdue — a waiting thread with a past next_action_date but no deadline is NOT deadline-overdue', function () {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const t = OAD.makeThread({ status: 'waiting', next_action_date: _localDateStr(yesterday), deadline: null, connections: [] });
+  OAD._assert(OAD.isActionOverdue(t), 'sanity check: this thread IS action-overdue (next_action_date passed)');
+  OAD._assert(!OAD.isDeadlineOverdue(t), 'but it must NOT be deadline-overdue — a waiting thread\'s past next_action_date is normal, not a sign of a missed deadline');
+});
+
+OAD.test('isDeadlineOverdue: a thread with a past deadline is overdue, even if next_action_date is in the future', function () {
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const future = new Date();
+  future.setDate(future.getDate() + 30);
+  const t = OAD.makeThread({ next_action_date: _localDateStr(future), deadline: _localDateStr(yesterday), connections: [] });
+  OAD._assert(!OAD.isActionOverdue(t), 'sanity check: this thread is NOT action-overdue (next_action_date is far in the future)');
+  OAD._assert(OAD.isDeadlineOverdue(t), 'a genuinely-passed deadline is overdue regardless of a rescheduled next_action_date — real example: a class session moved from July 7 to July 21, deadline field never updated');
+});
+
+OAD.test('isDeadlineOverdue: no deadline at all is never overdue', function () {
+  const t = OAD.makeThread({ deadline: null, connections: [] });
+  OAD._assert(!OAD.isDeadlineOverdue(t), 'a thread with no deadline has nothing to be overdue against');
+});
+
+OAD.test('isDeadlineOverdue: deadline today, not yet past, is not overdue', function () {
+  const todayStr = _localDateStr();
+  const t = OAD.makeThread({ deadline: todayStr, deadline_time: null, connections: [] });
+  OAD._assert(!OAD.isDeadlineOverdue(t), 'date-only deadline due today should not be overdue until the day passes (mirrors isActionOverdue behavior)');
+});
+
+OAD.test('isDeadlineOverdue: a specific deadline_time earlier today that has passed IS overdue', function () {
+  const todayStr = _localDateStr();
+  const t = OAD.makeThread({ deadline: todayStr, deadline_time: '00:01', connections: [] });
+  OAD._assert(OAD.isDeadlineOverdue(t), 'a hard deadline time earlier today that has passed should be overdue right now');
+});
+
 OAD.test('getOverdueDays: a same-day missed time counts as at least 1 day-equivalent immediately', function () {
   const todayStr = _localDateStr();
   const notOverdue = OAD.makeThread({ next_action_date: todayStr, next_action_time: null, connections: [] });
@@ -3049,6 +3086,21 @@ OAD.test('computeSuppressedChildUUIDs: never suppresses an overdue child', funct
   OAD._assert(!result.has('c1'), 'overdue child must never be suppressed');
 });
 
+OAD.test('computeSuppressedChildUUIDs: never suppresses a child whose deadline has passed, even if next_action_date is far out (ticket-overdue-filter-fix.md)', function () {
+  // Real reproduction of the CAC102 Live Session case from the 7/11 export: a child whose
+  // deadline genuinely passed (rescheduled session, deadline field never updated) but whose
+  // next_action_date is weeks out — without this exemption it would be folded into its
+  // parent's summary badge and silently vanish from the deadline-based Overdue bucket, the
+  // same failure mode as the original Bug 4/5 (documented in dev/CLAUDE.md) for the
+  // next_action_date-based buckets.
+  const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2099-01-01', deadline: '2020-01-01' });
+  const childrenByParentUUID = { p1: [child] };
+  const activeByUUID = { p1: parent };
+  const result = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  OAD._assert(!result.has('c1'), 'a child with a genuinely passed deadline must never be suppressed, regardless of how far out its next_action_date is');
+});
+
 OAD.test('computeSuppressedChildUUIDs: Patient life_area parent never suppresses its children', function () {
   const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1', life_area: 'Patient' });
   const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-08-01' });
@@ -3225,6 +3277,68 @@ OAD.test('OAD.Due.dashboardData: whatever getFocusUUID() picks, if due in [today
       const inWeek  = data.week.some(t => t.uuid === data.focusUUID);
       OAD._assert(inToday || inWeek, 'Focus Now\'s pick must also appear in the same call\'s today or week bucket, not just its own separate selection logic');
     }
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('OAD.Due.dashboardData: .overdue is deadline-based end-to-end — waiting threads with past next_action_date, closed threads, and dormant threads are excluded; a genuinely deadline-overdue child survives suppression (ticket-overdue-filter-fix.md)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+    const future = new Date(); future.setDate(future.getDate() + 30);
+    const futureStr = future.toISOString().slice(0, 10);
+
+    // Real reproduction of ticket-overdue-filter-fix.md against a mirror of the 7/11 export:
+    // a waiting thread whose next_action_date is stale (normal — blocked on someone else) must
+    // NOT count as overdue; a closed thread with a genuinely past deadline must never appear
+    // regardless of deadline; a dormant thread must never appear (existing app-wide invariant —
+    // dormant contributes zero pressure everywhere else); and a real deadline-overdue thread
+    // must appear even with a rescheduled, future next_action_date.
+    const waitingStale = OAD.makeThread({ id: 1, uuid: 'ovd-waiting-stale', title: 'Waiting, stale next_action_date, no deadline', status: 'waiting', next_action_date: yStr, deadline: null });
+    const closedPastDeadline = OAD.makeThread({ id: 2, uuid: 'ovd-closed-past', title: 'Closed but has a past deadline', status: 'closed', deadline: yStr });
+    const dormantPastDeadline = OAD.makeThread({ id: 3, uuid: 'ovd-dormant-past', title: 'Dormant but has a past deadline', status: 'dormant', deadline: yStr });
+    const genuinelyOverdue = OAD.makeThread({ id: 4, uuid: 'ovd-genuine', title: 'Genuinely deadline-overdue, rescheduled next_action_date', status: 'open', priority: 'low', next_action_date: futureStr, deadline: yStr });
+    OAD.DB.threads = [waitingStale, closedPastDeadline, dormantPastDeadline, genuinelyOverdue];
+
+    const data = OAD.Due.dashboardData(todayStr, in7Str);
+
+    OAD._assert(!data.overdue.some(t => t.uuid === 'ovd-waiting-stale'), 'a waiting thread with only a stale next_action_date (no deadline) must not appear in overdue');
+    OAD._assert(!data.overdue.some(t => t.uuid === 'ovd-closed-past'), 'a closed thread must never appear in overdue regardless of deadline value');
+    OAD._assert(!data.overdue.some(t => t.uuid === 'ovd-dormant-past'), 'a dormant thread must never appear in overdue — consistent with dormant contributing zero pressure everywhere else in the app');
+    OAD._assert(data.overdue.some(t => t.uuid === 'ovd-genuine'), 'a thread with a genuinely passed deadline must appear in overdue even with a rescheduled, future next_action_date');
+    OAD._assertEqual(data.overdue.length, 1, 'exactly one thread should be in overdue');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('OAD.Due.dashboardData: a deadline-overdue child of an active parent is not folded into the parent\'s summary badge (CAC102 Live Session case)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+    const future = new Date(); future.setDate(future.getDate() + 30);
+    const futureStr = future.toISOString().slice(0, 10);
+
+    // Mirrors the real CAC102 Live Session case from the 7/11 export exactly: a `waiting` child
+    // of an active parent, next_action_date rescheduled 30 days out (so it fails the normal
+    // horizon-based suppression exemption), but its deadline genuinely passed and was never
+    // updated to match the reschedule.
+    const parent = OAD.makeThread({ id: 1, uuid: 'cac-parent', title: 'CAC102 Completion', status: 'open', priority: 'low' });
+    const child = OAD.makeThread({ id: 2, uuid: 'cac-child', title: 'CAC102 Live Session', status: 'waiting', priority: 'low', parent_uuid: 'cac-parent', next_action_date: futureStr, deadline: yStr });
+    OAD.DB.threads = [parent, child];
+
+    const data = OAD.Due.dashboardData(todayStr, in7Str);
+    OAD._assert(!data.suppressedUUIDs.has('cac-child'), 'the deadline-overdue child must not be suppressed into its parent\'s summary badge');
+    OAD._assert(data.overdue.some(t => t.uuid === 'cac-child'), 'the deadline-overdue child must actually appear in the overdue bucket, not silently vanish');
   } finally {
     OAD.DB.threads = orig;
   }
@@ -3702,14 +3816,22 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — 
   const todayStr = d(0);
   const in7Str = d(7);
 
-  // 1. Overdue: next_action_date is before today, or today but overdue by time
-  const tOverdue1 = OAD.makeThread({ title: 'Overdue yesterday', next_action_date: d(-1) });
-  const tOverdue2 = OAD.makeThread({ title: 'Overdue today by time', next_action_date: todayStr, next_action_time: '00:01' });
+  // 1. Overdue: deadline is before today, or today but overdue by time — NOT next_action_date
+  // (per ticket-overdue-filter-fix.md, a waiting thread's next_action_date passing is normal,
+  // not overdue). tOverdue1 gets an unrelated past next_action_date (mirrors a real waiting
+  // thread with a stale next_action_date and a separately-passed deadline) purely so it lands
+  // cleanly in only the overdue bucket for this test, not so it can double as noDate — a thread
+  // can legitimately be deadline-overdue with NO next_action_date at all and appear in both
+  // overdue and noDate simultaneously, that's a real, valid overlap, just not what this
+  // particular assertion is isolating. tOverdue2 carries next_action_date=today so it can
+  // double as the today/overdue overlap case below.
+  const tOverdue1 = OAD.makeThread({ title: 'Deadline passed yesterday', next_action_date: d(-3), deadline: d(-1) });
+  const tOverdue2 = OAD.makeThread({ title: 'Due today AND deadline overdue by time', next_action_date: todayStr, next_action_time: '23:59', deadline: todayStr, deadline_time: '00:01' });
 
-  // 2. Today: next_action_date is today, not overdue by time
+  // 2. Today: next_action_date is today, no deadline at all — must not appear in overdue
   const tToday = OAD.makeThread({ title: 'Due today', next_action_date: todayStr, next_action_time: '23:59' });
 
-  // 3. Week: strictly after today and <= in7Str
+  // 3. Week: strictly after today and <= in7Str, no deadline
   const tWeek1 = OAD.makeThread({ title: 'Due tomorrow', next_action_date: d(1) });
   const tWeek7 = OAD.makeThread({ title: 'Due day 7', next_action_date: in7Str });
 
@@ -3721,24 +3843,25 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — 
 
   const threads = [tOverdue1, tOverdue2, tToday, tWeek1, tWeek7, tNoDate, tFar];
 
-  // We need to mock isActionOverdue since it depends on the actual current time.
-  const origIsActionOverdue = OAD.isActionOverdue;
+  // We need to mock isDeadlineOverdue since it depends on the actual current time.
+  const origIsDeadlineOverdue = OAD.isDeadlineOverdue;
   try {
-    OAD.isActionOverdue = function(t) {
+    OAD.isDeadlineOverdue = function(t) {
       if (t === tOverdue1 || t === tOverdue2) return true;
       return false;
     };
 
     const buckets = OAD.Due.buckets(threads, todayStr, in7Str);
 
-    OAD._assertEqual(buckets.overdue.length, 2, 'overdue bucket has 2 threads');
+    OAD._assertEqual(buckets.overdue.length, 2, 'overdue bucket has 2 threads — driven by deadline, not next_action_date');
     OAD._assert(buckets.overdue.includes(tOverdue1) && buckets.overdue.includes(tOverdue2), 'overdue bucket contains correct threads');
+    OAD._assert(!buckets.overdue.includes(tToday), 'a thread due today with no deadline at all must never appear in overdue');
 
-    // today deliberately does NOT exclude tOverdue2 — it's due today AND overdue by time,
-    // and hiding it from "today" the moment it crosses into overdue would make it disappear
+    // today deliberately does NOT exclude tOverdue2 — it's due today AND deadline-overdue,
+    // and hiding it from "today" the moment it crosses into "overdue" would make it disappear
     // from the list a user is actively looking at right when it became urgent.
-    OAD._assertEqual(buckets.today.length, 2, 'today bucket has 2 threads — a due-today thread that is also overdue-by-time stays visible in both');
-    OAD._assert(buckets.today.includes(tToday) && buckets.today.includes(tOverdue2), 'today bucket contains both the plain due-today thread and the overdue-by-time one');
+    OAD._assertEqual(buckets.today.length, 2, 'today bucket has 2 threads — a due-today thread that is also deadline-overdue stays visible in both');
+    OAD._assert(buckets.today.includes(tToday) && buckets.today.includes(tOverdue2), 'today bucket contains both the plain due-today thread and the deadline-overdue one');
 
     OAD._assertEqual(buckets.week.length, 2, 'week bucket has 2 threads');
     OAD._assert(buckets.week.includes(tWeek1) && buckets.week.includes(tWeek7), 'week bucket contains correct threads');
@@ -3748,15 +3871,19 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — 
     OAD._assert(!buckets.noDate.includes(tFar), 'a thread due 8 days out is not "no date" — it just isn\'t in any of this function\'s buckets, which is correct for a this-week-scoped view');
 
   } finally {
-    OAD.isActionOverdue = origIsActionOverdue;
+    OAD.isDeadlineOverdue = origIsDeadlineOverdue;
   }
 });
 
-OAD.test('Due.buckets: a thread due today AND overdue-by-time appears in both buckets (deliberate, not a bug)', function () {
+OAD.test('Due.buckets: a thread due today AND deadline-overdue appears in both buckets (deliberate, not a bug)', function () {
   // Regression lock for a real incident: an earlier session silently added an exclusion
   // (`&& !isActionOverdue(t)`) to the "today" bucket, reversing this intentional design
   // decision, framed merely as "fixing double counting." No test caught the reversal at the
-  // time. This test exists specifically so that can't happen silently again.
+  // time. This test exists specifically so that can't happen silently again. Updated for the
+  // deadline-based overdue signal (ticket-overdue-filter-fix.md) — the overlap is now driven
+  // by next_action_date (today bucket) and deadline (overdue bucket) independently, which is
+  // actually a more realistic version of the same scenario: a thread can be due today AND have
+  // a separately-passed hard deadline at the same time.
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
     return dt.toISOString().slice(0, 10);
@@ -3765,23 +3892,23 @@ OAD.test('Due.buckets: a thread due today AND overdue-by-time appears in both bu
   const todayStr = d(0);
   const in7Str = d(7);
 
-  const tricky = OAD.makeThread({ title: 'Due today and overdue by time', next_action_date: todayStr });
+  const tricky = OAD.makeThread({ title: 'Due today and deadline overdue', next_action_date: todayStr });
 
-  const origIsActionOverdue = OAD.isActionOverdue;
+  const origIsDeadlineOverdue = OAD.isDeadlineOverdue;
   try {
-    OAD.isActionOverdue = function(t) { return true; };
+    OAD.isDeadlineOverdue = function(t) { return true; };
     const bucketsOverdue = OAD.Due.buckets([tricky], todayStr, in7Str);
     OAD._assertEqual(bucketsOverdue.overdue.length, 1, 'appears in overdue');
     OAD._assertEqual(bucketsOverdue.today.length, 1, 'ALSO appears in today — this is the deliberate overlap, not a bug');
     OAD._assertEqual(bucketsOverdue.week.length, 0, 'never appears in week regardless');
 
-    OAD.isActionOverdue = function(t) { return false; };
+    OAD.isDeadlineOverdue = function(t) { return false; };
     const bucketsToday = OAD.Due.buckets([tricky], todayStr, in7Str);
-    OAD._assertEqual(bucketsToday.overdue.length, 0, 'not overdue when not overdue');
+    OAD._assertEqual(bucketsToday.overdue.length, 0, 'not overdue when deadline is not overdue');
     OAD._assertEqual(bucketsToday.today.length, 1, 'still appears in today');
     OAD._assertEqual(bucketsToday.week.length, 0, 'never appears in week regardless');
   } finally {
-    OAD.isActionOverdue = origIsActionOverdue;
+    OAD.isDeadlineOverdue = origIsDeadlineOverdue;
   }
 });
 

@@ -1403,25 +1403,35 @@ OAD.renderDailyView = function () {
     var badge = '';
     const isOverdue = OAD.isActionOverdue(t);
     const isToday = t.next_action_date === todayStr;
-    
-    if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
+    // Rows in the 'overdue' context landed there via OAD.isDeadlineOverdue (deadline-based,
+    // see js/due.js), not isActionOverdue — a row could be here with a future next_action_date
+    // (e.g. legitimately rescheduled, but the deadline field wasn't updated to match). Badge
+    // and "Nd ago" meta must reflect the reason the row is actually in this bucket, or a thread
+    // could sit under "Overdue Tasks" with no OVERDUE badge and a future-looking date, which
+    // would read as a bug in the fix itself.
+    const isDeadlineOverdue = context === 'overdue' && OAD.isDeadlineOverdue(t);
+
+    if (isDeadlineOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE (DEADLINE)</span>';
+    else if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
-    
+
     if (!isOverdue && t.next_action_date && window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && window.OAD.isOffDay && window.OAD.isOffDay(t.next_action_date, window.OAD._demoRole)) {
       badge += ' <span class="ds-status-badge" style="color:var(--critical);border:1px solid var(--critical);background:rgba(243,139,168,0.1)" aria-label="Shift Collision">⚠ SHIFT COLLISION</span>';
     }
-    
+
     const inCycle = cycleThreadIds.has(t.id);
-    const cycleBadge = inCycle 
-      ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
+    const cycleBadge = inCycle
+      ? `<span class="cycle-warning-badge" style="margin-left: 6px; cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>`
       : '';
 
-    const daysOver = isOverdue ? OAD.getOverdueDays(t) : null;
-    const metaHtml = daysOver !== null
-      ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
-      : (t.next_action_date > todayStr
-          ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) + '</span>'
-          : '');
+    const daysOver = isDeadlineOverdue ? OAD.getDeadlineOverdueDays(t) : (isOverdue ? OAD.getOverdueDays(t) : null);
+    const metaHtml = isDeadlineOverdue
+      ? '<span class="ds-meta-tag">deadline ' + OAD.esc(OAD.formatDate(t.deadline)) + ' — ' + daysOver + 'd ago</span>'
+      : (daysOver !== null
+          ? '<span class="ds-meta-tag">' + daysOver + 'd ago</span>'
+          : (t.next_action_date > todayStr
+              ? '<span class="ds-meta-tag">' + OAD.esc(OAD.formatDate(t.next_action_date) + (t.next_action_time ? ' ' + OAD.formatTime(t.next_action_time) : '')) + '</span>'
+              : ''));
 
     const children = childrenByParentUUID[t.uuid] || [];
     var childSummaryHtml = '';
