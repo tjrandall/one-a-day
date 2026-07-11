@@ -3912,6 +3912,120 @@ OAD.test('Due.buckets: a thread due today AND deadline-overdue appears in both b
   }
 });
 
+// ── Tests: OAD.Due.stalledThreads (ticket-stalled-metric-fix.md) ─────
+
+OAD.test('Due.stalledThreads: a thread with next_action_date in the past appears, regardless of status === "stalled" (dead status, never set)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+
+    const drifted = OAD.makeThread({ id: 1, uuid: 'st-drifted', title: 'Drifted open thread', status: 'open', next_action_date: yStr });
+    const notDrifted = OAD.makeThread({ id: 2, uuid: 'st-not-drifted', title: 'Not drifted', status: 'open', next_action_date: todayStr });
+    OAD.DB.threads = [drifted, notDrifted];
+
+    const stalled = OAD.Due.stalledThreads(todayStr);
+    OAD._assert(stalled.some(t => t.uuid === 'st-drifted'), 'a thread with a past next_action_date must appear, purely from date drift, no status flag involved');
+    OAD._assert(!stalled.some(t => t.uuid === 'st-not-drifted'), 'a thread due today (not yet past) must not appear');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.stalledThreads: excludes closed and dormant even with a past next_action_date', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+
+    const closedDrifted = OAD.makeThread({ id: 1, uuid: 'st-closed', title: 'Closed drifted', status: 'closed', next_action_date: yStr });
+    const dormantDrifted = OAD.makeThread({ id: 2, uuid: 'st-dormant', title: 'Dormant drifted', status: 'dormant', next_action_date: yStr });
+    OAD.DB.threads = [closedDrifted, dormantDrifted];
+
+    const stalled = OAD.Due.stalledThreads(todayStr);
+    OAD._assertEqual(stalled.length, 0, 'closed and dormant threads must never appear regardless of date drift');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.stalledThreads: excludes a waiting thread with user_action_complete ("ball in their court") — matches TOAT tier 3\'s own exclusion', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+
+    const ballInCourt = OAD.makeThread({ id: 1, uuid: 'st-ball', title: 'Ball in their court', status: 'waiting', user_action_complete: true, next_action_date: yStr });
+    const stillOnMe = OAD.makeThread({ id: 2, uuid: 'st-onme', title: 'Still on me', status: 'waiting', user_action_complete: false, next_action_date: yStr });
+    OAD.DB.threads = [ballInCourt, stillOnMe];
+
+    const stalled = OAD.Due.stalledThreads(todayStr);
+    OAD._assert(!stalled.some(t => t.uuid === 'st-ball'), 'a waiting thread with nothing left for the user to do must not read as "needs attention"');
+    OAD._assert(stalled.some(t => t.uuid === 'st-onme'), 'a genuinely drifted waiting thread (action still on the user) must appear');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.stalledThreads: sorted oldest-first by next_action_date', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const d = function (offset) { const dt = new Date(); dt.setDate(dt.getDate() + offset); return dt.toISOString().slice(0, 10); };
+
+    const t3 = OAD.makeThread({ id: 1, uuid: 'st-3d', title: '3 days ago', status: 'open', next_action_date: d(-3) });
+    const t1 = OAD.makeThread({ id: 2, uuid: 'st-1d', title: '1 day ago', status: 'open', next_action_date: d(-1) });
+    const t5 = OAD.makeThread({ id: 3, uuid: 'st-5d', title: '5 days ago', status: 'open', next_action_date: d(-5) });
+    OAD.DB.threads = [t3, t1, t5];
+
+    const stalled = OAD.Due.stalledThreads(todayStr);
+    OAD._assertEqual(stalled.map(t => t.uuid).join(','), 'st-5d,st-3d,st-1d', 'must be sorted oldest next_action_date first');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('filterListTab: "stalled" status preset filters to the live drift computation, not a literal status match', function () {
+  const orig = OAD.DB.threads;
+  const originalStatus = OAD._activeListStatus;
+  const originalSearch = OAD._activeListSearch;
+  const originalArea = OAD._activeListArea;
+  const originalSavedViewId = OAD._activeSavedViewId;
+  const mockPanel = document.createElement('div');
+  mockPanel.id = 'detail-content';
+  document.body.appendChild(mockPanel);
+
+  try {
+    const todayStr = OAD.todayStr();
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = yesterday.toISOString().slice(0, 10);
+
+    const drifted = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Genuinely drifted thread', status: 'open', next_action_date: yStr });
+    const notDrifted = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Not drifted thread', status: 'open', next_action_date: todayStr });
+    OAD.DB.threads = [drifted, notDrifted];
+
+    OAD._activeSavedViewId = null;
+    OAD._activeListStatus = 'stalled';
+    OAD._activeListSearch = '';
+    OAD._activeListArea = '';
+    OAD.renderListView();
+
+    const html = document.getElementById('list-tab-threads').innerHTML;
+    OAD._assert(html.includes('Genuinely drifted thread'), 'the "stalled" preset must show the live-computed drifted thread');
+    OAD._assert(!html.includes('Not drifted thread'), 'a non-drifted thread must not appear under the "stalled" preset');
+  } finally {
+    document.body.removeChild(mockPanel);
+    OAD.DB.threads = orig;
+    OAD._activeListStatus = originalStatus;
+    OAD._activeListSearch = originalSearch;
+    OAD._activeListArea = originalArea;
+    OAD._activeSavedViewId = originalSavedViewId;
+  }
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();

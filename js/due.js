@@ -108,6 +108,42 @@ OAD.Due.cadenceBuckets = function (cadences, todayStr, in7Str) {
   };
 };
 
+// Live-computed "Stalled" view — per ticket-stalled-metric-fix.md. Replaces the dead
+// status === 'stalled' status value, which was never set on any real thread (grep-confirmed:
+// no automated promotion path exists anywhere, and across the full live export literally zero
+// threads have ever used it). Mirrors the "my own next action has drifted" concept TOAT's own
+// tiers 2/3 already compute (js/data.js, OAD.getDailyToat) — deliberately does NOT touch TOAT's
+// own logic (correct as shipped, out of scope) — but surfaces every drifted thread as a browsable
+// list, not just the single oldest one TOAT picks. This closes a real visibility gap: a thread
+// whose deadline is still fine (correctly excluded from Overdue Tasks) and whose next_action_date
+// has passed, but whose pressure score is too low to win the single Focus Now slot, was
+// previously invisible everywhere in the app — confirmed with a real example against the 7/11
+// export (ENV-125 Assignment — Week of July 6, pressure 93, only visible because it happened to
+// win Focus Now that day).
+//
+// Excludes closed/dormant (the ticket's literal formula) and waiting+user_action_complete —
+// "ball in their court," nothing left for the user to do, matching TOAT tier 3's own exclusion
+// (js/data.js:767) which the ticket's prose formula omitted but its stated intent ("same shape
+// as tiers 2/3") implies. Does NOT exclude inbox — the ticket's formula is explicit
+// (status NOT IN (closed, dormant) only) and no real inbox thread currently has a past
+// next_action_date to test this against; worth confirming if it ever matters in practice.
+//
+// Sorted oldest-first BY next_action_date, per the ticket's explicit acceptance criteria — note
+// this does NOT actually match TOAT's real tie-break convention (TOAT sorts by thread id /
+// creation age, js/data.js:775/781), despite the ticket's own claim that it does. Implemented
+// as explicitly requested; flagging the mismatch as a factual correction, not silently
+// "fixing" it to id-order without confirming that's wanted.
+OAD.Due.stalledThreads = function (todayStr) {
+  todayStr = todayStr || OAD.todayStr();
+  return (OAD.getVisibleThreads() || [])
+    .filter(function (t) {
+      if (t.status === 'closed' || t.status === 'dormant') return false;
+      if (t.status === 'waiting' && t.user_action_complete) return false;
+      return !!t.next_action_date && t.next_action_date < todayStr;
+    })
+    .sort(function (a, b) { return a.next_action_date < b.next_action_date ? -1 : (a.next_action_date > b.next_action_date ? 1 : 0); });
+};
+
 // One call for the full dashboard pipeline. Scores the active list exactly once — getFocusUUID
 // and the suppression/bucket pipeline below all reuse this same scored array.
 OAD.Due.dashboardData = function (todayStr, in7Str) {

@@ -186,7 +186,7 @@ OAD.renderPersonaBar = function () {
 
   const threads = OAD.getVisibleThreads();
   const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
-  const stalled = threads.filter(t => t.status === 'stalled').length;
+  const stalled = OAD.Due.stalledThreads().length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
   const scores  = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
   const avg     = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
@@ -1745,7 +1745,7 @@ OAD.renderDailyView = function () {
         '</div>' +
         '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
           '<div class="ds-metric-title">Stalled Tasks</div>' +
-          '<div class="ds-metric-value stalled">' + due.active.filter(t => t.status === 'stalled').length + '</div>' +
+          '<div class="ds-metric-value stalled">' + OAD.Due.stalledThreads(todayStr).length + '</div>' +
           '<div class="ds-metric-desc">Need attention</div>' +
         '</div>' +
         '<div class="ds-metric-card">' +
@@ -2693,7 +2693,7 @@ OAD.renderListView = function () {
 
   const threads = OAD.getVisibleThreads();
   const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
-  const stalledCount = threads.filter(t => t.status === 'stalled').length;
+  const stalledCount = OAD.Due.stalledThreads().length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
   const scores = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
   const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
@@ -2781,12 +2781,19 @@ OAD.filterListTab = function () {
 
   const activeSavedView = OAD._activeSavedViewId ? OAD.getSavedView(OAD._activeSavedViewId) : null;
 
+  // 'stalled' is a filter preset here, not a literal status match, since the underlying status
+  // value is dead (see ticket-stalled-metric-fix.md) — matches OAD.Due.stalledThreads()'s live
+  // drift computation instead, same pattern as the pre-existing 'not-closed' preset below.
+  const stalledUUIDs = statusFilter === 'stalled' ? new Set(OAD.Due.stalledThreads().map(t => t.uuid)) : null;
+
   const threads = (activeSavedView
     ? OAD.applySavedView(OAD.getVisibleThreads(), activeSavedView)
     : OAD.getVisibleThreads()
         .filter(t => {
           const matchesStatus = statusFilter === 'all'
-            || (statusFilter === 'not-closed' ? t.status !== 'closed' : t.status === statusFilter);
+            || (statusFilter === 'not-closed' ? t.status !== 'closed'
+              : statusFilter === 'stalled'    ? stalledUUIDs.has(t.uuid)
+              : t.status === statusFilter);
           const matchesArea = !areaFilter || t.life_area === areaFilter;
           return matchesStatus && matchesArea;
         })
