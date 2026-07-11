@@ -202,6 +202,24 @@ Current What's Not Working: {{not_working}}`
     prioritySuffix: ' priority',
     separator: ' · '
   },
+  // js/threadTemporalStatus.js's user-facing copy — the "no hardcoded UI strings" hook
+  // (ticket-flowqueue-temporal-and-schema.md, Phase 1, Architectural Hooks #2). Only the
+  // human-readable text lives here; the `rule` identifiers on dataHygieneWarnings output are
+  // semantic event-type ids, not display copy, same category as edge_type/recurrence values
+  // that are deliberately NOT config-driven elsewhere in this file.
+  temporalStatusStrings: JSON.parse(localStorage.getItem('oad_temporal_status_strings')) || {
+    labelDeadline: 'deadline',
+    labelNextActionDate: 'next action',
+    labelNone: 'none',
+    pastDeadline: 'Past deadline',
+    pastNextAction: 'Past due',
+    weeksRemainingSuffix: 'w remaining',
+    daysRemainingSuffix: 'd remaining',
+    warnNextActionAfterDeadline: 'Next action date is after the deadline — still working the action after the thread is past due',
+    warnDriftedMaskedByDeadline: 'Next action has drifted into the past, but a comfortable future deadline may be masking that on cards',
+    warnNoDatesSet: 'No next action date or deadline set — this thread can drift forever without appearing anywhere date-based',
+    maskedBadge: '⚠ next action overdue'
+  },
   cheLeadDays: JSON.parse(localStorage.getItem('oad_che_lead_days')) || {
     'Education':  5,
     'Job Search': 3,

@@ -472,7 +472,7 @@ OAD.focusReason = function (t) {
   
   if (OAD.isActionOverdue(t)) {
     parts.push(OAD.getOverdueDays(t) + (s.overdueSuffix || 'd overdue'));
-  } else if (t.next_action_date === todayStr) {
+  } else if (OAD.TemporalStatus.isDueToday(t, new Date())) {
     parts.push((s.dueToday || 'due today') + (t.next_action_time ? (s.at || ' at ') + OAD.formatTime(t.next_action_time) : ''));
   }
   
@@ -526,7 +526,7 @@ OAD.calculateDayLoadScore = function (dateStr) {
   var pressureSum = OAD.getDayLoad(dateStr);
 
   var dayThreads = OAD.Due.activeThreadsRaw()
-    .filter(function (t) { return t.next_action_date === dateStr; });
+    .filter(function (t) { return OAD.TemporalStatus.isDueToday(t, new Date(dateStr + 'T12:00:00')); });
   var edgeSum = dayThreads.reduce(function (sum, t) {
     var ctx = OAD.getGraphContext(t.id);
     return sum + ctx.blocks.length + ctx.blockedBy.length + ctx.enables.length + ctx.relates.length;

@@ -45,6 +45,15 @@ OAD.RECURRENCES = [
 // a computed filter preset now, same category as "not-closed," not a literal settable status,
 // so it's intentionally not sourced from this array.
 OAD.STATUSES   = ['inbox', 'open', 'waiting', 'dormant', 'closed'];
+
+// Multi-tenancy hook (ticket-flowqueue-temporal-and-schema.md, Phase 1, Architectural Hooks #1)
+// — NOT redundant with Supabase's account-level RLS, which is a different, already-solved
+// boundary (one whole OAD.DB blob per authenticated user). This is a placeholder for a future
+// INTRA-account scope (e.g. a shared team workspace holding multiple owners' threads in one
+// DB), which doesn't exist yet — every real thread today has this single default value, and
+// every function that accepts it treats "no ownerId passed" as "no scoping," so nothing about
+// current single-tenant behavior changes until a second real value ever exists.
+OAD.DEFAULT_OWNER_ID = 'default-owner';
 OAD.PRIORITIES = ['critical', 'high', 'medium', 'low'];
 OAD.EDGE_TYPES = ['blocks', 'blocked_by', 'enables', 'relates'];
 
@@ -241,6 +250,7 @@ OAD.makeThread = function (overrides) {
   var data = Object.assign({
     uuid: OAD._generateUUID(), // stable identifier — used for export/import matching
     id: null,
+    owner_id: OAD.DEFAULT_OWNER_ID, // multi-tenancy hook — see OAD.DEFAULT_OWNER_ID's comment
     created_at: new Date().toISOString(),
     title: '',
     life_area: 'Other',
@@ -576,7 +586,7 @@ OAD.parseImportFile = function (jsonString) {
 // Fields synced on import (all fields Claude can see and update in the web UI)
 OAD._IMPORT_FIELDS = [
   'title',
-  'status', 'priority', 'life_area',
+  'status', 'priority', 'life_area', 'owner_id',
   'closing_condition', 'closing_condition_type', 'closing_condition_met',
   'current_assumption', 'assumption_verified',
   'next_action', 'next_action_date', 'next_action_time', 'next_action_channel', 'next_action_contact',
@@ -606,6 +616,7 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
     const t = OAD.makeThread({
       uuid:                     row.uuid || OAD._generateUUID(),
       title:                    row.title,
+      owner_id:                 row.owner_id                 || OAD.DEFAULT_OWNER_ID,
       status:                   row.status                   || 'open',
       priority:                 row.priority                 || 'medium',
       life_area:                row.life_area                || 'Other',
@@ -743,15 +754,19 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
   };
 };
 
+// Migrated to OAD.TemporalStatus.isStalled (js/threadTemporalStatus.js) per
+// ticket-flowqueue-temporal-and-schema.md Phase 1 — isStalled already bakes in the
+// waiting+user_action_complete ("ball in their court") exclusion that tier 3's selection filter
+// applied inline but isFriction's "is my already-picked sticky TOAT still valid" recheck below
+// did NOT, a real pre-existing inconsistency between the two (a thread that became ball-in-court
+// mid-day could incorrectly stay "sticky" as TOAT). Both now agree, closing that gap.
 OAD.getDailyToat = function () {
   const todayStr = OAD.todayStr();
   OAD.DB.toat = OAD.DB.toat || [];
 
   function isFriction(t) {
-    if (!t || t.status === 'closed' || t.status === 'dormant') return false;
-    if (t.status === 'waiting' && OAD.isActionOverdue(t)) return true;
-    if (t.status === 'open' && OAD.isActionOverdue(t)) return true;
-    return false;
+    if (!t || t.status !== 'open' && t.status !== 'waiting') return false;
+    return OAD.TemporalStatus.isStalled(t, new Date());
   }
 
   const todayEntry = OAD.DB.toat.find(e => e.date === todayStr);
@@ -766,12 +781,13 @@ OAD.getDailyToat = function () {
   }
 
   const allThreads = OAD.getVisibleThreads() || [];
+  const now = new Date();
 
   const overdueWaiting = allThreads.filter(t => {
-    return t.status === 'waiting' && !t.user_action_complete && OAD.isActionOverdue(t);
+    return t.status === 'waiting' && OAD.TemporalStatus.isStalled(t, now);
   });
   const overdueOpen = allThreads.filter(t => {
-    return t.status === 'open' && OAD.isActionOverdue(t);
+    return t.status === 'open' && OAD.TemporalStatus.isStalled(t, now);
   });
 
   let selected = null;
@@ -805,6 +821,7 @@ OAD.exportThreads = function () {
     return {
       uuid:                     t.uuid,
       parent_uuid:              t.parent_uuid || null,
+      owner_id:                 t.owner_id || OAD.DEFAULT_OWNER_ID,
       title:                    t.title,
       status:                   t.status,
       priority:                 t.priority,
@@ -813,6 +830,15 @@ OAD.exportThreads = function () {
       closing_condition:        t.closing_condition        || '',
       closing_condition_type:   t.closing_condition_type   || 'outcome',
       closing_condition_met:    t.closing_condition_met    || false,
+      // current_assumption is deliberately NOT exported here — confirmed via an existing test
+      // ('moat-safe export strips proprietary attributes') that current_assumption,
+      // contingency_action, contingency_escalation, evolution_log, and ai_insights are all
+      // intentionally excluded from this format alongside it, reading as a coherent boundary
+      // ("operational state" vs. "internal reasoning trail"), not an oversight — this was
+      // initially miscategorized as a bug during the Phase 2 schema audit and reverted once the
+      // existing test was found. Flagged explicitly in the Phase 2 report: this genuinely
+      // conflicts with Phase 2's own "confirm export round-trips with the new fields present"
+      // requirement for this specific field, and needs a decision, not a silent pick either way.
       assumption_verified:      t.assumption_verified      || false,
       next_action:              t.next_action              || '',
       next_action_date:         t.next_action_date         || '',
@@ -1027,6 +1053,7 @@ OAD._normalizeDB = function () {
     if (!t.id) { _maxId++; t.id = _maxId; }
     if (!t.uuid) t.uuid = OAD._generateUUID();
     if (!t.title) t.title = '';
+    if (!Object.prototype.hasOwnProperty.call(t, 'owner_id') || t.owner_id == null) t.owner_id = OAD.DEFAULT_OWNER_ID;
     if (!Array.isArray(t.evolution_log)) t.evolution_log = [];
     if (!Array.isArray(t.ai_insights)) t.ai_insights = [];
     if (!Object.prototype.hasOwnProperty.call(t, 'parent_uuid')) t.parent_uuid = null;

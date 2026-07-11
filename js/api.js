@@ -201,8 +201,12 @@ OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
   const persona = OAD.DB.persona;
   
   const heat = typeof OAD.getLifeAreaHeat === 'function' ? OAD.getLifeAreaHeat() : [];
-  const stalledThreads = (OAD.DB.threads || [])
-    .filter(function(t) { return t.status === 'stalled'; })
+  // Was filtering on the dead status === 'stalled' (never set on any real thread since
+  // ticket-stalled-metric-fix.md removed it as a settable value) — silently emptying this AI
+  // prompt's stalled-thread context ever since. OAD.Due.stalledThreads() is the live
+  // replacement, found and fixed while migrating this file for
+  // ticket-flowqueue-temporal-and-schema.md.
+  const stalledThreads = OAD.Due.stalledThreads()
     .map(function(t) { return { title: t.title, area: t.life_area }; })
     .slice(0, 5);
   
@@ -259,11 +263,13 @@ OAD.genDailyIntercept = async function () {
   
   const loadScore = typeof OAD.getDayLoad === 'function' ? OAD.getDayLoad(todayStr) : 0;
   const overdueCadences = (OAD.DB.cadences || []).filter(c => OAD.cadenceOverdue(c)).map(c => c.title);
-  const stalledThreads = (OAD.DB.threads || []).filter(t => t.status === 'stalled').map(t => t.title);
-  
+  // Was filtering on the dead status === 'stalled' — see the identical fix note in
+  // OAD.genProactiveCounsel above.
+  const stalledThreads = OAD.Due.stalledThreads().map(t => t.title);
+
   // Feed the AI exactly what the user is staring at on their dashboard today
   const overdueThreads = (OAD.DB.threads || []).filter(t => OAD.isActionOverdue(t) && t.status !== 'closed' && t.status !== 'dormant');
-  const todayThreads = (OAD.DB.threads || []).filter(t => t.next_action_date === todayStr && t.status !== 'closed' && !OAD.isActionOverdue(t));
+  const todayThreads = (OAD.DB.threads || []).filter(t => OAD.TemporalStatus.isDueToday(t, new Date()) && t.status !== 'closed' && !OAD.isActionOverdue(t));
   
   let agendaLines = [];
   if (overdueThreads.length > 0) {
@@ -280,7 +286,7 @@ OAD.genDailyIntercept = async function () {
   
   // Also pass the absolute highest pressure looming task (if it's not already on today's agenda) to check for blind spots
   const highestLooming = (OAD.DB.threads || [])
-    .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && t.next_action_date !== todayStr && !OAD.isActionOverdue(t))
+    .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && !OAD.TemporalStatus.isDueToday(t, new Date()) && !OAD.isActionOverdue(t))
     .sort((a, b) => OAD.pressure(b) - OAD.pressure(a))[0];
   
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.dailyIntercept) || {};

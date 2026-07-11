@@ -136,29 +136,44 @@ OAD.renderList = function () {
     return;
   }
 
+  const nowInstant = new Date();
   container.innerHTML = threads.map(t => {
     const pc = OAD.pressureClass(t._score);
     const active = t.id === OAD._activeId ? ' active' : '';
-    const ds = t.deadline ? OAD.deadlineState(t) : null;
+    // ds (deadline-specific effort/session tracking) only applies when cardDateLabel actually
+    // picked deadline as the field to show — sessionsRemaining/onTrack are meaningless against
+    // a bare next_action_date, which has no effortEstimate/weeklyCommitment concept at all.
+    const cardDate = OAD.TemporalStatus.cardDateLabel(t, nowInstant);
+    const ds = cardDate.label === 'deadline' ? OAD.deadlineState(t) : null;
     const atRisk = ds && !ds.onTrack;
     const riskClass = atRisk ? ' is-at-risk' : '';
+    const strings = (OAD.Config && OAD.Config.temporalStatusStrings) || {};
 
     let deadlineLineHtml = '';
-    if (ds) {
-      const days = ds.daysRemaining;
-      const timeText = days <= 0 ? 'Past deadline'
-        : ds.weeksRemaining > 0
-          ? ds.weeksRemaining + 'w remaining'
-          : days + 'd remaining';
-      const sessText = ds.sessionsRemaining != null
+    if (cardDate.label !== 'none') {
+      const days = cardDate.daysRemaining;
+      const pastText = cardDate.label === 'deadline' ? (strings.pastDeadline || 'Past deadline') : (strings.pastNextAction || 'Past due');
+      const timeText = days <= 0 ? pastText
+        : days >= 7
+          ? Math.floor(days / 7) + (strings.weeksRemainingSuffix || 'w remaining')
+          : days + (strings.daysRemainingSuffix || 'd remaining');
+      const sessText = ds && ds.sessionsRemaining != null
         ? ' · ' + ds.sessionsRemaining + ' session' + (ds.sessionsRemaining !== 1 ? 's' : '') + ' left'
         : '';
       const riskText = atRisk
         ? ' <span class="deadline-behind">⚑ ' + ds.behindBy + ' behind</span>'
         : '';
+      // A drifted-and-masked hygiene warning means this card is showing a comfortable
+      // deadline countdown while the thread's own next action has quietly gone stale
+      // underneath it — the exact ENV-125 bug (ticket-flowqueue-temporal-and-schema.md).
+      const warnings = OAD.TemporalStatus.dataHygieneWarnings(t, nowInstant);
+      const isMasked = warnings.some(w => w.rule === 'drifted_next_action_masked_by_future_deadline');
+      const maskedText = isMasked
+        ? ' <span class="deadline-behind" title="' + OAD.esc(strings.warnDriftedMaskedByDeadline || '') + '">' + OAD.esc(strings.maskedBadge || '⚠ next action overdue') + '</span>'
+        : '';
       deadlineLineHtml = '<div class="deadline-line">' +
         '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
-        riskText +
+        riskText + maskedText +
         '</div>';
     }
 
@@ -1103,7 +1118,7 @@ OAD.renderTodayView = function () {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
     const isOverdue = OAD.isActionOverdue(t);
-    const isToday = t.next_action_date === todayStr;
+    const isToday = OAD.TemporalStatus.isDueToday(t, todayDt);
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">TODAY</span>';
@@ -1402,7 +1417,7 @@ OAD.renderDailyView = function () {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
     const isOverdue = OAD.isActionOverdue(t);
-    const isToday = t.next_action_date === todayStr;
+    const isToday = OAD.TemporalStatus.isDueToday(t, todayDt);
     // Rows in the 'overdue' context landed there via OAD.isDeadlineOverdue (deadline-based,
     // see js/due.js), not isActionOverdue — a row could be here with a future next_action_date
     // (e.g. legitimately rescheduled, but the deadline field wasn't updated to match). Badge
@@ -1639,7 +1654,7 @@ OAD.renderDailyView = function () {
       var dayDt = new Date(todayDt);
       dayDt.setDate(dayDt.getDate() + di);
       var dayStr = dayDt.toISOString().slice(0, 10);
-      var threadCount  = due.active.filter(function (t) { return t.next_action_date === dayStr; }).length;
+      var threadCount  = due.active.filter(function (t) { return OAD.TemporalStatus.isDueToday(t, dayDt); }).length;
       var cadenceCount = cads.filter(function (c)  { return OAD.Due.isCadenceDueOn(c, dayStr); }).length;
       var total = threadCount + cadenceCount; // still shown as "N items" — the label below no longer comes from this raw count
       var loadScore = OAD.calculateDayLoadScore(dayStr);
@@ -1738,7 +1753,7 @@ OAD.renderDailyView = function () {
         '</div>' +
         '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
           '<div class="ds-metric-title">Stalled Tasks</div>' +
-          '<div class="ds-metric-value stalled">' + OAD.Due.stalledThreads(todayStr).length + '</div>' +
+          '<div class="ds-metric-value stalled">' + OAD.Due.stalledThreads().length + '</div>' +
           '<div class="ds-metric-desc">Need attention</div>' +
         '</div>' +
         '<div class="ds-metric-card">' +
@@ -1876,7 +1891,7 @@ OAD.renderMatrixView = function () {
     const pc = OAD.pressureClass(t._score);
     var badge = '';
     const isOverdue = OAD.isActionOverdue(t);
-    const isToday = t.next_action_date === todayStr;
+    const isToday = OAD.TemporalStatus.isDueToday(t, todayDt);
     
     if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
@@ -2811,27 +2826,36 @@ OAD.filterListTab = function () {
     return;
   }
 
+  const nowInstant2 = new Date();
   container.innerHTML = threads.map(t => {
     const pc = OAD.pressureClass(t._score);
-    const ds = t.deadline ? OAD.deadlineState(t) : null;
+    const cardDate = OAD.TemporalStatus.cardDateLabel(t, nowInstant2);
+    const ds = cardDate.label === 'deadline' ? OAD.deadlineState(t) : null;
     const atRisk = ds && !ds.onTrack;
-    
+    const strings2 = (OAD.Config && OAD.Config.temporalStatusStrings) || {};
+
     let deadlineLineHtml = '';
-    if (ds) {
-      const days = ds.daysRemaining;
-      const timeText = days <= 0 ? 'Past deadline'
-        : ds.weeksRemaining > 0
-          ? ds.weeksRemaining + 'w remaining'
-          : days + 'd remaining';
-      const sessText = ds.sessionsRemaining != null
+    if (cardDate.label !== 'none') {
+      const days = cardDate.daysRemaining;
+      const pastText = cardDate.label === 'deadline' ? (strings2.pastDeadline || 'Past deadline') : (strings2.pastNextAction || 'Past due');
+      const timeText = days <= 0 ? pastText
+        : days >= 7
+          ? Math.floor(days / 7) + (strings2.weeksRemainingSuffix || 'w remaining')
+          : days + (strings2.daysRemainingSuffix || 'd remaining');
+      const sessText = ds && ds.sessionsRemaining != null
         ? ' · ' + ds.sessionsRemaining + ' session' + (ds.sessionsRemaining !== 1 ? 's' : '') + ' left'
         : '';
       const riskText = atRisk
         ? ' <span class="deadline-behind">⚑ ' + ds.behindBy + ' behind</span>'
         : '';
+      const warnings2 = OAD.TemporalStatus.dataHygieneWarnings(t, nowInstant2);
+      const isMasked2 = warnings2.some(w => w.rule === 'drifted_next_action_masked_by_future_deadline');
+      const maskedText2 = isMasked2
+        ? ' <span class="deadline-behind" title="' + OAD.esc(strings2.warnDriftedMaskedByDeadline || '') + '">' + OAD.esc(strings2.maskedBadge || '⚠ next action overdue') + '</span>'
+        : '';
       deadlineLineHtml = '<div class="deadline-line">' +
         '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
-        riskText +
+        riskText + maskedText2 +
         '</div>';
     }
 

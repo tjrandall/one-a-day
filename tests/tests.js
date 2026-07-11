@@ -3860,10 +3860,11 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — 
 
   const threads = [tOverdue1, tOverdue2, tToday, tWeek1, tWeek7, tNoDate, tFar];
 
-  // We need to mock isDeadlineOverdue since it depends on the actual current time.
-  const origIsDeadlineOverdue = OAD.isDeadlineOverdue;
+  // We need to mock OAD.TemporalStatus.isOverdue (the function OAD.Due.buckets actually calls
+  // now, per ticket-flowqueue-temporal-and-schema.md) since it depends on the actual current time.
+  const origIsOverdue = OAD.TemporalStatus.isOverdue;
   try {
-    OAD.isDeadlineOverdue = function(t) {
+    OAD.TemporalStatus.isOverdue = function(t) {
       if (t === tOverdue1 || t === tOverdue2) return true;
       return false;
     };
@@ -3888,7 +3889,7 @@ OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — 
     OAD._assert(!buckets.noDate.includes(tFar), 'a thread due 8 days out is not "no date" — it just isn\'t in any of this function\'s buckets, which is correct for a this-week-scoped view');
 
   } finally {
-    OAD.isDeadlineOverdue = origIsDeadlineOverdue;
+    OAD.TemporalStatus.isOverdue = origIsOverdue;
   }
 });
 
@@ -3911,21 +3912,21 @@ OAD.test('Due.buckets: a thread due today AND deadline-overdue appears in both b
 
   const tricky = OAD.makeThread({ title: 'Due today and deadline overdue', next_action_date: todayStr });
 
-  const origIsDeadlineOverdue = OAD.isDeadlineOverdue;
+  const origIsOverdue = OAD.TemporalStatus.isOverdue;
   try {
-    OAD.isDeadlineOverdue = function(t) { return true; };
+    OAD.TemporalStatus.isOverdue = function(t) { return true; };
     const bucketsOverdue = OAD.Due.buckets([tricky], todayStr, in7Str);
     OAD._assertEqual(bucketsOverdue.overdue.length, 1, 'appears in overdue');
     OAD._assertEqual(bucketsOverdue.today.length, 1, 'ALSO appears in today — this is the deliberate overlap, not a bug');
     OAD._assertEqual(bucketsOverdue.week.length, 0, 'never appears in week regardless');
 
-    OAD.isDeadlineOverdue = function(t) { return false; };
+    OAD.TemporalStatus.isOverdue = function(t) { return false; };
     const bucketsToday = OAD.Due.buckets([tricky], todayStr, in7Str);
     OAD._assertEqual(bucketsToday.overdue.length, 0, 'not overdue when deadline is not overdue');
     OAD._assertEqual(bucketsToday.today.length, 1, 'still appears in today');
     OAD._assertEqual(bucketsToday.week.length, 0, 'never appears in week regardless');
   } finally {
-    OAD.isDeadlineOverdue = origIsDeadlineOverdue;
+    OAD.TemporalStatus.isOverdue = origIsOverdue;
   }
 });
 
@@ -3942,7 +3943,7 @@ OAD.test('Due.stalledThreads: a thread with next_action_date in the past appears
     const notDrifted = OAD.makeThread({ id: 2, uuid: 'st-not-drifted', title: 'Not drifted', status: 'open', next_action_date: todayStr });
     OAD.DB.threads = [drifted, notDrifted];
 
-    const stalled = OAD.Due.stalledThreads(todayStr);
+    const stalled = OAD.Due.stalledThreads();
     OAD._assert(stalled.some(t => t.uuid === 'st-drifted'), 'a thread with a past next_action_date must appear, purely from date drift, no status flag involved');
     OAD._assert(!stalled.some(t => t.uuid === 'st-not-drifted'), 'a thread due today (not yet past) must not appear');
   } finally {
@@ -3961,7 +3962,7 @@ OAD.test('Due.stalledThreads: excludes closed and dormant even with a past next_
     const dormantDrifted = OAD.makeThread({ id: 2, uuid: 'st-dormant', title: 'Dormant drifted', status: 'dormant', next_action_date: yStr });
     OAD.DB.threads = [closedDrifted, dormantDrifted];
 
-    const stalled = OAD.Due.stalledThreads(todayStr);
+    const stalled = OAD.Due.stalledThreads();
     OAD._assertEqual(stalled.length, 0, 'closed and dormant threads must never appear regardless of date drift');
   } finally {
     OAD.DB.threads = orig;
@@ -3979,7 +3980,7 @@ OAD.test('Due.stalledThreads: excludes a waiting thread with user_action_complet
     const stillOnMe = OAD.makeThread({ id: 2, uuid: 'st-onme', title: 'Still on me', status: 'waiting', user_action_complete: false, next_action_date: yStr });
     OAD.DB.threads = [ballInCourt, stillOnMe];
 
-    const stalled = OAD.Due.stalledThreads(todayStr);
+    const stalled = OAD.Due.stalledThreads();
     OAD._assert(!stalled.some(t => t.uuid === 'st-ball'), 'a waiting thread with nothing left for the user to do must not read as "needs attention"');
     OAD._assert(stalled.some(t => t.uuid === 'st-onme'), 'a genuinely drifted waiting thread (action still on the user) must appear');
   } finally {
@@ -3998,7 +3999,7 @@ OAD.test('Due.stalledThreads: sorted oldest-first by next_action_date', function
     const t5 = OAD.makeThread({ id: 3, uuid: 'st-5d', title: '5 days ago', status: 'open', next_action_date: d(-5) });
     OAD.DB.threads = [t3, t1, t5];
 
-    const stalled = OAD.Due.stalledThreads(todayStr);
+    const stalled = OAD.Due.stalledThreads();
     OAD._assertEqual(stalled.map(t => t.uuid).join(','), 'st-5d,st-3d,st-1d', 'must be sorted oldest next_action_date first');
   } finally {
     OAD.DB.threads = orig;
@@ -4041,6 +4042,164 @@ OAD.test('filterListTab: "stalled" status preset filters to the live drift compu
     OAD._activeListArea = originalArea;
     OAD._activeSavedViewId = originalSavedViewId;
   }
+});
+
+// ── Tests: OAD.TemporalStatus (ticket-flowqueue-temporal-and-schema.md, Phase 1) ─────────
+// Single source of truth for overdue/due-today/stalled — this is the "actual bulletproofing,"
+// per the ticket's own words: any future change that breaks a deadline/next_action_date/status
+// combination fails here immediately instead of being found by hand-diffing an export weeks
+// later, which is what happened four separate times in one day before this module existed.
+
+OAD.test('OAD.TemporalStatus: full 64-case matrix — deadline x next_action_date x status, each checked against isOverdue/isDueToday/isStalled', function () {
+  // Fixed reference moment, not real "now" — this is exactly what makes the module testable
+  // without being time-dependent/flaky. Deliberately mid-day (not midnight) so "today" cases
+  // have real same-day headroom to be unambiguously not-yet-overdue.
+  var today = new Date('2026-07-15T12:00:00');
+  var todayStr = '2026-07-15';
+  var pastStr = '2026-07-10';
+  var futureStr = '2026-07-20';
+
+  var dateValues = { null: null, past: pastStr, today: todayStr, future: futureStr };
+  var statuses = ['open', 'waiting', 'dormant', 'closed'];
+
+  var failures = [];
+  var caseCount = 0;
+
+  Object.keys(dateValues).forEach(function (deadlineKey) {
+    Object.keys(dateValues).forEach(function (nadKey) {
+      statuses.forEach(function (status) {
+        caseCount++;
+        var deadline = dateValues[deadlineKey];
+        var next_action_date = dateValues[nadKey];
+        var t = OAD.makeThread({
+          id: caseCount, uuid: 'matrix-' + caseCount, title: 'matrix case ' + caseCount,
+          status: status, deadline: deadline, next_action_date: next_action_date
+        });
+
+        var excluded = (status === 'closed' || status === 'dormant');
+
+        var expectedOverdue = !excluded && deadlineKey === 'past';
+        var expectedDueToday = !excluded && nadKey === 'today';
+        var expectedStalled = !excluded && nadKey === 'past';
+
+        var actualOverdue = OAD.TemporalStatus.isOverdue(t, today);
+        var actualDueToday = OAD.TemporalStatus.isDueToday(t, today);
+        var actualStalled = OAD.TemporalStatus.isStalled(t, today);
+
+        var label = 'deadline=' + deadlineKey + ' next_action_date=' + nadKey + ' status=' + status;
+        if (actualOverdue !== expectedOverdue) failures.push('isOverdue(' + label + '): expected ' + expectedOverdue + ', got ' + actualOverdue);
+        if (actualDueToday !== expectedDueToday) failures.push('isDueToday(' + label + '): expected ' + expectedDueToday + ', got ' + actualDueToday);
+        if (actualStalled !== expectedStalled) failures.push('isStalled(' + label + '): expected ' + expectedStalled + ', got ' + actualStalled);
+      });
+    });
+  });
+
+  OAD._assertEqual(caseCount, 64, 'matrix must cover exactly 4 x 4 x 4 = 64 cases');
+  OAD._assertEqual(failures.length, 0, 'all 64 cases x 3 predicates must match — failures: ' + failures.join(' | '));
+});
+
+OAD.test('OAD.TemporalStatus.isOverdue: same-day deadline_time precision preserved (not lost in the Phase 1 consolidation)', function () {
+  var today = new Date('2026-07-15T10:00:00');
+  var alreadyPassed = OAD.makeThread({ status: 'open', deadline: '2026-07-15', deadline_time: '09:00' });
+  var notYetPassed = OAD.makeThread({ status: 'open', deadline: '2026-07-15', deadline_time: '11:00' });
+  OAD._assert(OAD.TemporalStatus.isOverdue(alreadyPassed, today), 'a deadline_time of 09:00 must be overdue at 10:00 the same day');
+  OAD._assert(!OAD.TemporalStatus.isOverdue(notYetPassed, today), 'a deadline_time of 11:00 must not be overdue yet at 10:00 the same day');
+});
+
+OAD.test('OAD.TemporalStatus.isStalled: excludes waiting+user_action_complete ("ball in their court")', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var ballInCourt = OAD.makeThread({ status: 'waiting', user_action_complete: true, next_action_date: '2026-07-10' });
+  var stillOnMe = OAD.makeThread({ status: 'waiting', user_action_complete: false, next_action_date: '2026-07-10' });
+  OAD._assert(!OAD.TemporalStatus.isStalled(ballInCourt, today), 'ball-in-their-court must not read as stalled');
+  OAD._assert(OAD.TemporalStatus.isStalled(stillOnMe, today), 'still-on-me must read as stalled');
+});
+
+OAD.test('OAD.TemporalStatus.daysUntilDeadline / daysSinceNextActionDate: correct sign and null handling, no status exclusion', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  OAD._assertEqual(OAD.TemporalStatus.daysUntilDeadline(OAD.makeThread({ deadline: '2026-07-20' }), today), 5, 'future deadline is positive');
+  OAD._assertEqual(OAD.TemporalStatus.daysUntilDeadline(OAD.makeThread({ deadline: '2026-07-10' }), today), -5, 'past deadline is negative');
+  OAD._assertEqual(OAD.TemporalStatus.daysUntilDeadline(OAD.makeThread({ deadline: null }), today), null, 'no deadline is null');
+  OAD._assertEqual(OAD.TemporalStatus.daysSinceNextActionDate(OAD.makeThread({ next_action_date: '2026-07-10' }), today), 5, 'past next_action_date counts days since as positive');
+  OAD._assertEqual(OAD.TemporalStatus.daysSinceNextActionDate(OAD.makeThread({ next_action_date: null }), today), null, 'no next_action_date is null');
+  // No status exclusion — a closed thread's dates are still real historical facts.
+  OAD._assertEqual(OAD.TemporalStatus.daysUntilDeadline(OAD.makeThread({ status: 'closed', deadline: '2026-07-20' }), today), 5, 'daysUntilDeadline ignores status entirely, unlike isOverdue');
+});
+
+OAD.test('OAD.TemporalStatus.cardDateLabel: deadline wins when both set; daysRemaining sign is consistent regardless of which field won', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var both = OAD.TemporalStatus.cardDateLabel(OAD.makeThread({ deadline: '2026-07-20', next_action_date: '2026-07-10' }), today);
+  OAD._assertEqual(both.label, 'deadline', 'deadline wins when both fields are set');
+  OAD._assertEqual(both.date, '2026-07-20', 'date matches the winning field');
+  OAD._assertEqual(both.daysRemaining, 5, 'daysRemaining reflects the deadline, positive since it is in the future');
+
+  var onlyNad = OAD.TemporalStatus.cardDateLabel(OAD.makeThread({ deadline: null, next_action_date: '2026-07-10' }), today);
+  OAD._assertEqual(onlyNad.label, 'next_action_date', 'falls back to next_action_date when no deadline');
+  OAD._assertEqual(onlyNad.daysRemaining, -5, 'daysRemaining is negative for a past next_action_date — same sign convention as the deadline case, not inverted');
+
+  var neither = OAD.TemporalStatus.cardDateLabel(OAD.makeThread({ deadline: null, next_action_date: null }), today);
+  OAD._assertEqual(neither.label, 'none', 'no dates set at all');
+  OAD._assertEqual(neither.daysRemaining, null, 'no daysRemaining when there is no date');
+});
+
+OAD.test('OAD.TemporalStatus.dataHygieneWarnings: catches the two real cases found against the 7/11 export (ticket-flowqueue-temporal-and-schema.md acceptance criteria)', function () {
+  var today = new Date('2026-07-11T12:00:00');
+
+  // Real case 1: CAC102 Live Session — July 13 (now dormant). deadline 7/13 passed, rescheduled
+  // next_action_date is 7/27 — the deadline was simply never updated to match the reschedule.
+  var cac102 = OAD.makeThread({ id: 501, uuid: 'cac102-live-03', title: 'CAC102 Live Session — July 13, 2026 7:00pm ET', status: 'dormant', deadline: '2026-07-13', next_action_date: '2026-07-27' });
+  var cac102Warnings = OAD.TemporalStatus.dataHygieneWarnings(cac102, today);
+  OAD._assert(cac102Warnings.some(w => w.rule === 'next_action_after_deadline'), 'CAC102 case: next_action_date after deadline must be flagged, even though the thread is dormant');
+
+  // Real case 2: ENV-125 Coastal Marine Ecology. deadline 8/6 (comfortably future), next_action_date
+  // 7/9 (2 days past today). A card would show a calm "weeks remaining" deadline countdown while
+  // masking a genuinely drifted next action.
+  var env125 = OAD.makeThread({ id: 502, uuid: 'env125', title: 'ENV-125 Coastal Marine Ecology (CCCC, Gil Newton)', status: 'open', deadline: '2026-08-06', next_action_date: '2026-07-09' });
+  var env125Warnings = OAD.TemporalStatus.dataHygieneWarnings(env125, today);
+  OAD._assert(env125Warnings.some(w => w.rule === 'drifted_next_action_masked_by_future_deadline'), 'ENV-125 case: a drifted next_action_date behind a comfortable future deadline must be flagged');
+
+  // Structured output, not a bare string — per the audit-log-seed requirement.
+  var sample = env125Warnings[0];
+  OAD._assert(sample.thread_id === 502 && sample.thread_uuid === 'env125', 'warning must identify which thread');
+  OAD._assert(typeof sample.rule === 'string' && typeof sample.message === 'string', 'warning must have a rule id and a human-readable message');
+  OAD._assertEqual(sample.checked_against, '2026-07-11', 'warning records what it was checked against, not a live wall-clock read — stays pure/deterministic');
+});
+
+OAD.test('OAD.TemporalStatus.dataHygieneWarnings: excludes closed threads, does NOT exclude dormant', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var closedBad = OAD.makeThread({ status: 'closed', deadline: '2026-07-10', next_action_date: '2026-07-20' });
+  var dormantBad = OAD.makeThread({ status: 'dormant', deadline: '2026-07-10', next_action_date: '2026-07-20' });
+  OAD._assertEqual(OAD.TemporalStatus.dataHygieneWarnings(closedBad, today).length, 0, 'closed threads are excluded — old, finished, inconsistent dates are not an actionable data-quality issue');
+  OAD._assert(OAD.TemporalStatus.dataHygieneWarnings(dormantBad, today).length > 0, 'dormant threads are NOT excluded — dates are expected to be stale but still worth catching before reactivation');
+});
+
+OAD.test('OAD.TemporalStatus.dataHygieneWarnings: flags an open/waiting thread with no dates set at all', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var noDates = OAD.makeThread({ status: 'open', deadline: null, next_action_date: null });
+  var warnings = OAD.TemporalStatus.dataHygieneWarnings(noDates, today);
+  OAD._assert(warnings.some(w => w.rule === 'no_dates_set'), 'a thread with neither date set must be flagged — it can drift forever, invisible everywhere date-based');
+});
+
+OAD.test('OAD.TemporalStatus: ownerId scoping — a thread belonging to a different owner returns the "safe negative" from every function', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var otherOwnersThread = OAD.makeThread({ status: 'open', deadline: '2026-07-10', next_action_date: '2026-07-10', owner_id: 'some-other-owner' });
+
+  OAD._assert(!OAD.TemporalStatus.isOverdue(otherOwnersThread, today, 'my-owner-id'), 'isOverdue must return false for a mismatched owner');
+  OAD._assert(!OAD.TemporalStatus.isDueToday(otherOwnersThread, today, 'my-owner-id'), 'isDueToday must return false for a mismatched owner');
+  OAD._assert(!OAD.TemporalStatus.isStalled(otherOwnersThread, today, 'my-owner-id'), 'isStalled must return false for a mismatched owner');
+  OAD._assertEqual(OAD.TemporalStatus.daysUntilDeadline(otherOwnersThread, today, 'my-owner-id'), null, 'daysUntilDeadline must return null for a mismatched owner');
+  OAD._assertEqual(OAD.TemporalStatus.cardDateLabel(otherOwnersThread, today, 'my-owner-id').label, 'none', 'cardDateLabel must return "none" for a mismatched owner');
+  OAD._assertEqual(OAD.TemporalStatus.dataHygieneWarnings(otherOwnersThread, today, 'my-owner-id').length, 0, 'dataHygieneWarnings must return empty for a mismatched owner');
+
+  // No ownerId passed at all = no scoping applied — preserves today's single-tenant behavior.
+  OAD._assert(OAD.TemporalStatus.isOverdue(otherOwnersThread, today), 'omitting ownerId entirely must not filter by owner — single-tenant behavior unchanged');
+
+  // Matching owner works normally.
+  OAD._assert(OAD.TemporalStatus.isOverdue(otherOwnersThread, today, 'some-other-owner'), 'a matching ownerId must behave identically to no scoping at all');
+});
+
+OAD.test('OAD.TemporalStatus: real threads created via OAD.makeThread default to OAD.DEFAULT_OWNER_ID', function () {
+  var t = OAD.makeThread({ title: 'Owner default check' });
+  OAD._assertEqual(t.owner_id, OAD.DEFAULT_OWNER_ID, 'a freshly created thread must default to the single-tenant owner sentinel');
 });
 
 OAD.boot = async function () {

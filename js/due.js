@@ -56,23 +56,26 @@ OAD.Due.suppressionContext = function (activeThreads, todayStr, focusUUID, horiz
  * make it disappear from the list a user is actively looking at right when it became urgent.
  * This is deliberate, tested behavior — see the exclusivity test in tests.js — not an oversight.
  *
- * "Overdue" specifically means deadline-overdue (OAD.isDeadlineOverdue — a hard external
+ * "Overdue" specifically means deadline-overdue (OAD.TemporalStatus.isOverdue — a hard external
  * deadline has passed), NOT action-overdue (a scheduled next_action_date has passed). Per
  * ticket-overdue-filter-fix.md: a `waiting` thread's next_action_date passing is normal and
  * expected (blocked on someone else's response), not a sign the thread is actually overdue —
  * routing this bucket through next_action_date produced ~20 false positives against real data
- * (22 shown, only 2 genuinely had a passed deadline). Today/Week/NoDate below are unaffected —
- * they're still next_action_date-based, which is correct for "what's on my plate this week."
+ * (22 shown, only 2 genuinely had a passed deadline). Week/NoDate below are unaffected — still
+ * next_action_date-based directly, which is correct for "what's on my plate this week" (This
+ * Week's actual definition confirmed unchanged, per ticket-flowqueue-temporal-and-schema.md
+ * Phase 1's explicit "report back before changing it" requirement).
+ *
+ * overdue/today call OAD.TemporalStatus (js/threadTemporalStatus.js) — the single source of
+ * truth for this comparison, per ticket-flowqueue-temporal-and-schema.md Phase 1. `new Date()`
+ * is constructed once per call, here at the consumer boundary, not inside the pure module
+ * itself — TemporalStatus never reads the clock on its own.
  */
 OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
+  var now = new Date();
   return {
-    // Calls the OAD.isDeadlineOverdue wrapper directly, not a t.isDeadlineOverdue-first ternary
-    // like the other predicates here — Thread.isDeadlineOverdue() and OAD.isDeadlineOverdue()
-    // share a name (unlike isOverdue()/OAD.isActionOverdue's deliberately different names), so
-    // a ternary would always resolve to the instance method and make OAD.isDeadlineOverdue
-    // unmockable in tests. The wrapper already dispatches to the instance method itself.
-    overdue: visibleThreads.filter(function (t) { return OAD.isDeadlineOverdue(t); }),
-    today:   visibleThreads.filter(function (t) { return t.next_action_date === todayStr; }),
+    overdue: visibleThreads.filter(function (t) { return OAD.TemporalStatus.isOverdue(t, now); }),
+    today:   visibleThreads.filter(function (t) { return OAD.TemporalStatus.isDueToday(t, now); }),
     week:    visibleThreads.filter(function (t) { return t.next_action_date > todayStr && t.next_action_date <= in7Str; })
                .sort(function (a, b) { return a.next_action_date.localeCompare(b.next_action_date); }),
     noDate:  visibleThreads.filter(function (t) { return !t.next_action_date; })
@@ -121,26 +124,30 @@ OAD.Due.cadenceBuckets = function (cadences, todayStr, in7Str) {
 // export (ENV-125 Assignment — Week of July 6, pressure 93, only visible because it happened to
 // win Focus Now that day).
 //
-// Excludes closed/dormant (the ticket's literal formula) and waiting+user_action_complete —
-// "ball in their court," nothing left for the user to do, matching TOAT tier 3's own exclusion
-// (js/data.js:767) which the ticket's prose formula omitted but its stated intent ("same shape
-// as tiers 2/3") implies. Does NOT exclude inbox — the ticket's formula is explicit
-// (status NOT IN (closed, dormant) only) and no real inbox thread currently has a past
-// next_action_date to test this against; worth confirming if it ever matters in practice.
+// Excludes closed/dormant and waiting+user_action_complete ("ball in their court," nothing left
+// for the user to do) — both now enforced inside OAD.TemporalStatus.isStalled itself
+// (js/threadTemporalStatus.js), per ticket-flowqueue-temporal-and-schema.md Phase 1. Does NOT
+// exclude inbox — the ticket's formula was explicit (status NOT IN (closed, dormant) only) and
+// no real inbox thread currently has a past next_action_date to test this against.
 //
 // Sorted oldest-first BY next_action_date, per the ticket's explicit acceptance criteria — note
 // this does NOT actually match TOAT's real tie-break convention (TOAT sorts by thread id /
 // creation age, js/data.js:775/781), despite the ticket's own claim that it does. Implemented
 // as explicitly requested; flagging the mismatch as a factual correction, not silently
 // "fixing" it to id-order without confirming that's wanted.
-OAD.Due.stalledThreads = function (todayStr) {
-  todayStr = todayStr || OAD.todayStr();
+//
+// No longer takes a todayStr override (removed during this migration) — the actual isStalled
+// comparison needs the real current moment for same-day time-of-day precision (next_action_time
+// set), not just a calendar day. An end-of-day approximation of an arbitrary todayStr was tried
+// and rejected: for a thread due later TODAY at a specific time, it would have registered as
+// stalled the instant today began, before that time ever arrived — worse than the original bare
+// date-string comparison, not equivalent to it. Nothing in this app ever actually called this
+// with anything other than real "now" anyway (verified — every prior call site derived it from
+// OAD.todayStr()), so this isn't a real capability loss, just a name that stops implying one.
+OAD.Due.stalledThreads = function () {
+  var now = new Date();
   return (OAD.getVisibleThreads() || [])
-    .filter(function (t) {
-      if (t.status === 'closed' || t.status === 'dormant') return false;
-      if (t.status === 'waiting' && t.user_action_complete) return false;
-      return !!t.next_action_date && t.next_action_date < todayStr;
-    })
+    .filter(function (t) { return OAD.TemporalStatus.isStalled(t, now); })
     .sort(function (a, b) { return a.next_action_date < b.next_action_date ? -1 : (a.next_action_date > b.next_action_date ? 1 : 0); });
 };
 
@@ -177,7 +184,7 @@ OAD.Due.selfCheck = function () {
     if (!parentVisible) {
       issues.push({ type: 'orphaned_suppression', child: child.title, childUUID: child.uuid, parent: parent ? parent.title : '(missing)' });
     }
-    if (OAD.isActionOverdue(child) || child.next_action_date === todayStr) {
+    if (OAD.isActionOverdue(child) || OAD.TemporalStatus.isDueToday(child, new Date())) {
       issues.push({ type: 'overdue_or_today_suppressed', child: child.title, childUUID: child.uuid });
     }
   });

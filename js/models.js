@@ -414,9 +414,14 @@ class ThreadCollection {
 
   getDayLoad(dateStr) {
     if (!dateStr) return 0;
+    // "Due on dateStr" (any day, not necessarily today) reuses isDueToday by treating dateStr as
+    // the injected reference day — mechanically identical, isDueToday just compares
+    // next_action_date against whatever day it's given. inbox exclusion stays inline since that's
+    // this function's own scoping concern, not something OAD.TemporalStatus is responsible for.
+    var refDay = new Date(dateStr + 'T12:00:00');
     return this.threads
       .filter(function (t) {
-        return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox' && t.next_action_date === dateStr;
+        return t.status !== 'inbox' && OAD.TemporalStatus.isDueToday(t, refDay);
       })
       .reduce(function (sum, t) { 
         return sum + (typeof t.getPressure === 'function' ? t.getPressure(true) : OAD.pressure(t, true)); 
