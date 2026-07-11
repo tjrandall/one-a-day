@@ -167,6 +167,15 @@ OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId) {
     });
   }
 
+  // Unified with OAD._che006_staleNextAction (js/engine.js) — that rule predates this module and
+  // was an independent implementation of nearly the same signal, missed on the first migration
+  // pass and found afterward. They intentionally stay two separate CONSUMERS (this one a pure,
+  // stateless, audit-log-shaped diagnostic; CHE-006 a persisted, dismissible, auto-fixable alert
+  // in OAD.runCHE()) rather than one merged function, but both now compose from isStalled/
+  // isOverdue below instead of each reimplementing its own date-string comparison — CHE-006 is
+  // deliberately broader (it also fires with no deadline at all, since "stale with nothing else
+  // to catch it" is exactly its purpose), this rule stays narrower and specifically named for
+  // the masking case a card display needs to know about.
   if (todayStr && thread.next_action_date && thread.deadline &&
       thread.next_action_date < todayStr && thread.deadline >= todayStr) {
     warnings.push({

@@ -794,12 +794,32 @@ OAD._che002_noLeadTime = function (thread) {
   );
 };
 
-// CHE-006: Stale next_action_date — past date on open thread that still has a future deadline.
-OAD._che006_staleNextAction = function (thread, todayStr) {
-  if (thread.status !== 'open') return null;
-  if (!thread.next_action_date) return null;
-  if (thread.next_action_date >= todayStr) return null;
-  if (thread.deadline && thread.deadline < todayStr) return null; // CHE-003 territory
+// CHE-006: Stale next_action_date on an open/waiting thread whose overall deadline status
+// isn't already loudly visible elsewhere (Overdue Tasks). Unified with
+// OAD.TemporalStatus.dataHygieneWarnings' 'drifted_next_action_masked_by_future_deadline' rule
+// per ticket-flowqueue-temporal-and-schema.md — these were found to be two independent
+// implementations of nearly the same signal (this one predates the new module and was missed on
+// the first migration pass). Rather than force them into one identical trigger condition (a real
+// investigation found they're legitimately different in scope — see below — not just
+// accidentally different), this rule now composes from the same shared primitives instead of
+// reimplementing its own date-string comparisons, so there's still only one real definition of
+// "stale"/"overdue" underneath both:
+//   - "stale" reuses OAD.TemporalStatus.isStalled, which also correctly excludes a waiting
+//     thread that's ball-in-the-other-person's-court — CHE-006 previously excluded ALL waiting
+//     threads outright (status !== 'open' bailed immediately), which was blunter than necessary
+//     now that a more precise definition exists. This is a genuine, deliberate widening: a
+//     waiting thread that's still actionable and has gone stale now gets flagged too.
+//   - "already visible elsewhere" reuses OAD.TemporalStatus.isOverdue (deadline-based) — if the
+//     thread is already surfacing prominently in Overdue Tasks, a second nudge here is noise,
+//     not signal. This intentionally stays BROADER than dataHygieneWarnings' masking rule (which
+//     only fires when a deadline is set and still comfortable) — CHE-006 also fires when there's
+//     no deadline at all, since "stale with nothing else to catch it" is exactly the invisible
+//     case this alert exists for, whether or not a deadline happens to be present.
+OAD._che006_staleNextAction = function (thread, today) {
+  if (thread.status !== 'open' && thread.status !== 'waiting') return null;
+  if (!OAD.TemporalStatus.isStalled(thread, today)) return null;
+  if (OAD.TemporalStatus.isOverdue(thread, today)) return null; // already loud via Overdue Tasks — CHE-003 territory
+  var todayStr = OAD.todayStr();
   return OAD._makeHealthAlert(
     thread, 'WARNING', 'CHE-006',
     'Stale next action — "' + thread.next_action_date + '" is in the past. Thread shows as permanently overdue, eroding trust in the overdue signal.',
@@ -836,7 +856,6 @@ OAD._che010_duplicateTitles = function (threads) {
 OAD.runCHE = function () {
   var threads = OAD.DB.threads || [];
   var today = new Date(); today.setHours(0, 0, 0, 0);
-  var todayStr = today.toISOString().slice(0, 10);
 
   // Keep existing dismissed alerts; replace non-dismissed ones fresh each run.
   var dismissed = (OAD.DB.health_alerts || []).filter(function (a) { return a.dismissed; });
@@ -846,7 +865,7 @@ OAD.runCHE = function () {
     var a;
     a = OAD._che001_nullDeadline(t);  if (a) fresh.push(a);
     a = OAD._che002_noLeadTime(t);    if (a) fresh.push(a);
-    a = OAD._che006_staleNextAction(t, todayStr); if (a) fresh.push(a);
+    a = OAD._che006_staleNextAction(t, today); if (a) fresh.push(a);
   });
 
   OAD._che010_duplicateTitles(threads).forEach(function (a) { fresh.push(a); });

@@ -4202,6 +4202,79 @@ OAD.test('OAD.TemporalStatus: real threads created via OAD.makeThread default to
   OAD._assertEqual(t.owner_id, OAD.DEFAULT_OWNER_ID, 'a freshly created thread must default to the single-tenant owner sentinel');
 });
 
+// ── Tests: OAD._che006_staleNextAction unified with OAD.TemporalStatus ────────────────────
+// CHE-006 predates threadTemporalStatus.js and was an independent reimplementation of nearly
+// the same "stale next action" signal, found and unified afterward (per T.J.'s explicit
+// follow-up request). These lock in both what stayed the same and what deliberately changed.
+
+OAD.test('CHE-006: still fires for an open thread with a stale next_action_date and no deadline (unchanged case)', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var t = OAD.makeThread({ id: 1, uuid: 'che006-open-nodl', status: 'open', next_action_date: '2026-07-10', deadline: null });
+  var alert = OAD._che006_staleNextAction(t, today);
+  OAD._assert(!!alert, 'an open thread with a stale next_action_date and no deadline must still fire CHE-006');
+  OAD._assertEqual(alert.type, 'CHE-006', 'alert type is CHE-006');
+});
+
+OAD.test('CHE-006: still fires for the masking case — stale next_action_date behind a comfortable future deadline (ENV-125)', function () {
+  var today = new Date('2026-07-11T12:00:00');
+  var t = OAD.makeThread({ id: 2, uuid: 'che006-masked', status: 'open', next_action_date: '2026-07-09', deadline: '2026-08-06' });
+  var alert = OAD._che006_staleNextAction(t, today);
+  OAD._assert(!!alert, 'the exact ENV-125-shaped case must still fire CHE-006');
+});
+
+OAD.test('CHE-006: deliberately widened — now also fires for a genuinely-stuck waiting thread (previously excluded ALL waiting threads outright)', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var stuckWaiting = OAD.makeThread({ id: 3, uuid: 'che006-waiting-stuck', status: 'waiting', user_action_complete: false, next_action_date: '2026-07-10', deadline: null });
+  var alert = OAD._che006_staleNextAction(stuckWaiting, today);
+  OAD._assert(!!alert, 'a waiting thread that is genuinely stuck (action still on the user) must now fire CHE-006 — a deliberate widening from the pre-unification "open only" rule');
+});
+
+OAD.test('CHE-006: still correctly excludes a ball-in-their-court waiting thread', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var ballInCourt = OAD.makeThread({ id: 4, uuid: 'che006-ball', status: 'waiting', user_action_complete: true, next_action_date: '2026-07-10', deadline: null });
+  var alert = OAD._che006_staleNextAction(ballInCourt, today);
+  OAD._assert(!alert, 'ball-in-their-court must not fire CHE-006 — isStalled\'s exclusion is preserved through the unification');
+});
+
+OAD.test('CHE-006: does not fire when the thread is already deadline-overdue (loud via Overdue Tasks already — "CHE-003 territory")', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var alreadyOverdue = OAD.makeThread({ id: 5, uuid: 'che006-already-overdue', status: 'open', next_action_date: '2026-07-10', deadline: '2026-07-12' });
+  var alert = OAD._che006_staleNextAction(alreadyOverdue, today);
+  OAD._assert(!alert, 'a thread whose deadline has also passed is already prominently visible in Overdue Tasks — a second CHE nudge would be noise, not signal');
+});
+
+OAD.test('CHE-006: does not fire for closed or dormant threads', function () {
+  var today = new Date('2026-07-15T12:00:00');
+  var closedStale = OAD.makeThread({ id: 6, uuid: 'che006-closed', status: 'closed', next_action_date: '2026-07-10', deadline: null });
+  var dormantStale = OAD.makeThread({ id: 7, uuid: 'che006-dormant', status: 'dormant', next_action_date: '2026-07-10', deadline: null });
+  OAD._assert(!OAD._che006_staleNextAction(closedStale, today), 'closed threads must never fire CHE-006');
+  OAD._assert(!OAD._che006_staleNextAction(dormantStale, today), 'dormant threads must never fire CHE-006');
+});
+
+OAD.test('OAD.runCHE(): CHE-006 fires correctly end-to-end for a real thread mix, using the unified predicates', function () {
+  var orig = OAD.DB.threads;
+  var origAlerts = OAD.DB.health_alerts;
+  try {
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    var yesterday = new Date(today.getTime()); yesterday.setDate(yesterday.getDate() - 1);
+    var yStr = yesterday.toISOString().slice(0, 10);
+
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'run-che-stale', title: 'Stale open thread', status: 'open', next_action_date: yStr, deadline: null }),
+      OAD.makeThread({ id: 2, uuid: 'run-che-fine', title: 'Fine thread', status: 'open', next_action_date: OAD.todayStr(), deadline: null })
+    ];
+    OAD.DB.health_alerts = [];
+
+    OAD.runCHE();
+    var che006Alerts = OAD.DB.health_alerts.filter(a => a.type === 'CHE-006');
+    OAD._assertEqual(che006Alerts.length, 1, 'exactly one CHE-006 alert should fire for the one genuinely stale thread');
+    OAD._assertEqual(che006Alerts[0].suggested_fix.uuid, 'run-che-stale', 'the alert must point at the correct thread');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.health_alerts = origAlerts;
+  }
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();
