@@ -2596,29 +2596,22 @@ OAD.test('daily TOAT selection and persistence', function () {
   const originalToat = OAD.DB.toat;
   try {
     OAD.DB.toat = [];
-    
+
     const threadA = { id: 101, uuid: 'uuid-a', title: 'Task A', status: 'open', life_area: 'Work', priority: 'medium' };
-    const threadB = { id: 102, uuid: 'uuid-b', title: 'Task B', status: 'stalled', life_area: 'Work', priority: 'high' };
     const threadC = { id: 103, uuid: 'uuid-c', title: 'Task C', status: 'waiting', life_area: 'Work', priority: 'low', next_action_date: '2020-01-01' };
     const threadD = { id: 104, uuid: 'uuid-d', title: 'Task D', status: 'waiting', life_area: 'Work', priority: 'low', next_action_date: '2099-01-01' };
-    
-    OAD.DB.threads = [threadA, threadB, threadC, threadD];
 
-    // Should select Task B (stalled) first as it has highest priority
+    OAD.DB.threads = [threadA, threadC, threadD];
+
+    // Should select Task C as the oldest overdue waiting thread (tier 3 — 'stalled' tier 1 was
+    // removed per ticket-stalled-metric-fix.md, see the dedicated regression test below)
     const toat = OAD.getDailyToat();
     OAD._assert(toat !== null, 'TOAT should be selected');
-    OAD._assertEqual(toat.id, 102, 'Should select Task B as oldest stalled thread');
+    OAD._assertEqual(toat.id, 103, 'Should select Task C as overdue waiting thread');
 
     // Calling again should return the persisted selection
     const secondToat = OAD.getDailyToat();
-    OAD._assertEqual(secondToat.id, 102, 'Should persist selected TOAT for the day');
-
-    // Clear locked TOAT
-    OAD.DB.toat = [];
-    // Remove stalled task, should pick overdue waiting next
-    OAD.DB.threads = [threadA, threadC, threadD];
-    const thirdToat = OAD.getDailyToat();
-    OAD._assertEqual(thirdToat.id, 103, 'Should select Task C as overdue waiting thread');
+    OAD._assertEqual(secondToat.id, 103, 'Should persist selected TOAT for the day');
 
     // Clear locked TOAT
     OAD.DB.toat = [];
@@ -2637,7 +2630,27 @@ OAD.test('daily TOAT selection and persistence', function () {
     const threadF = { id: 106, uuid: 'uuid-f', title: 'Task F', status: 'open', life_area: 'Work', priority: 'critical' };
     OAD.DB.threads = [threadA, threadD, threadF];
     const seventhToat = OAD.getDailyToat();
-    OAD._assert(seventhToat === null, 'Should return null for high pressure open thread (only stalled or overdue are TOAT candidates)');
+    OAD._assert(seventhToat === null, 'Should return null for high pressure open thread (only overdue open/waiting are TOAT candidates)');
+  } finally {
+    OAD.DB.threads = originalThreads;
+    OAD.DB.toat = originalToat;
+  }
+});
+
+OAD.test('daily TOAT: a thread with a leftover status of "stalled" (e.g. from an old import) is never selected — tier 1 removed, regression lock (ticket-stalled-metric-fix.md)', function () {
+  const originalThreads = OAD.DB.threads;
+  const originalToat = OAD.DB.toat;
+  try {
+    OAD.DB.toat = [];
+    // 'stalled' is no longer in OAD.STATUSES and nothing in the UI can set it, but a raw
+    // object literal (e.g. leftover from an old import, bypassing the Edit modal entirely)
+    // could still carry it — TOAT must not treat it as friction any more than any other
+    // status it doesn't recognize.
+    const leftoverStalled = { id: 201, uuid: 'uuid-leftover', title: 'Leftover stalled thread', status: 'stalled', life_area: 'Work', priority: 'critical' };
+    OAD.DB.threads = [leftoverStalled];
+
+    const toat = OAD.getDailyToat();
+    OAD._assert(toat === null, 'a thread with a leftover "stalled" status must never be selected as TOAT — tier 1 is gone');
   } finally {
     OAD.DB.threads = originalThreads;
     OAD.DB.toat = originalToat;
@@ -3474,6 +3487,10 @@ OAD.test('selectFocusThread: dormant thread is never returned', function () {
 
 OAD.test('OAD.STATUSES includes inbox', function () {
   OAD._assert(OAD.STATUSES.includes('inbox'), 'inbox should be a recognized status value');
+});
+
+OAD.test('OAD.STATUSES no longer includes "stalled" — removed per ticket-stalled-metric-fix.md, superseded by OAD.Due.stalledThreads()', function () {
+  OAD._assert(!OAD.STATUSES.includes('stalled'), '"stalled" must not be a settable status value — no thread across the real dataset ever used it, and it is now a live-computed view instead');
 });
 
 OAD.test('makeThread: created_at defaults to a valid ISO timestamp', function () {

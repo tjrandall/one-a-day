@@ -38,7 +38,13 @@ OAD.RECURRENCES = [
   'monthly-1st', 'monthly-15th', 'monthly-last', 'weekly', 'weekly-days', 'custom'
 ];
 
-OAD.STATUSES   = ['inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'];
+// 'stalled' was removed from this list per ticket-stalled-metric-fix.md — no thread across the
+// entire real dataset had ever used it (no automated path ever set it either), and it's now
+// superseded by the live-computed OAD.Due.stalledThreads() drift view. The List view's own
+// status-filter dropdown still offers a "Stalled" option (js/render.js, filterListTab) — that's
+// a computed filter preset now, same category as "not-closed," not a literal settable status,
+// so it's intentionally not sourced from this array.
+OAD.STATUSES   = ['inbox', 'open', 'waiting', 'dormant', 'closed'];
 OAD.PRIORITIES = ['critical', 'high', 'medium', 'low'];
 OAD.EDGE_TYPES = ['blocks', 'blocked_by', 'enables', 'relates'];
 
@@ -743,7 +749,6 @@ OAD.getDailyToat = function () {
 
   function isFriction(t) {
     if (!t || t.status === 'closed' || t.status === 'dormant') return false;
-    if (t.status === 'stalled') return true;
     if (t.status === 'waiting' && OAD.isActionOverdue(t)) return true;
     if (t.status === 'open' && OAD.isActionOverdue(t)) return true;
     return false;
@@ -761,8 +766,7 @@ OAD.getDailyToat = function () {
   }
 
   const allThreads = OAD.getVisibleThreads() || [];
-  
-  const stalled = allThreads.filter(t => t.status === 'stalled');
+
   const overdueWaiting = allThreads.filter(t => {
     return t.status === 'waiting' && !t.user_action_complete && OAD.isActionOverdue(t);
   });
@@ -771,10 +775,7 @@ OAD.getDailyToat = function () {
   });
 
   let selected = null;
-  if (stalled.length > 0) {
-    stalled.sort((a, b) => a.id - b.id);
-    selected = stalled[0];
-  } else if (overdueOpen.length > 0) {
+  if (overdueOpen.length > 0) {
     overdueOpen.sort((a, b) => a.id - b.id);
     selected = overdueOpen[0];
   } else if (overdueWaiting.length > 0) {

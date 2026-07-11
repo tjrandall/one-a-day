@@ -1537,8 +1537,6 @@ OAD.renderDailyView = function () {
   if (toatThread) {
     const tpc = OAD.pressureClass(OAD.pressure(toatThread));
     const openThreads = (OAD.getVisibleThreads() || []).filter(t => t.status !== 'closed');
-    const frictionThreads = openThreads.filter(t => t.status === 'stalled' || t.status === 'waiting');
-    frictionThreads.sort((a, b) => a.id - b.id);
     openThreads.sort((a, b) => a.id - b.id);
 
     let explanation = '';
@@ -1549,11 +1547,6 @@ OAD.renderDailyView = function () {
       collisionThreads.sort((a, b) => a.id - b.id);
       const idx = collisionThreads.findIndex(t => t.id === toatThread.id) + 1;
       explanation = 'Selected because it has a <strong style="color:var(--critical)">SHIFT COLLISION</strong> and is the oldest of ' + collisionThreads.length + ' such tasks (Rank ' + idx + '/' + collisionThreads.length + ' by creation age).';
-    } else if (toatThread.status === 'stalled') {
-      const stalledThreads = openThreads.filter(t => t.status === 'stalled');
-      stalledThreads.sort((a, b) => a.id - b.id);
-      const idx = stalledThreads.findIndex(t => t.id === toatThread.id) + 1;
-      explanation = 'Selected because it is <strong>STALLED</strong> and is the oldest of ' + stalledThreads.length + ' such tasks (Rank ' + idx + '/' + stalledThreads.length + ' by creation age).';
     } else {
       const overdueThreads = openThreads.filter(OAD.isActionOverdue);
       overdueThreads.sort((a, b) => a.id - b.id);
@@ -2704,6 +2697,10 @@ OAD.renderListView = function () {
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
 
+  // 'stalled' here is a computed filter preset (OAD.Due.stalledThreads(), see filterListTab
+  // below), not a real thread.status value — 'stalled' was removed from OAD.STATUSES per
+  // ticket-stalled-metric-fix.md. Kept in this list deliberately, same category as 'all' and
+  // 'not-closed' above it.
   const statusOptions = ['all', 'not-closed', 'inbox', 'open', 'waiting', 'dormant', 'stalled', 'closed'].map(s => {
     const label = s === 'all' ? 'All States' : s === 'not-closed' ? 'All except Closed' : s.charAt(0).toUpperCase() + s.slice(1);
     const selected = s === OAD._activeListStatus ? 'selected' : '';
