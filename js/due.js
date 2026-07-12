@@ -151,6 +151,49 @@ OAD.Due.stalledThreads = function () {
     .sort(function (a, b) { return a.next_action_date < b.next_action_date ? -1 : (a.next_action_date > b.next_action_date ? 1 : 0); });
 };
 
+// Replaces the "Avg Pressure" dashboard metric — per
+// ticket-pressure-propagation-and-critical-load.md, a single blended average is mathematically
+// incapable of representing "many simultaneous fires plus a long dormant/low tail," which is the
+// actual shape of this data (confirmed against the live export: 6 threads at 80+ pressure sitting
+// in the same average as 18 threads at 0-19). Critical Load — a count, not an average — is the
+// number meant to answer "how much fire am I under right now."
+//
+// Threshold defaults to OAD.Config.pressureThresholds.high (the SAME value that already colors
+// a thread's pressure badge red/orange everywhere else in the app) rather than introducing a
+// second, separately-configurable "what counts as high" — this is the exact "N independent
+// definitions of the same concept silently drift" problem this app has hit repeatedly (Overdue,
+// Stalled, temporal status) if a thread could show a "high" badge without counting toward
+// Critical Load, or vice versa.
+//
+// Operates on OAD.Due.activeThreadsRaw() (open/waiting only) — dormant/inbox/closed are excluded
+// by that function already, which is also true of the "Avg Pressure" calculation it replaces;
+// this isn't a new exclusion, just confirmed and preserved.
+OAD.Due.criticalLoad = function (threshold) {
+  var t = threshold != null ? threshold : ((OAD.Config && OAD.Config.pressureThresholds && OAD.Config.pressureThresholds.high) || 60);
+  var active = OAD.Due.activeThreads();
+  var critical = active.filter(function (th) { return th._score >= t; });
+  return { threshold: t, count: critical.length, threadUUIDs: critical.map(function (th) { return th.uuid; }) };
+};
+
+// The literal distribution kept available on demand alongside Critical Load's headline count, so
+// "8 threads at critical" doesn't collapse right back into a single soft-sounding figure — per
+// the ticket's explicit "keep a distribution available, don't just relabel the same average."
+// Tier boundaries are fixed (80+/50-79/20-49/0-19), not derived from pressureThresholds, since
+// they're describing four buckets for a histogram, not a single high/not-high decision the way
+// criticalLoad's threshold is.
+OAD.Due.pressureDistribution = function () {
+  var active = OAD.Due.activeThreads();
+  var tiers = { '80+': 0, '50-79': 0, '20-49': 0, '0-19': 0 };
+  active.forEach(function (th) {
+    var s = th._score;
+    if (s >= 80) tiers['80+']++;
+    else if (s >= 50) tiers['50-79']++;
+    else if (s >= 20) tiers['20-49']++;
+    else tiers['0-19']++;
+  });
+  return tiers;
+};
+
 // One call for the full dashboard pipeline. Scores the active list exactly once — getFocusUUID
 // and the suppression/bucket pipeline below all reuse this same scored array.
 OAD.Due.dashboardData = function (todayStr, in7Str) {

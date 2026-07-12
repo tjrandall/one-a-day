@@ -1,6 +1,33 @@
 window.OAD = window.OAD || {};
 OAD.Models = OAD.Models || {};
 
+// Pressure-propagation walk used by Thread.getPressure() below. A dormant (or inbox) blocker
+// must still show 0 for its OWN pressure everywhere it's read (dashboard row, TOAT, Focus Now —
+// a real, deliberate, pre-existing invariant) — but must NOT act as a full propagation dead end.
+// Per ticket-pressure-propagation-and-critical-load.md: confirmed against live data that
+// "VR&E Coordination -> CAC102 (dormant) -> Federal/Commercial tracks" was silently understated
+// because a dormant blocker's own getPressure() short-circuits to 0 before the transitive walk
+// even starts, so whatever THAT blocker is itself blocked by never reached what it blocks. This
+// walks PAST a dormant/inbox blocker directly into its own blockedBy closure instead of calling
+// its getPressure() (which would just return 0), so the real upstream pressure still surfaces on
+// whatever is actually still active and blocked.
+function _maxPropagatedBlockerPressure(blockers, visited) {
+  var max = 0;
+  (blockers || []).forEach(function (blocker) {
+    if (visited[blocker.uuid]) return;
+    visited[blocker.uuid] = true;
+    if (blocker.status === 'dormant' || blocker.status === 'inbox') {
+      var innerCtx = typeof blocker.getGraphContext === 'function' ? blocker.getGraphContext() : OAD.getGraphContext(blocker.id);
+      var innerMax = _maxPropagatedBlockerPressure(innerCtx.blockedBy, visited);
+      if (innerMax > max) max = innerMax;
+    } else {
+      var bp = typeof blocker.getPressure === 'function' ? blocker.getPressure(false, visited) : OAD.pressure(blocker, false, visited);
+      if (bp > max) max = bp;
+    }
+  });
+  return max;
+}
+
 class Thread {
   constructor(data) {
     Object.assign(this, data);
@@ -182,14 +209,7 @@ class Thread {
       var visited = _visited || {};
       visited[this.uuid] = true;
       var ctx = this.getGraphContext();
-      var maxBlockerPressure = 0;
-      (ctx.blockedBy || []).forEach(function (blocker) {
-        if (visited[blocker.uuid]) return;
-        var bp = typeof blocker.getPressure === 'function' 
-                 ? blocker.getPressure(false, visited) 
-                 : OAD.pressure(blocker, false, visited);
-        if (bp > maxBlockerPressure) maxBlockerPressure = bp;
-      });
+      var maxBlockerPressure = _maxPropagatedBlockerPressure(ctx.blockedBy, visited);
       if (maxBlockerPressure > capped) capped = maxBlockerPressure;
     }
 

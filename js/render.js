@@ -203,9 +203,8 @@ OAD.renderPersonaBar = function () {
   const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalled = OAD.Due.stalledThreads().length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
-  const scores  = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
-  const avg     = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-  const avgCls  = avg >= 60 ? 'pressure-high' : avg >= 30 ? 'pressure-mid' : 'pressure-low';
+  const criticalLoad = OAD.Due.criticalLoad();
+  const criticalCls  = criticalLoad.count > 0 ? 'pressure-high' : 'pressure-low';
   const p = OAD.DB.persona;
   const dl = p.life_context.hard_deadline ? OAD.formatDate(p.life_context.hard_deadline) : '—';
 
@@ -213,7 +212,7 @@ OAD.renderPersonaBar = function () {
     <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${open}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalled}</span></div>
     ${dormant ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormant}</span></div>` : ''}
-    <div class="persona-stat"><span class="text-muted text-sm">Avg Pressure</span><span class="val ${avgCls}">${avg}</span></div>
+    <div class="persona-stat" title="Threads at or above pressure ${criticalLoad.threshold}"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalLoad.count}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(p.life_context.pressure_level)}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(dl)}</span></div>
     <div style="margin-left:auto">
@@ -1715,11 +1714,10 @@ OAD.renderDailyView = function () {
   const persona = OAD.DB.persona;
   const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
-  const scores = due.active.map(t => t._score);
-  const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-  const avgCls = OAD.pressureClass(avgPressure);
-  const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
-  let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
+  const criticalLoad = OAD.Due.criticalLoad();
+  const pressureDist = OAD.Due.pressureDistribution();
+  const criticalCls = criticalLoad.count > 0 ? 'p-high' : 'p-low';
+  let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
     ? OAD.formatDate(persona.life_context.hard_deadline) 
     : '—';
     
@@ -1756,10 +1754,12 @@ OAD.renderDailyView = function () {
           '<div class="ds-metric-value stalled">' + OAD.Due.stalledThreads().length + '</div>' +
           '<div class="ds-metric-desc">Need attention</div>' +
         '</div>' +
-        '<div class="ds-metric-card">' +
-          '<div class="ds-metric-title">Avg Pressure</div>' +
-          '<div class="ds-metric-value ' + avgCls + '">' + avgPressure + '</div>' +
-          '<div class="ds-metric-desc">Level: ' + OAD.esc(pressureLevel) + '</div>' +
+        '<div class="ds-metric-card" role="button" title="' +
+          OAD.esc(pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79 · ' + pressureDist['20-49'] + ' at 20-49 · ' + pressureDist['0-19'] + ' at 0-19') +
+          '" onclick="OAD._activeListStatus=\'not-closed\'; OAD.renderListView();">' +
+          '<div class="ds-metric-title">Critical Load</div>' +
+          '<div class="ds-metric-value ' + criticalCls + '">' + criticalLoad.count + '</div>' +
+          '<div class="ds-metric-desc">' + pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79</div>' +
         '</div>' +
         ((window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && !['CCO', 'Director Alpha', 'Director Beta'].includes(window.OAD._demoRole)) ? '' :
         '<div class="ds-metric-card">' +
@@ -2703,9 +2703,8 @@ OAD.renderListView = function () {
   const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalledCount = OAD.Due.stalledThreads().length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
-  const scores = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').map(t => OAD.pressure(t));
-  const avgPressure = scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : 0;
-  const avgCls = avgPressure >= 60 ? 'pressure-high' : avgPressure >= 30 ? 'pressure-mid' : 'pressure-low';
+  const criticalLoad = OAD.Due.criticalLoad();
+  const criticalCls = criticalLoad.count > 0 ? 'pressure-high' : 'pressure-low';
   const persona = OAD.DB.persona;
   const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
     ? OAD.formatDate(persona.life_context.hard_deadline) 
@@ -2735,7 +2734,7 @@ OAD.renderListView = function () {
           <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${openCount}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalledCount}</span></div>
           ${dormantCount ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormantCount}</span></div>` : ''}
-          <div class="persona-stat"><span class="text-muted text-sm">Avg Pressure</span><span class="val ${avgCls}">${avgPressure}</span></div>
+          <div class="persona-stat" title="Threads at or above pressure ${criticalLoad.threshold}"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalLoad.count}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(pressureLevel)}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(hardDeadlineStr)}</span></div>
           <div style="margin-left:auto">

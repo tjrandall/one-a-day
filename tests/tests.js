@@ -140,6 +140,84 @@ OAD.test('pressure: enables connection does not add pressure', function () {
   OAD._assertEqual(OAD.pressure(t1), OAD.pressure(t2), 'enables should not change pressure');
 });
 
+// ── Tests: dormant pass-through in pressure propagation ──────────────
+// Per ticket-pressure-propagation-and-critical-load.md: a dormant blocker's own getPressure()
+// short-circuits to 0 before the transitive walk ever runs, so it previously acted as a full
+// propagation dead end — real, confirmed example: VR&E Coordination -> CAC102 (dormant) ->
+// Federal/Commercial tracks was silently understated. A dormant thread must keep showing 0 for
+// its OWN pressure (a separate, pre-existing, deliberate invariant), but must not block
+// propagation from reaching whatever it's blocked by.
+
+OAD.test('pressure: propagation walks THROUGH a dormant blocker to reach its own blocker, instead of stopping dead', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    // real, dormant -> blocks -> target
+    const realBlocker = { id: 701, uuid: 'pt-real', title: 'Real high-pressure blocker', status: 'open', priority: 'critical',
+      connections: [{ to_uuid: 'pt-dormant', to_label: 'Dormant middleman', edge_type: 'blocks' }] };
+    const dormantMiddleman = { id: 702, uuid: 'pt-dormant', title: 'Dormant middleman', status: 'dormant', priority: 'low',
+      connections: [{ to_uuid: 'pt-target', to_label: 'Target', edge_type: 'blocks' }] };
+    const target = { id: 703, uuid: 'pt-target', title: 'Target', status: 'open', priority: 'low', connections: [] };
+    OAD.DB.threads = [realBlocker, dormantMiddleman, target];
+
+    OAD._assertEqual(OAD.pressure(dormantMiddleman), 0, 'the dormant middleman must still show 0 for its own pressure — unchanged invariant');
+    OAD._assertEqual(OAD.pressure(target), OAD.pressure(realBlocker), 'the target must inherit the REAL blocker\'s pressure through the dormant middleman, not stop at 0');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('pressure: dormant pass-through works through inbox blockers too, and through multiple consecutive dormant/inbox links', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const realBlocker = { id: 711, uuid: 'pt2-real', title: 'Real blocker', status: 'open', priority: 'critical',
+      connections: [{ to_uuid: 'pt2-dormant1', to_label: 'Dormant 1', edge_type: 'blocks' }] };
+    const dormant1 = { id: 712, uuid: 'pt2-dormant1', title: 'Dormant 1', status: 'dormant', priority: 'low',
+      connections: [{ to_uuid: 'pt2-inbox', to_label: 'Inbox link', edge_type: 'blocks' }] };
+    const inboxLink = { id: 713, uuid: 'pt2-inbox', title: 'Inbox link', status: 'inbox', priority: 'low',
+      connections: [{ to_uuid: 'pt2-target', to_label: 'Target', edge_type: 'blocks' }] };
+    const target = { id: 714, uuid: 'pt2-target', title: 'Target', status: 'open', priority: 'low', connections: [] };
+    OAD.DB.threads = [realBlocker, dormant1, inboxLink, target];
+
+    OAD._assertEqual(OAD.pressure(target), OAD.pressure(realBlocker), 'pass-through must chain through consecutive dormant AND inbox links to reach the real blocker');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('pressure: dormant pass-through does not fire when the dormant blocker has no real blocker of its own', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    const dormantDeadEnd = { id: 721, uuid: 'pt3-dormant', title: 'Genuinely dead end', status: 'dormant', priority: 'critical', connections: [] };
+    const target = { id: 722, uuid: 'pt3-target', title: 'Target', status: 'open', priority: 'low',
+      connections: [{ to_uuid: 'pt3-dormant', to_label: 'Genuinely dead end', edge_type: 'blocked_by' }] };
+    OAD.DB.threads = [dormantDeadEnd, target];
+
+    const targetOwnScore = OAD.pressure(Object.assign({}, target, { connections: [] }));
+    OAD._assertEqual(OAD.pressure(target), targetOwnScore, 'a dormant blocker with nothing behind it must not inflate the target\'s pressure at all — priority alone (critical, on the dormant thread) must never leak through');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
+OAD.test('pressure: dormant pass-through is cycle-safe (a cycle running through a dormant node does not infinite-loop)', function () {
+  const originalThreads = OAD.DB.threads;
+  try {
+    // a (open) -> blocks -> b (dormant) -> blocks -> a (a genuine cycle through a dormant node)
+    const a = { id: 731, uuid: 'pt4-a', title: 'A', status: 'open', priority: 'low',
+      connections: [{ to_uuid: 'pt4-b', to_label: 'B', edge_type: 'blocks' }] };
+    const b = { id: 732, uuid: 'pt4-b', title: 'B', status: 'dormant', priority: 'low',
+      connections: [{ to_uuid: 'pt4-a', to_label: 'A', edge_type: 'blocks' }] };
+    OAD.DB.threads = [a, b];
+
+    let result;
+    OAD._assert((function () { try { result = OAD.pressure(a); return true; } catch (e) { return false; } })(),
+      'pressure() must not throw on a cyclic graph that passes through a dormant node');
+    OAD._assert(typeof result === 'number' && result >= 0 && result <= 100, 'pressure on a cycle member (through a dormant pass-through) must still be a valid 0-100 score');
+  } finally {
+    OAD.DB.threads = originalThreads;
+  }
+});
+
 // ── Tests: _runJuly2Cac102EdgeTypeFixV1 ──────────────────────────────
 
 OAD.test('_runJuly2Cac102EdgeTypeFixV1: backfills null edge_type matched by connection uuid, and unblocks propagation', function () {
@@ -4450,6 +4528,88 @@ OAD.test('exportDevDiagnostic: stale_closed_edges does not flag a closed thread 
 
     const parsed = JSON.parse(OAD.exportDevDiagnostic());
     OAD._assert(!parsed.stale_closed_edges.some(e => e.thread_uuid === 'stale-edge-closed2'), 'a closed thread blocking another closed thread is not stale — both sides are done');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+// ── Tests: OAD.Due.criticalLoad / pressureDistribution (ticket-pressure-propagation-and-critical-load.md) ──
+
+OAD.test('Due.criticalLoad: counts open/waiting threads at or above the threshold, defaulting to pressureThresholds.high', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const high = OAD.makeThread({ id: 1, uuid: 'cl-high', title: 'High', status: 'open', priority: 'critical', contingency_trigger_date: OAD.todayStr() });
+    const low = OAD.makeThread({ id: 2, uuid: 'cl-low', title: 'Low', status: 'open', priority: 'low' });
+    OAD.DB.threads = [high, low];
+
+    const highScore = OAD.pressure(high);
+    const result = OAD.Due.criticalLoad();
+    OAD._assertEqual(result.threshold, (OAD.Config.pressureThresholds && OAD.Config.pressureThresholds.high) || 60, 'default threshold must come from pressureThresholds.high, not a separate magic number');
+    if (highScore >= result.threshold) {
+      OAD._assert(result.threadUUIDs.includes('cl-high'), 'a thread at/above threshold must be counted');
+    }
+    OAD._assert(!result.threadUUIDs.includes('cl-low'), 'a low-priority thread with nothing else driving pressure must not be counted');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.criticalLoad: excludes dormant, inbox, and closed threads even at critical priority', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const dormantCritical = OAD.makeThread({ id: 1, uuid: 'cl-dormant', title: 'Dormant critical', status: 'dormant', priority: 'critical' });
+    const closedCritical = OAD.makeThread({ id: 2, uuid: 'cl-closed', title: 'Closed critical', status: 'closed', priority: 'critical' });
+    const inboxCritical = OAD.makeThread({ id: 3, uuid: 'cl-inbox', title: 'Inbox critical', status: 'inbox', priority: 'critical' });
+    OAD.DB.threads = [dormantCritical, closedCritical, inboxCritical];
+
+    const result = OAD.Due.criticalLoad(0); // threshold 0 so even a base score would count if included
+    OAD._assertEqual(result.count, 0, 'dormant/closed/inbox threads must never contribute to Critical Load, regardless of priority');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.criticalLoad: accepts an explicit threshold override', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'cl-override', title: 'Mid pressure', status: 'open', priority: 'high' });
+    OAD.DB.threads = [t];
+    const score = OAD.pressure(t);
+
+    const strict = OAD.Due.criticalLoad(score + 1);
+    OAD._assertEqual(strict.count, 0, 'a threshold above the thread\'s own score must exclude it');
+    const lenient = OAD.Due.criticalLoad(score);
+    OAD._assertEqual(lenient.count, 1, 'a threshold at or below the thread\'s own score must include it');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.pressureDistribution: buckets every active thread into exactly one of the four fixed tiers', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const t1 = OAD.makeThread({ id: 1, uuid: 'pd-1', title: 'T1', status: 'open', priority: 'low' });
+    const t2 = OAD.makeThread({ id: 2, uuid: 'pd-2', title: 'T2', status: 'waiting', priority: 'low' });
+    OAD.DB.threads = [t1, t2];
+
+    const dist = OAD.Due.pressureDistribution();
+    const total = dist['80+'] + dist['50-79'] + dist['20-49'] + dist['0-19'];
+    OAD._assertEqual(total, 2, 'every active thread must land in exactly one tier — the four tiers must sum to the active thread count');
+    OAD._assert('80+' in dist && '50-79' in dist && '20-49' in dist && '0-19' in dist, 'all four fixed tiers must always be present, even at zero');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Due.pressureDistribution: dormant/inbox/closed threads never appear in any tier', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const dormantHigh = OAD.makeThread({ id: 1, uuid: 'pd-dormant', title: 'Dormant', status: 'dormant', priority: 'critical' });
+    OAD.DB.threads = [dormantHigh];
+
+    const dist = OAD.Due.pressureDistribution();
+    const total = dist['80+'] + dist['50-79'] + dist['20-49'] + dist['0-19'];
+    OAD._assertEqual(total, 0, 'a dormant thread must not appear in any tier, even at critical priority');
   } finally {
     OAD.DB.threads = orig;
   }
