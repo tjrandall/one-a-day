@@ -24,7 +24,19 @@ The vision doc's own "Current State" section (as of its May 29 writing) says v10
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 12, 2026 (part 4)** — **Stalled is now a real, browsable dashboard section with actual thread cards — not just a stat count — closing the trust gap where an action-overdue-but-deadline-comfortable thread (real example: "ENV-125 Assignment — Week of July 6") was only visible by luck of winning the single Focus Now slot.**
+**Last updated: July 12, 2026 (part 5)** — **Critical Load headline could disagree with its own tier breakdown (reported live: headline read 16, "6 at 80+ · 16 at 50-79" summed to 22) — root cause was two independently-computed values sharing no source of truth.**
+
+## Critical Load: headline was never actually the sum of the tiers next to it
+
+`OAD.Due.criticalLoad()` counts threads at/above `pressureThresholds.high` (60, the same value used for badge coloring everywhere else — a deliberate choice from when Critical Load first shipped, to avoid a second "what counts as high" definition). `OAD.Due.pressureDistribution()` separately buckets into fixed tiers (80+/50-79/20-49/0-19) for a finer-grained histogram. Both were reasonable on their own, but the render layer displayed the *first* number as a headline directly above the *second* number's breakdown — and 60 vs. the tier boundary of 50 don't line up, so a thread scoring 50-59 counted toward the visible "50-79" tier but not toward the headline. Exactly the "two independent definitions of the same concept silently drift" failure mode this codebase has hit repeatedly (Overdue, Stalled, temporal status) — this time self-inflicted by the very feature built earlier tonight to fix an *older* instance of it.
+
+- **Fix**: the headline in all three render sites (`renderPersonaBar`, `renderDailyView`, `renderListView`) is now computed as `pressureDist['80+'] + pressureDist['50-79']` directly — derived from the exact tiers shown, not from a separately-thresholded count. Structurally can't drift again, not just coincidentally aligned. `OAD.Due.criticalLoad()` itself is untouched (still a valid general-purpose "count at/above X" primitive, its own tests unaffected) — it's simply no longer what the headline reads from.
+- Tooltip text updated to say "at or above pressure 50" (matching what's actually being summed) instead of referencing the old 60 threshold.
+- **1 new DOM regression test**, using real computed pressures from mock threads (not assumed scores) — renders all three surfaces and asserts each headline equals `dist['80+'] + dist['50-79']` for whatever the real distribution turns out to be.
+- Verified against the live export: headline now reads 28, tier breakdown reads "12 at 80+ · 16 at 50-79" (12+16=28) — exact match.
+- 293 tests passing, same 6 pre-existing unrelated baseline failures.
+
+**Previously, July 12, 2026 (part 4)** — **Stalled is now a real, browsable dashboard section with actual thread cards — not just a stat count — closing the trust gap where an action-overdue-but-deadline-comfortable thread (real example: "ENV-125 Assignment — Week of July 6") was only visible by luck of winning the single Focus Now slot.**
 
 ## Stalled: real thread cards, not just a bigger number
 

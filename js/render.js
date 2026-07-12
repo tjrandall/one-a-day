@@ -203,8 +203,15 @@ OAD.renderPersonaBar = function () {
   const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalled = OAD.Due.stalledThreads().length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
-  const criticalLoad = OAD.Due.criticalLoad();
-  const criticalCls  = criticalLoad.count > 0 ? 'pressure-high' : 'pressure-low';
+  // Critical Load is deliberately derived FROM pressureDistribution's own tiers (80+ and
+  // 50-79), not from a separately-thresholded count — the two used to be computed independently
+  // (a >=60 threshold headline next to an >=50 tier breakdown), which meant the number shown
+  // here could legitimately disagree with the "N at 80+ / N at 50-79" breakdown shown elsewhere
+  // for the exact same metric (caught via a live report: headline read 16, tiers summed to 22).
+  // Deriving one from the other makes that drift structurally impossible, not just unlikely.
+  const pressureDist = OAD.Due.pressureDistribution();
+  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
+  const criticalCls  = criticalCount > 0 ? 'pressure-high' : 'pressure-low';
   const p = OAD.DB.persona;
   const dl = p.life_context.hard_deadline ? OAD.formatDate(p.life_context.hard_deadline) : '—';
 
@@ -212,7 +219,7 @@ OAD.renderPersonaBar = function () {
     <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${open}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalled}</span></div>
     ${dormant ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormant}</span></div>` : ''}
-    <div class="persona-stat" title="Threads at or above pressure ${criticalLoad.threshold}"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalLoad.count}</span></div>
+    <div class="persona-stat" title="Threads at or above pressure 50 (${pressureDist['80+']} at 80+, ${pressureDist['50-79']} at 50-79)"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalCount}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(p.life_context.pressure_level)}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(dl)}</span></div>
     <div style="margin-left:auto">
@@ -1733,9 +1740,14 @@ OAD.renderDailyView = function () {
   const persona = OAD.DB.persona;
   const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
-  const criticalLoad = OAD.Due.criticalLoad();
+  // Critical Load is derived FROM the pressureDistribution tiers shown right below it (80+ and
+  // 50-79), not from an independently-thresholded count — the two used to disagree (a >=60
+  // threshold headline next to an >=50 tier breakdown), caught via a live report: headline read
+  // 16, the visible "6 at 80+ · 16 at 50-79" breakdown summed to 22. Deriving one from the other
+  // makes that drift structurally impossible, not just unlikely.
   const pressureDist = OAD.Due.pressureDistribution();
-  const criticalCls = criticalLoad.count > 0 ? 'p-high' : 'p-low';
+  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
+  const criticalCls = criticalCount > 0 ? 'p-high' : 'p-low';
   let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
     ? OAD.formatDate(persona.life_context.hard_deadline) 
     : '—';
@@ -1777,7 +1789,7 @@ OAD.renderDailyView = function () {
           OAD.esc(pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79 · ' + pressureDist['20-49'] + ' at 20-49 · ' + pressureDist['0-19'] + ' at 0-19') +
           '" onclick="OAD._activeListStatus=\'not-closed\'; OAD.renderListView();">' +
           '<div class="ds-metric-title">Critical Load</div>' +
-          '<div class="ds-metric-value ' + criticalCls + '">' + criticalLoad.count + '</div>' +
+          '<div class="ds-metric-value ' + criticalCls + '">' + criticalCount + '</div>' +
           '<div class="ds-metric-desc">' + pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79</div>' +
         '</div>' +
         ((window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && !['CCO', 'Director Alpha', 'Director Beta'].includes(window.OAD._demoRole)) ? '' :
@@ -2723,11 +2735,15 @@ OAD.renderListView = function () {
   const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
   const stalledCount = OAD.Due.stalledThreads().length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
-  const criticalLoad = OAD.Due.criticalLoad();
-  const criticalCls = criticalLoad.count > 0 ? 'pressure-high' : 'pressure-low';
+  // Same derivation as renderPersonaBar/renderDailyView -- Critical Load is the sum of the
+  // pressureDistribution '80+' and '50-79' tiers, not an independently-thresholded count, so it
+  // can never disagree with the tier breakdown shown for the same metric elsewhere in the app.
+  const pressureDist = OAD.Due.pressureDistribution();
+  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
+  const criticalCls = criticalCount > 0 ? 'pressure-high' : 'pressure-low';
   const persona = OAD.DB.persona;
-  const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline) 
-    ? OAD.formatDate(persona.life_context.hard_deadline) 
+  const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
+    ? OAD.formatDate(persona.life_context.hard_deadline)
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
 
@@ -2754,7 +2770,7 @@ OAD.renderListView = function () {
           <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${openCount}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalledCount}</span></div>
           ${dormantCount ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormantCount}</span></div>` : ''}
-          <div class="persona-stat" title="Threads at or above pressure ${criticalLoad.threshold}"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalLoad.count}</span></div>
+          <div class="persona-stat" title="Threads at or above pressure 50 (${pressureDist['80+']} at 80+, ${pressureDist['50-79']} at 50-79)"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalCount}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(pressureLevel)}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(hardDeadlineStr)}</span></div>
           <div style="margin-left:auto">

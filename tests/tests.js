@@ -4790,6 +4790,62 @@ OAD.test('Due.pressureDistribution: dormant/inbox/closed threads never appear in
   }
 });
 
+OAD.test('renderPersonaBar/renderListView/renderDailyView: rendered Critical Load headline always equals the sum of the 80+ and 50-79 tiers it displays (regression — headline read 16, tiers summed to 22)', function () {
+  // Real reported case: the headline used to be an independently-thresholded count (>=60,
+  // pressureThresholds.high) shown next to a tier breakdown with a different boundary (>=50,
+  // pressureDistribution's own fixed tiers) -- the two could legitimately disagree, and did.
+  // Deriving the headline directly from the same tiers makes that structurally impossible; this
+  // locks it in across all three render sites that show the metric, using whatever real
+  // pressures the mock threads land on rather than assuming a specific score.
+  const origThreads = OAD.DB.threads;
+  const origPersona = OAD.DB.persona;
+  const panel = document.getElementById('detail-content');
+  const bar = document.getElementById('persona-bar');
+  const originalPanelHTML = panel ? panel.innerHTML : '';
+  const originalBarHTML = bar ? bar.innerHTML : '';
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'crit-headline-1', title: 'Critical one', status: 'open', priority: 'critical', contingency_trigger_date: OAD.todayStr() }),
+      OAD.makeThread({ id: 2, uuid: 'crit-headline-2', title: 'Critical two', status: 'waiting', priority: 'high' }),
+      OAD.makeThread({ id: 3, uuid: 'crit-headline-3', title: 'Low pressure', status: 'open', priority: 'low' })
+    ];
+    OAD.DB.persona = { name: 'Test', life_context: { pressure_level: 'moderate', hard_deadline: null } };
+
+    const dist = OAD.Due.pressureDistribution();
+    const expected = String(dist['80+'] + dist['50-79']);
+
+    if (bar) {
+      OAD.renderPersonaBar();
+      const statValues = Array.from(bar.querySelectorAll('.persona-stat')).find(function (el) {
+        return el.textContent.indexOf('Critical Load') !== -1;
+      });
+      OAD._assert(statValues !== undefined, 'renderPersonaBar should render a Critical Load stat');
+      OAD._assertEqual(statValues.querySelector('.val').textContent, expected, 'renderPersonaBar headline must equal dist[80+] + dist[50-79]');
+    }
+
+    if (panel) {
+      OAD.renderListView();
+      const listStat = Array.from(panel.querySelectorAll('.persona-stat')).find(function (el) {
+        return el.textContent.indexOf('Critical Load') !== -1;
+      });
+      OAD._assert(listStat !== undefined, 'renderListView should render a Critical Load stat');
+      OAD._assertEqual(listStat.querySelector('.val').textContent, expected, 'renderListView headline must equal dist[80+] + dist[50-79]');
+
+      OAD.renderDailyView();
+      const cards = Array.from(panel.querySelectorAll('.ds-metric-card')).find(function (el) {
+        return el.textContent.indexOf('Critical Load') !== -1;
+      });
+      OAD._assert(cards !== undefined, 'renderDailyView should render a Critical Load metric card');
+      OAD._assertEqual(cards.querySelector('.ds-metric-value').textContent, expected, 'renderDailyView headline must equal dist[80+] + dist[50-79]');
+    }
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.persona = origPersona;
+    if (panel) panel.innerHTML = originalPanelHTML;
+    if (bar) bar.innerHTML = originalBarHTML;
+  }
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();
