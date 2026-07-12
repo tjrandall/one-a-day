@@ -24,7 +24,21 @@ The vision doc's own "Current State" section (as of its May 29 writing) says v10
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 12, 2026 (part 3)** — **A second, independent occurrence of the "corrected edge silently duplicates back" bug, found in the export/import round-trip itself, not in the auto-dependency engine. Plus: the deeper `enables` chain (Job Applications → specific Tracks) that was keeping "Full-Time (W-2) Employment" pinned at 30 despite real upstream pressure is now fixed.**
+**Last updated: July 12, 2026 (part 4)** — **Stalled is now a real, browsable dashboard section with actual thread cards — not just a stat count — closing the trust gap where an action-overdue-but-deadline-comfortable thread (real example: "ENV-125 Assignment — Week of July 6") was only visible by luck of winning the single Focus Now slot.**
+
+## Stalled: real thread cards, not just a bigger number
+
+User report: a thread 2 days late on its own `next_action_date`, pressure 100, showed in Focus Now but nowhere else — not Overdue Tasks, not This Week. Confirmed this is not Focus Now "pulling" anything from other widgets (verified directly: the thread is present and unsuppressed in the same shared active-thread pool every widget reads from) — it's that no *bucket* in the main dashboard covers "next_action_date has passed, but deadline hasn't." Overdue Tasks is deliberately deadline-only (`ticket-overdue-filter-fix.md`, to stop `waiting` threads' normal ball-in-their-court staleness from flooding it with ~20 false positives) and This Week only shows *future* next_action dates — so a past-due action with a comfortable deadline has no home in either.
+
+`OAD.Due.stalledThreads()` already existed for exactly this gap (its own header comment cites this same thread, ENV-125, as the original motivating example from an earlier session) — but it only ever fed a small "Stalled: N" stat card, not a real section. Explicitly **not** widening Overdue Tasks' deadline-only definition to absorb this — that would re-blend the two concepts the earlier ticket deliberately separated to kill those false positives.
+
+- **`renderDailyView`** (`js/render.js`) now renders a genuine `.ds-bucket-stalled` section — same card treatment (pressure badge, title, next action, "Nd ago" meta) as Overdue Tasks and Due Today, sourced from `OAD.Due.stalledThreads()` and scored via the same `Object.assign({}, t, {_score: ...})` pattern every other bucket uses, so ordering and pressure display match exactly.
+- **Distinct badge, not reused "⚠ OVERDUE" text** — a stalled row shows "⏸ STALLED" (own color, `--stalled`), not the Overdue Tasks badge. Reusing "OVERDUE" here would have recreated the exact trust problem being fixed: a row visually claiming a deadline had passed when it hadn't.
+- Verified live against the real export: the Stalled section renders 24 real cards including ENV-125 with its correct "2d ago" meta and STALLED badge; confirmed ENV-125 does NOT also appear in Overdue Tasks.
+- 1 new DOM-level regression test (`renderDailyView` rendered against a mock thread shaped exactly like ENV-125 — past next_action_date, future deadline — asserting it appears as a real card in `.ds-bucket-stalled` and never in `.ds-bucket-overdue`).
+- 292 tests passing, same 6 pre-existing unrelated baseline failures.
+
+**Previously, July 12, 2026 (part 3)** — **A second, independent occurrence of the "corrected edge silently duplicates back" bug, found in the export/import round-trip itself, not in the auto-dependency engine. Plus: the deeper `enables` chain (Job Applications → specific Tracks) that was keeping "Full-Time (W-2) Employment" pinned at 30 despite real upstream pressure is now fixed.**
 
 ## Deeper `enables` chain fixed: real pressure now reaches Full-Time (W-2) Employment
 

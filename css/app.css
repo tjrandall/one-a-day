@@ -1166,6 +1166,12 @@ button.success:hover { opacity: .88; }
   opacity: 0.85;
 }
 .ds-row-q4:hover { opacity: 1; }
+/* Deliberately its own color, not reused from overdue/today -- Stalled means "my own next
+   action has drifted past," a genuinely different concept from a passed deadline (overdue) or
+   a same-day action (today), and the two were kept explicitly separate by design tonight. */
+.ds-row-stalled {
+  border-left: 4px solid var(--stalled);
+}
 
 .ds-row-main { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; }
 .ds-row-text { flex: 1; min-width: 0; }

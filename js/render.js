@@ -1425,7 +1425,12 @@ OAD.renderDailyView = function () {
     // would read as a bug in the fix itself.
     const isDeadlineOverdue = context === 'overdue' && OAD.isDeadlineOverdue(t);
 
-    if (isDeadlineOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE (DEADLINE)</span>';
+    // A row in the 'stalled' context gets its own badge, not the "⚠ OVERDUE" text Overdue Tasks
+    // uses — reusing that text here would visually claim the exact thing Overdue Tasks exists to
+    // say ("your deadline passed"), for a row that explicitly does NOT belong in that bucket.
+    // Keeping the badge language distinct is the whole point of keeping the two lists separate.
+    if (context === 'stalled') badge = '<span class="ds-status-badge" style="color:var(--stalled);border:1px solid var(--stalled);background:rgba(230,73,128,0.1)" aria-label="Stalled">⏸ STALLED</span>';
+    else if (isDeadlineOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE (DEADLINE)</span>';
     else if (isOverdue) badge = '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>';
     else if (isToday) badge = '<span class="ds-status-badge ds-badge-today" aria-label="Due today">▶ TODAY</span>';
 
@@ -1541,6 +1546,20 @@ OAD.renderDailyView = function () {
   const todayItems   = todayThreads.map(t => threadRow(t, 'today'));
   const weekItems    = weekThreads.map(t => threadRow(t, 'week'));
   const activeItems  = activeThreads.map(t => threadRow(t, 'active'));
+
+  // Real, browsable section for OAD.Due.stalledThreads() -- not just the "Stalled: N" stat card.
+  // Per user report: a thread whose next_action_date has drifted into the past but whose
+  // deadline is still comfortable (so it correctly does NOT belong in Overdue Tasks, which is
+  // deliberately deadline-only) was otherwise only visible if it happened to win the single
+  // Focus Now slot -- invisible again the moment something else outranked it. Scored the same
+  // way OAD.Due.activeThreads() scores every other bucket here, so the pressure badge and
+  // ordering match what every other section already does; deliberately NOT folded into Overdue
+  // Tasks itself -- that would re-blend deadline-overdue and action-overdue, the exact
+  // distinction ticket-overdue-filter-fix.md deliberately separated to kill ~20 false positives
+  // from `waiting` threads.
+  const stalledItems = OAD.Due.stalledThreads().map(function (t) {
+    return threadRow(Object.assign({}, t, { _score: typeof t.getPressure === 'function' ? t.getPressure() : OAD.pressure(t) }), 'stalled');
+  });
 
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
   const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
@@ -1779,11 +1798,12 @@ OAD.renderDailyView = function () {
         '<div class="ds-col-right">' +
           bucket('overdue', '⚠', 'Overdue Tasks', overdueItems) +
           bucket('today',   '▶', 'Due Today',   todayItems)   +
+          bucket('stalled', '⏸', 'Stalled', stalledItems) +
           bucket('habits',  '✦', 'Active Habits', habitItems)   +
           bucket('cadences','📅', 'Upcoming Cadences', cadenceItems) +
           bucket('week',    '○', 'This Week', weekItems)   +
           bucket('active',  '◇', 'Active — no date set', activeItems) +
-          (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length && !habitItems.length && !cadenceItems.length
+          (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length && !habitItems.length && !cadenceItems.length && !stalledItems.length
             ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, due today, or active.</div>'
             : '') +
           (dormantThreads.length

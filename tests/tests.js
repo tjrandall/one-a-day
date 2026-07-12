@@ -2693,6 +2693,48 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
   }
 });
 
+OAD.test('renderDailyView: Stalled is a real, browsable section with thread cards, not just a count (regression — ENV-125 report)', function () {
+  // Real reported case: an open thread whose next_action_date has drifted into the past but
+  // whose deadline is still comfortable was invisible everywhere except by luck of winning the
+  // single Focus Now slot -- not in Overdue Tasks (deliberately deadline-only, per
+  // ticket-overdue-filter-fix.md) and not in This Week (which only shows FUTURE next_action
+  // dates). OAD.Due.stalledThreads() already found these; this locks in that renderDailyView
+  // actually surfaces them as clickable cards, not just a small stat number.
+  const originalThreads = OAD.DB.threads;
+  const panel = document.getElementById('detail-content');
+  const originalHTML = panel ? panel.innerHTML : '';
+  try {
+    const todayStr = OAD.todayStr();
+    const twoDaysAgo = new Date(); twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+    const twoDaysAgoStr = _localDateStr(twoDaysAgo);
+    const inThreeDays = new Date(); inThreeDays.setDate(inThreeDays.getDate() + 3);
+    const inThreeDaysStr = _localDateStr(inThreeDays);
+
+    OAD.DB.threads = [
+      OAD.makeThread({
+        id: 501, uuid: 'stalled-regression-1', title: 'Stalled but not overdue (deadline comfortable)',
+        status: 'open', priority: 'high', life_area: 'Education',
+        next_action_date: twoDaysAgoStr, deadline: inThreeDaysStr
+      })
+    ];
+
+    OAD.renderDailyView();
+
+    OAD._assert(panel !== null, 'panel should exist');
+    const stalledSection = panel.querySelector('.ds-bucket-stalled');
+    OAD._assert(stalledSection !== null, 'a real .ds-bucket-stalled section should render, not just a stat number');
+    OAD._assert(stalledSection.querySelector('.ds-row-stalled') !== null, 'the stalled thread should render as an actual clickable card');
+    OAD._assert(stalledSection.textContent.indexOf('Stalled but not overdue') !== -1, 'the stalled card should show the real thread title');
+
+    const overdueSection = panel.querySelector('.ds-bucket-overdue');
+    OAD._assert(!overdueSection || overdueSection.textContent.indexOf('Stalled but not overdue') === -1,
+      'a thread with a comfortable deadline must never also appear in Overdue Tasks -- the two concepts stay separate by design');
+  } finally {
+    if (panel) panel.innerHTML = originalHTML;
+    OAD.DB.threads = originalThreads;
+  }
+});
+
 OAD.test('strict ID-driven engine and focus selection excludes blocked threads', function () {
   const originalThreads = OAD.DB.threads;
   try {
