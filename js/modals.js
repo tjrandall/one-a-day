@@ -1366,6 +1366,12 @@ OAD._confirmImport = function () {
   alert(msg + '.');
 };
 
+// Unreferenced by any UI element as of ticket-dev-diagnostic-export.md — the Settings modal's
+// export button now calls OAD._downloadDevExport() below instead. Kept, not deleted: this is
+// still exactly the correct shape for a real future user-facing export (moat-safe field
+// exclusions, already tested), the starting point the Product Vision Document's eventual
+// narrower export should build from when there's ever a real second user — not this ticket's
+// concern, but worth not losing.
 OAD._downloadExport = function () {
   const json = OAD.exportThreads();
   const blob = new Blob([json], { type: 'application/json' });
@@ -1373,6 +1379,19 @@ OAD._downloadExport = function () {
   const a    = document.createElement('a');
   a.href     = url;
   a.download = 'one-a-day-' + OAD.todayStr() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+OAD._downloadDevExport = function () {
+  const json = OAD.exportDevDiagnostic();
+  const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'one-a-day-DEV-' + OAD.todayStr() + '.json';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1542,13 +1561,13 @@ OAD.openSettingsModal = function () {
     </div>
     ` : ''}
     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
-      <div style="font-size:13px;font-weight:600;margin-bottom:4px">Export Threads</div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px">DEV Export (${count} thread${count !== 1 ? 's' : ''})</div>
       <p class="text-muted text-sm" style="margin-bottom:10px">
-        Flat JSON of all ${count} thread${count !== 1 ? 's' : ''}: title, status, priority, area, pressure, next action, by-when, closing condition, and full evolution log.
-        Graph edges, assumptions, and counsel history are excluded.
+        Internal QA/diagnostic export — title, status, priority, area, pressure, next action, deadline, closing condition, graph edges, assumption content, and evolution log, plus computed application state (temporal status per thread, data hygiene warnings, CHE health alerts, TOAT/Focus Now candidate detail, This Week membership, stale closed-thread edges).
+        This is not the future real user-facing export — see ticket-dev-diagnostic-export.md.
       </p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="secondary" style="font-size:13px" onclick="OAD._downloadExport()">↓ Export JSON</button>
+        <button class="secondary" style="font-size:13px" onclick="OAD._downloadDevExport()">↓ DEV Export JSON</button>
         <button class="secondary" style="font-size:13px" onclick="OAD.closeModal();OAD.openImportModal()">↑ Import JSON</button>
       </div>
     </div>

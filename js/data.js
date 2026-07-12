@@ -193,7 +193,12 @@ OAD._RUNWAY_REPRESENT_DAYS = 7;
 OAD.acknowledgeRunwayRisk = function (trackUuid) {
   const track = OAD.getThreadByUUID(trackUuid);
   if (!track) return null;
-  const reprompt = new Date();
+  // setHours(0,0,0,0) BEFORE the date-string extraction — the established safe pattern
+  // (OAD.todayStr) — found broken here (missing the reset) while investigating a real test
+  // failure during ticket-dev-diagnostic-export.md work: without it, acknowledging a Runway
+  // Risk warning in the evening (roughly after 8pm Eastern) computes a snooze date that's
+  // already a UTC day ahead of local reality, silently shortening the real snooze window.
+  const reprompt = new Date(); reprompt.setHours(0, 0, 0, 0);
   reprompt.setDate(reprompt.getDate() + OAD._RUNWAY_REPRESENT_DAYS);
   track.runway_ack_until = reprompt.toISOString().slice(0, 10);
   OAD.addEvolution(track.id, 'Runway Risk acknowledged — will re-present around ' + OAD.formatDate(track.runway_ack_until) + ' if still at-risk.');
@@ -917,6 +922,156 @@ OAD.exportThreads = function () {
     cadences:           cadences,
     deleted_edge_uuids: []
   }, null, 2);
+};
+
+// ── DEV-only diagnostic export ──────────────────────────────────────────
+// Per ticket-dev-diagnostic-export.md: this is an internal QA tool, explicitly NOT the future
+// real user-facing export. The moat-safe exclusions in OAD.exportThreads() above (no
+// current_assumption/evolution_log/ai_insights) are correct THERE and deliberately NOT
+// preserved here — those fields exist specifically so this export can be used to verify Phase 2
+// backfill work and thread history without guessing. When there's ever a real second user, build
+// the separate, deliberately narrow, moat-protecting export from the Product Vision Document at
+// that point — this function is not a draft of that, and must not be reused for it.
+//
+// Everything below is computed fresh at export time (same principle as OAD.TemporalStatus
+// itself: pure computation over current state, never a new persisted flag) using the exact same
+// `now` moment and the exact same production functions the live UI calls — never a hand-rolled
+// reimplementation, which is the entire reason this ticket exists (today's verification loop
+// kept requiring external Python reimplementations of app logic instead of reading the app's
+// actual output).
+
+// TOAT candidate detail — tier 2 (overdueOpen) and tier 3 (overdueWaiting), each sorted by
+// thread id (TOAT's real tie-break, confirmed in ticket-stalled-metric-fix.md — NOT
+// next_action_date, despite an earlier brief's incorrect claim that it was), with a `won` flag
+// on whichever one OAD.getDailyToat() actually picked. Does not call OAD.getDailyToat() to
+// build the candidate list itself (that function has a "sticky today" persistence side effect
+// via OAD.DB.toat) — only to identify the real winner, so the diagnostic reflects what the UI
+// is actually showing right now without also mutating state as a side effect of exporting.
+OAD._toatDiagnostic = function () {
+  var now = new Date();
+  var allThreads = OAD.getVisibleThreads() || [];
+  var winner = OAD.getDailyToat();
+
+  var tier2 = allThreads.filter(function (t) { return t.status === 'open' && OAD.TemporalStatus.isStalled(t, now); })
+    .slice().sort(function (a, b) { return a.id - b.id; });
+  var tier3 = allThreads.filter(function (t) { return t.status === 'waiting' && OAD.TemporalStatus.isStalled(t, now); })
+    .slice().sort(function (a, b) { return a.id - b.id; });
+
+  function toCandidate(t, tier, rank) {
+    return { uuid: t.uuid, title: t.title, tier: tier, rank_in_tier: rank, won: !!winner && winner.uuid === t.uuid };
+  }
+
+  var candidates = tier2.map(function (t, i) { return toCandidate(t, 2, i + 1); })
+    .concat(tier3.map(function (t, i) { return toCandidate(t, 3, i + 1); }));
+
+  return {
+    winner: winner ? { uuid: winner.uuid, title: winner.title, tier: tier2.some(function (t) { return t.uuid === winner.uuid; }) ? 2 : (tier3.some(function (t) { return t.uuid === winner.uuid; }) ? 3 : null) } : null,
+    candidates: candidates
+  };
+};
+
+// Focus Now candidate detail — the real winner (via OAD.selectFocusThread(), zero
+// reimplementation of its 3-tier blocked/waiting-actioned fallback logic) plus the top 5 of the
+// exact same dueNow candidate pool it draws from, by pressure — so a pick can be sanity-checked
+// as "genuinely highest among what was actually eligible," not just "highest in the whole
+// backlog" (which would include threads not even due yet).
+OAD._focusNowDiagnostic = function () {
+  var todayStr = OAD.todayStr();
+  var active = OAD.Due.activeThreads();
+  var winner = OAD.selectFocusThread(active);
+  var dueNow = active.filter(function (t) { return t.next_action_date && t.next_action_date <= todayStr; })
+    .slice().sort(function (a, b) { return b._score - a._score; });
+
+  return {
+    winner: winner ? { uuid: winner.uuid, title: winner.title, pressure: winner._score != null ? winner._score : OAD.pressure(winner) } : null,
+    top5: dueNow.slice(0, 5).map(function (t) { return { uuid: t.uuid, title: t.title, pressure: t._score }; })
+  };
+};
+
+// This Week — plain-text definition (confirmed, never previously written down anywhere,
+// per ticket-flowqueue-temporal-and-schema.md Phase 1's unresolved flag) plus actual live
+// membership, both from the real OAD.Due.dashboardData() call the Daily/Today/Matrix views use.
+OAD._thisWeekDiagnostic = function () {
+  var todayStr = OAD.todayStr();
+  var in7Dt = new Date(); in7Dt.setHours(0, 0, 0, 0); in7Dt.setDate(in7Dt.getDate() + 7);
+  var in7Str = in7Dt.toISOString().slice(0, 10);
+  var due = OAD.Due.dashboardData(todayStr, in7Str);
+
+  return {
+    definition: 'next_action_date > today AND next_action_date <= today+7 days (OAD.Due.buckets().week, js/due.js) — deliberately keyed on next_action_date only, never deadline. Applied to the suppression-adjusted active-thread list (parent/child folding rules apply), not the raw thread table.',
+    member_uuids: due.week.map(function (t) { return t.uuid; })
+  };
+};
+
+// Any closed thread that still has an outbound edge (any type, not just 'blocks' — the ticket's
+// own wording says "or other") pointing at a thread that is not closed. A closed thread
+// "blocking" active work is a real graph-integrity inconsistency, not just visual noise — either
+// the block should have been resolved when the thread closed, or the relationship shouldn't have
+// existed in the first place. Real, currently-live example this catches: apex-sweep-cadence-2026
+// ("APEX Guidance → Weekly M/W/F Sweep Cadence," closed) still blocking 3 open/waiting threads.
+OAD._staleClosedEdges = function () {
+  var byUUID = {};
+  (OAD.DB.threads || []).forEach(function (t) { byUUID[t.uuid] = t; });
+  var stale = [];
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.status !== 'closed') return;
+    (t.connections || []).forEach(function (c) {
+      if (!c.to_uuid) return;
+      var target = byUUID[c.to_uuid];
+      if (target && target.status !== 'closed') {
+        stale.push({
+          thread_uuid: t.uuid, thread_title: t.title,
+          edge_type: c.edge_type,
+          to_uuid: c.to_uuid, to_title: target.title, to_status: target.status
+        });
+      }
+    });
+  });
+  return stale;
+};
+
+OAD.exportDevDiagnostic = function () {
+  var base = JSON.parse(OAD.exportThreads());
+  var now = new Date();
+
+  // CHE alerts — run fresh (computed, not stale/stored), across every CHE-XXX rule, not just 006.
+  OAD.runCHE();
+  var cheAlerts = (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; })
+    .map(function (a) {
+      return { code: a.type, thread_uuid: a.thread_uuid || null, severity: a.severity, message: a.description };
+    });
+
+  var threadsByUUID = {};
+  (OAD.DB.threads || []).forEach(function (t) { threadsByUUID[t.uuid] = t; });
+
+  base.dev_export = true;
+  base.note = 'DEV-ONLY DIAGNOSTIC EXPORT — internal QA tool. Not the real user-facing export; not the future moat-protecting minimal export described in the Product Vision Document. Includes current_assumption/evolution_log/ai_insights and computed application state (temporal status, hygiene warnings, CHE alerts, TOAT/Focus Now candidate detail, This Week membership, stale-edge detection) that the real export deliberately omits.';
+
+  base.threads.forEach(function (row) {
+    var real = threadsByUUID[row.uuid];
+    if (!real) return;
+    row.current_assumption = real.current_assumption || '';
+    row.evolution_log = real.evolution_log || [];
+    row.ai_insights = real.ai_insights || [];
+    row.computed_status = {
+      is_overdue: OAD.TemporalStatus.isOverdue(real, now),
+      is_due_today: OAD.TemporalStatus.isDueToday(real, now),
+      is_stalled: OAD.TemporalStatus.isStalled(real, now),
+      days_until_deadline: OAD.TemporalStatus.daysUntilDeadline(real, now),
+      days_since_next_action: OAD.TemporalStatus.daysSinceNextActionDate(real, now),
+      card_date_label: OAD.TemporalStatus.cardDateLabel(real, now)
+    };
+  });
+
+  base.data_hygiene_warnings = (OAD.DB.threads || [])
+    .reduce(function (all, t) { return all.concat(OAD.TemporalStatus.dataHygieneWarnings(t, now)); }, []);
+  base.che_alerts = cheAlerts;
+  base.toat_diagnostic = OAD._toatDiagnostic();
+  base.focus_now_diagnostic = OAD._focusNowDiagnostic();
+  base.this_week_diagnostic = OAD._thisWeekDiagnostic();
+  base.stale_closed_edges = OAD._staleClosedEdges();
+
+  return JSON.stringify(base, null, 2);
 };
 
 // ── Idea data model ───────────────────────────────────────────────────

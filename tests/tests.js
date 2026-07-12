@@ -186,7 +186,7 @@ OAD.test('pressure: capped at 100', function () {
     priority: 'critical',
     current_assumption: 'x',
     assumption_verified: false,
-    next_action_date: past.toISOString().slice(0, 10),
+    next_action_date: _localDateStr(past),
     connections: []
   });
   OAD._assertEqual(OAD.pressure(t), 100, 'pressure should cap at 100');
@@ -195,7 +195,7 @@ OAD.test('pressure: capped at 100', function () {
 OAD.test('pressure: contingency adds more pressure when closer (quadratic curve)', function () {
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
-    return dt.toISOString().slice(0, 10);
+    return _localDateStr(dt);
   };
   const base = { status: 'open', priority: 'low', connections: [] };
   const tNear = OAD.makeThread(Object.assign({}, base, { contingency_trigger_date: d(1) }));
@@ -732,7 +732,7 @@ OAD.test('checkInHabit: no → streak 0', function () {
 
 OAD.test('checkInHabit: consecutive yes from yesterday increments streak', function () {
   const yd = new Date(); yd.setHours(0, 0, 0, 0); yd.setDate(yd.getDate() - 1);
-  const yesterday = yd.toISOString().slice(0, 10);
+  const yesterday = _localDateStr(yd);
   const h = OAD.addHabit(OAD.makeHabit({
     title: 'Streak continue',
     current_streak: 3, longest_streak: 3,
@@ -753,7 +753,7 @@ OAD.test('checkInHabit: yes today twice does not double-count streak', function 
 
 OAD.test('checkInHabit: flip yes→no today undoes streak increment', function () {
   const yd = new Date(); yd.setHours(0, 0, 0, 0); yd.setDate(yd.getDate() - 1);
-  const yesterday = yd.toISOString().slice(0, 10);
+  const yesterday = _localDateStr(yd);
   const h = OAD.addHabit(OAD.makeHabit({
     title: 'Flip yes to no',
     current_streak: 2, longest_streak: 2,
@@ -781,7 +781,7 @@ OAD.test('deadlineState: onTrack true when sessions fit in remaining weeks', fun
 OAD.test('deadlineState: onTrack false and behindBy correct when behind', function () {
   const soon = new Date();
   soon.setDate(soon.getDate() + 7); // 1 week out
-  const t = OAD.makeThread({ deadline: soon.toISOString().slice(0, 10), effortEstimate: 5, effortLogged: 0, weeklyCommitment: 1 });
+  const t = OAD.makeThread({ deadline: _localDateStr(soon), effortEstimate: 5, effortLogged: 0, weeklyCommitment: 1 });
   const ds = OAD.deadlineState(t);
   OAD._assert(!ds.onTrack, 'should not be on track');
   OAD._assert(ds.behindBy >= 4, 'should be behind by at least 4 sessions');
@@ -805,7 +805,7 @@ OAD.test('deadlineState: no effortEstimate → onTrack true, sessionsRemaining n
 function _rrDate(weeksFromNow) {
   const d = new Date();
   d.setDate(d.getDate() + weeksFromNow * 7);
-  return d.toISOString().slice(0, 10);
+  return _localDateStr(d);
 }
 
 OAD.test('OAD.APPLICATION_STAGES is ordered applied -> screening -> interview -> offer', function () {
@@ -957,7 +957,7 @@ OAD.test('acknowledgeRunwayRisk: sets a 7-day snooze and logs an evolution entry
 
     const expected = new Date(before);
     expected.setDate(expected.getDate() + OAD._RUNWAY_REPRESENT_DAYS);
-    OAD._assertEqual(track.runway_ack_until, expected.toISOString().slice(0, 10), 'snooze should be exactly _RUNWAY_REPRESENT_DAYS out');
+    OAD._assertEqual(track.runway_ack_until, _localDateStr(expected), 'snooze should be exactly _RUNWAY_REPRESENT_DAYS out');
     OAD._assert(track.evolution_log.length > 0, 'should log an evolution entry');
     OAD._assert(track.evolution_log[track.evolution_log.length - 1].note.indexOf('Runway Risk acknowledged') !== -1, 'evolution note should mention acknowledgment');
   } finally {
@@ -971,8 +971,8 @@ OAD.test('_isRunwayRiskSnoozed: true while ack_until is in the future, false onc
     const future = new Date(); future.setDate(future.getDate() + 3);
     const past = new Date(); past.setDate(past.getDate() - 3);
 
-    const snoozed   = OAD.makeThread({ id: 851, uuid: 'rr-snoozed',   title: 'Snoozed',   runway_ack_until: future.toISOString().slice(0, 10) });
-    const expired    = OAD.makeThread({ id: 852, uuid: 'rr-expired',   title: 'Expired',    runway_ack_until: past.toISOString().slice(0, 10) });
+    const snoozed   = OAD.makeThread({ id: 851, uuid: 'rr-snoozed',   title: 'Snoozed',   runway_ack_until: _localDateStr(future) });
+    const expired    = OAD.makeThread({ id: 852, uuid: 'rr-expired',   title: 'Expired',    runway_ack_until: _localDateStr(past) });
     const neverAcked = OAD.makeThread({ id: 853, uuid: 'rr-neveracked', title: 'Never acked', runway_ack_until: null });
     OAD.DB.threads = [snoozed, expired, neverAcked];
 
@@ -994,7 +994,7 @@ OAD.test('calculateRunwayRisk stays unaware of acknowledgment — snoozing is di
     const fedCategory = { id: 862, uuid: 'rr-fed-cat-ack', title: 'Federal Job Applications', status: 'open',
       connections: [{ to_uuid: 'rr-fed-track-ack', edge_type: 'enables' }] };
     const future = new Date(); future.setDate(future.getDate() + 3);
-    const fedTrack = OAD.makeThread({ id: 863, uuid: 'rr-fed-track-ack', title: 'Federal — Snoozed Track', status: 'open', runway_ack_until: future.toISOString().slice(0, 10) });
+    const fedTrack = OAD.makeThread({ id: 863, uuid: 'rr-fed-track-ack', title: 'Federal — Snoozed Track', status: 'open', runway_ack_until: _localDateStr(future) });
     OAD.DB.threads = [goal, fedCategory, fedTrack];
 
     const risk = OAD.calculateRunwayRisk(goal.id);
@@ -1149,7 +1149,7 @@ OAD.test('pressure: deadline within 7 days not on track adds 30', function () {
   soon.setDate(soon.getDate() + 3);
   const t = OAD.makeThread({
     status: 'open', priority: 'low', connections: [],
-    deadline: soon.toISOString().slice(0, 10),
+    deadline: _localDateStr(soon),
     effortEstimate: 10, effortLogged: 0, weeklyCommitment: 1
   });
   OAD._assert(OAD.pressure(t) >= 30, 'deadline pressure should add >= 30');
@@ -1729,7 +1729,7 @@ OAD.test('calculateDayLoadScore: two entangled, genuinely overwhelming threads o
   try {
     const heavyDate = '2099-06-01';
     const easyDate = '2099-06-02';
-    const ctgSoon = (function () { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+    const ctgSoon = (function () { const d = new Date(); d.setDate(d.getDate() + 1); return _localDateStr(d); })();
 
     // Two critical/stalled threads, entangled with each other AND each facing an imminent
     // contingency — this is "two tasks and Underwater," not just "two tasks happen to be
@@ -1842,7 +1842,7 @@ OAD.test('nextCadenceDue: weekly-days with no days configured falls back to +7 d
 
 OAD.test('prevCadenceDue: weekly-days returns today when today matches a configured day', function () {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = _localDateStr(today);
   const prev = OAD.prevCadenceDue('weekly-days', [today.getDay()]);
   OAD._assertEqual(prev, todayStr, 'today should count as the most recent matching day');
 });
@@ -1914,7 +1914,7 @@ OAD.test('updateCadence: normalizes life_area on update', function () {
 });
 
 OAD.test('cadenceDoneThisPeriod: identifies if a cadence has been completed in the current period', function () {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = _localDateStr(new Date());
   const c = OAD.makeCadence({
     title: 'Done this period test',
     recurrence: 'weekly',
@@ -1943,7 +1943,7 @@ OAD.test('OAD.Due.isCadenceDueOn: excludes an already-completed-today cadence (r
   OAD._assert(OAD.Due.isCadenceDueOn(notDoneToday, todayStr), 'a genuinely undone cadence due today must still count');
 
   const future = new Date(); future.setDate(future.getDate() + 3);
-  const futureStr = future.toISOString().slice(0, 10);
+  const futureStr = _localDateStr(future);
   const dueLater = OAD.makeCadence({ title: 'Due later this week', recurrence: 'weekly', next_due: futureStr, last_completed: '1970-01-01' });
   OAD._assert(OAD.Due.isCadenceDueOn(dueLater, futureStr), 'a cadence genuinely due on a future day must count for that day');
   OAD._assert(!OAD.Due.isCadenceDueOn(dueLater, todayStr), 'that same cadence must not count for today, only its actual due date');
@@ -3144,7 +3144,7 @@ OAD.test('getFocusUUID: returns selectFocusThread\'s uuid when something is due 
     OAD._assertEqual(OAD.getFocusUUID(), dueNow.uuid, 'should match selectFocusThread when something is due now');
 
     const future = new Date(); future.setDate(future.getDate() + 3);
-    const upcoming = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Upcoming', status: 'open', priority: 'high', next_action_date: future.toISOString().slice(0, 10) });
+    const upcoming = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Upcoming', status: 'open', priority: 'high', next_action_date: _localDateStr(future) });
     OAD.DB.threads = [upcoming];
     OAD._assertEqual(OAD.getFocusUUID(), upcoming.uuid, 'should fall back to selectFutureFocusSuggestion when nothing is due now');
 
@@ -3160,7 +3160,7 @@ OAD.test('renderDailyView-style suppression pipeline: a child Focus Now would su
   try {
     const todayStr = OAD.todayStr();
     const in5 = new Date(); in5.setDate(in5.getDate() + 5);
-    const in5Str = in5.toISOString().slice(0, 10);
+    const in5Str = _localDateStr(in5);
 
     const parent = OAD.makeThread({ id: 1, uuid: 'parent-1', title: 'Parent project', status: 'open', priority: 'low' }); // no next_action_date of its own
     const child = OAD.makeThread({ id: 2, uuid: 'child-1', title: 'High-pressure child', status: 'stalled', priority: 'critical', parent_uuid: 'parent-1', next_action_date: in5Str });
@@ -3192,11 +3192,11 @@ OAD.test('renderDailyView-style suppression pipeline: This Week under-reporting 
   try {
     const todayStr = OAD.todayStr();
     const in2 = new Date(); in2.setDate(in2.getDate() + 2);
-    const in2Str = in2.toISOString().slice(0, 10);
+    const in2Str = _localDateStr(in2);
     const in5 = new Date(); in5.setDate(in5.getDate() + 5);
-    const in5Str = in5.toISOString().slice(0, 10);
+    const in5Str = _localDateStr(in5);
     const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
-    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const in7Str = _localDateStr(in7Dt);
 
     // Mirrors the real reported case exactly: HVAC Repair (P85) and VA Orthopedic Consult
     // (P82), each a child of an active parent with no next_action_date of its own, due a few
@@ -3245,9 +3245,9 @@ OAD.test('OAD.Due.dashboardData: two dateless active parents each with a high-pr
   try {
     const todayStr = OAD.todayStr();
     const in2 = new Date(); in2.setDate(in2.getDate() + 2);
-    const in2Str = in2.toISOString().slice(0, 10);
+    const in2Str = _localDateStr(in2);
     const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
-    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const in7Str = _localDateStr(in7Dt);
 
     // Mirrors the real reported case: HVAC Repair (P85) and VA Orthopedic Consult (P82), each
     // a child of an active parent with no next_action_date of its own, due a few days out —
@@ -3273,9 +3273,9 @@ OAD.test('OAD.Due.dashboardData: whatever getFocusUUID() picks, if due in [today
   try {
     const todayStr = OAD.todayStr();
     const in3 = new Date(); in3.setDate(in3.getDate() + 3);
-    const in3Str = in3.toISOString().slice(0, 10);
+    const in3Str = _localDateStr(in3);
     const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
-    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const in7Str = _localDateStr(in7Dt);
 
     const t1 = OAD.makeThread({ id: 1, uuid: 'consist-t1', title: 'Due today, wins focus', status: 'stalled', priority: 'critical', next_action_date: todayStr });
     const t2 = OAD.makeThread({ id: 2, uuid: 'consist-t2', title: 'Due later this week', status: 'open', priority: 'medium', next_action_date: in3Str });
@@ -3300,11 +3300,11 @@ OAD.test('OAD.Due.dashboardData: .overdue is deadline-based end-to-end — waiti
   try {
     const todayStr = OAD.todayStr();
     const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
-    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const in7Str = _localDateStr(in7Dt);
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
     const future = new Date(); future.setDate(future.getDate() + 30);
-    const futureStr = future.toISOString().slice(0, 10);
+    const futureStr = _localDateStr(future);
 
     // Real reproduction of ticket-overdue-filter-fix.md against a mirror of the 7/11 export:
     // a waiting thread whose next_action_date is stale (normal — blocked on someone else) must
@@ -3335,11 +3335,11 @@ OAD.test('OAD.Due.dashboardData: a deadline-overdue child of an active parent is
   try {
     const todayStr = OAD.todayStr();
     const in7Dt = new Date(); in7Dt.setDate(in7Dt.getDate() + 7);
-    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const in7Str = _localDateStr(in7Dt);
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
     const future = new Date(); future.setDate(future.getDate() + 30);
-    const futureStr = future.toISOString().slice(0, 10);
+    const futureStr = _localDateStr(future);
 
     // Mirrors the real CAC102 Live Session case from the 7/11 export exactly: a `waiting` child
     // of an active parent, next_action_date rescheduled 30 days out (so it fails the normal
@@ -3362,7 +3362,7 @@ OAD.test('OAD.Due.selfCheck: returns ok with no issues on the "This Week under-r
   try {
     const todayStr = OAD.todayStr();
     const in2 = new Date(); in2.setDate(in2.getDate() + 2);
-    const in2Str = in2.toISOString().slice(0, 10);
+    const in2Str = _localDateStr(in2);
 
     const parentA = OAD.makeThread({ id: 1, uuid: 'self-parent-a', title: 'Home — Sandwich Transition', status: 'open', priority: 'low' });
     const parentB = OAD.makeThread({ id: 2, uuid: 'self-parent-b', title: 'VA Health & Claims Coordination', status: 'open', priority: 'low' });
@@ -3690,7 +3690,7 @@ OAD.test('selectFocusThread: a lower-pressure item due today outranks a higher-p
   try {
     const todayStr = OAD.todayStr();
     const future = new Date(); future.setDate(future.getDate() + 5);
-    const futureStr = future.toISOString().slice(0, 10);
+    const futureStr = _localDateStr(future);
 
     // Mirrors the real report: "Digital.ai" (pressure 69, due in 5 days) vs "HVAC Repair"
     // (pressure 53, due today). HVAC should win now, even though its raw pressure is lower.
@@ -3714,7 +3714,7 @@ OAD.test('selectFocusThread: returns null when nothing is due today or overdue, 
   const orig = OAD.DB.threads;
   try {
     const future = new Date(); future.setDate(future.getDate() + 5);
-    const futureStr = future.toISOString().slice(0, 10);
+    const futureStr = _localDateStr(future);
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Future critical thread', status: 'stalled', priority: 'critical', next_action_date: futureStr })
     ];
@@ -3729,7 +3729,7 @@ OAD.test('selectFocusThread: an overdue thread is still selected (date-scoping i
   const orig = OAD.DB.threads;
   try {
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const t = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Overdue thread', status: 'open', priority: 'medium', next_action_date: yesterday.toISOString().slice(0, 10) });
+    const t = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Overdue thread', status: 'open', priority: 'medium', next_action_date: _localDateStr(yesterday) });
     OAD.DB.threads = [t];
     const focus = OAD.selectFocusThread();
     OAD._assert(!!focus, 'an overdue thread should still be selected, not excluded by date-scoping');
@@ -3744,8 +3744,8 @@ OAD.test('selectFutureFocusSuggestion: returns the nearest upcoming item, tie-br
   try {
     const in3 = new Date(); in3.setDate(in3.getDate() + 3);
     const in5 = new Date(); in5.setDate(in5.getDate() + 5);
-    const nearLow  = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Near, low pressure', status: 'open', priority: 'low', next_action_date: in3.toISOString().slice(0, 10) });
-    const farHigh  = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Far, high pressure', status: 'stalled', priority: 'critical', next_action_date: in5.toISOString().slice(0, 10) });
+    const nearLow  = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Near, low pressure', status: 'open', priority: 'low', next_action_date: _localDateStr(in3) });
+    const farHigh  = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Far, high pressure', status: 'stalled', priority: 'critical', next_action_date: _localDateStr(in5) });
     OAD.DB.threads = [farHigh, nearLow];
 
     const suggestion = OAD.selectFutureFocusSuggestion();
@@ -3770,7 +3770,7 @@ OAD.test('selectFutureFocusSuggestion: returns null when nothing is upcoming eit
 // Regression for: Focus Now labeled a next-day thread "due today" in the evening while the
 // dashboard/"This Week" list (which already zeroes to local midnight before ISO conversion)
 // showed the correct date for the same thread at the same moment. Root cause: plain
-// `new Date().toISOString().slice(0,10)` converts the current instant straight to UTC, which
+// `_localDateStr(new Date())` converts the current instant straight to UTC, which
 // rolls to the next calendar date once local time is late enough in the evening — before
 // selectFocusThread/selectFutureFocusSuggestion/focusReason were switched to OAD.todayStr(),
 // they computed their own unsafe version of this independently.
@@ -3827,7 +3827,7 @@ OAD.test('_saveEditThread: reopening a closed thread does not trigger the closur
 OAD.test('Due.buckets: correctly separates overdue, today, week, and nodate — today intentionally overlaps overdue', function () {
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
-    return dt.toISOString().slice(0, 10);
+    return _localDateStr(dt);
   };
 
   const todayStr = d(0);
@@ -3904,7 +3904,7 @@ OAD.test('Due.buckets: a thread due today AND deadline-overdue appears in both b
   // a separately-passed hard deadline at the same time.
   const d = function (offset) {
     const dt = new Date(); dt.setDate(dt.getDate() + offset);
-    return dt.toISOString().slice(0, 10);
+    return _localDateStr(dt);
   };
 
   const todayStr = d(0);
@@ -3937,7 +3937,7 @@ OAD.test('Due.stalledThreads: a thread with next_action_date in the past appears
   try {
     const todayStr = OAD.todayStr();
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
 
     const drifted = OAD.makeThread({ id: 1, uuid: 'st-drifted', title: 'Drifted open thread', status: 'open', next_action_date: yStr });
     const notDrifted = OAD.makeThread({ id: 2, uuid: 'st-not-drifted', title: 'Not drifted', status: 'open', next_action_date: todayStr });
@@ -3956,7 +3956,7 @@ OAD.test('Due.stalledThreads: excludes closed and dormant even with a past next_
   try {
     const todayStr = OAD.todayStr();
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
 
     const closedDrifted = OAD.makeThread({ id: 1, uuid: 'st-closed', title: 'Closed drifted', status: 'closed', next_action_date: yStr });
     const dormantDrifted = OAD.makeThread({ id: 2, uuid: 'st-dormant', title: 'Dormant drifted', status: 'dormant', next_action_date: yStr });
@@ -3974,7 +3974,7 @@ OAD.test('Due.stalledThreads: excludes a waiting thread with user_action_complet
   try {
     const todayStr = OAD.todayStr();
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
 
     const ballInCourt = OAD.makeThread({ id: 1, uuid: 'st-ball', title: 'Ball in their court', status: 'waiting', user_action_complete: true, next_action_date: yStr });
     const stillOnMe = OAD.makeThread({ id: 2, uuid: 'st-onme', title: 'Still on me', status: 'waiting', user_action_complete: false, next_action_date: yStr });
@@ -3992,7 +3992,7 @@ OAD.test('Due.stalledThreads: sorted oldest-first by next_action_date', function
   const orig = OAD.DB.threads;
   try {
     const todayStr = OAD.todayStr();
-    const d = function (offset) { const dt = new Date(); dt.setDate(dt.getDate() + offset); return dt.toISOString().slice(0, 10); };
+    const d = function (offset) { const dt = new Date(); dt.setDate(dt.getDate() + offset); return _localDateStr(dt); };
 
     const t3 = OAD.makeThread({ id: 1, uuid: 'st-3d', title: '3 days ago', status: 'open', next_action_date: d(-3) });
     const t1 = OAD.makeThread({ id: 2, uuid: 'st-1d', title: '1 day ago', status: 'open', next_action_date: d(-1) });
@@ -4019,7 +4019,7 @@ OAD.test('filterListTab: "stalled" status preset filters to the live drift compu
   try {
     const todayStr = OAD.todayStr();
     const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
-    const yStr = yesterday.toISOString().slice(0, 10);
+    const yStr = _localDateStr(yesterday);
 
     const drifted = OAD.makeThread({ id: 1, uuid: OAD._generateUUID(), title: 'Genuinely drifted thread', status: 'open', next_action_date: yStr });
     const notDrifted = OAD.makeThread({ id: 2, uuid: OAD._generateUUID(), title: 'Not drifted thread', status: 'open', next_action_date: todayStr });
@@ -4257,7 +4257,7 @@ OAD.test('OAD.runCHE(): CHE-006 fires correctly end-to-end for a real thread mix
   try {
     var today = new Date(); today.setHours(0, 0, 0, 0);
     var yesterday = new Date(today.getTime()); yesterday.setDate(yesterday.getDate() - 1);
-    var yStr = yesterday.toISOString().slice(0, 10);
+    var yStr = _localDateStr(yesterday);
 
     OAD.DB.threads = [
       OAD.makeThread({ id: 1, uuid: 'run-che-stale', title: 'Stale open thread', status: 'open', next_action_date: yStr, deadline: null }),
@@ -4272,6 +4272,186 @@ OAD.test('OAD.runCHE(): CHE-006 fires correctly end-to-end for a real thread mix
   } finally {
     OAD.DB.threads = orig;
     OAD.DB.health_alerts = origAlerts;
+  }
+});
+
+// ── Tests: OAD.exportDevDiagnostic (ticket-dev-diagnostic-export.md) ─────────────────────
+
+OAD.test('exportThreads (the real, moat-safe export) is unaffected by the new DEV export — regression lock', function () {
+  const t = OAD.makeThread({ title: 'Moat check', current_assumption: 'Should not leak', status: 'open' });
+  OAD.DB.threads = [t];
+  const parsed = JSON.parse(OAD.exportThreads());
+  const row = parsed.threads.find(x => x.uuid === t.uuid);
+  OAD._assert(!('current_assumption' in row), 'the real export must still exclude current_assumption');
+  OAD._assert(!('evolution_log' in row), 'the real export must still exclude evolution_log');
+  OAD._assert(!('computed_status' in row), 'the real export must never gain computed_status — that is DEV-export-only');
+  OAD._assert(!('dev_export' in parsed), 'the real export must not carry the dev_export flag');
+});
+
+OAD.test('exportDevDiagnostic: labeled clearly as DEV-only, includes fields the real export deliberately excludes', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'dev-exp-assump', title: 'Assumption check', status: 'open', current_assumption: 'A real assumption', next_action_date: OAD.todayStr() });
+    OAD.DB.threads = [t];
+    OAD.addEvolution(t.id, 'A history entry');
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    OAD._assertEqual(parsed.dev_export, true, 'must carry an explicit dev_export flag');
+    OAD._assert(parsed.note.indexOf('DEV-ONLY') !== -1, 'note must clearly say DEV-only');
+
+    const row = parsed.threads.find(x => x.uuid === 'dev-exp-assump');
+    OAD._assertEqual(row.current_assumption, 'A real assumption', 'current_assumption must be present here, unlike the real export');
+    OAD._assert(Array.isArray(row.evolution_log) && row.evolution_log.length > 0, 'evolution_log must be present here');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: computed_status per thread matches OAD.TemporalStatus called directly', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const t = OAD.makeThread({ id: 1, uuid: 'dev-exp-computed', title: 'Computed status check', status: 'open', next_action_date: _localDateStr(yesterday), deadline: null });
+    OAD.DB.threads = [t];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const row = parsed.threads.find(x => x.uuid === 'dev-exp-computed');
+    const now = new Date();
+
+    OAD._assertEqual(row.computed_status.is_stalled, OAD.TemporalStatus.isStalled(t, now), 'is_stalled must match a direct call');
+    OAD._assertEqual(row.computed_status.is_overdue, OAD.TemporalStatus.isOverdue(t, now), 'is_overdue must match a direct call');
+    OAD._assertEqual(row.computed_status.card_date_label.label, OAD.TemporalStatus.cardDateLabel(t, now).label, 'card_date_label must match a direct call');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: data_hygiene_warnings and che_alerts are populated across all threads, not just one example', function () {
+  const orig = OAD.DB.threads;
+  const origAlerts = OAD.DB.health_alerts;
+  try {
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = _localDateStr(yesterday);
+    const future = new Date(); future.setDate(future.getDate() + 30);
+
+    const masked = OAD.makeThread({ id: 1, uuid: 'dev-hyg-masked', title: 'Masked case', status: 'open', next_action_date: yStr, deadline: _localDateStr(future) });
+    const staleOpen = OAD.makeThread({ id: 2, uuid: 'dev-hyg-stale', title: 'Stale open case', status: 'open', next_action_date: yStr, deadline: null });
+    OAD.DB.threads = [masked, staleOpen];
+    OAD.DB.health_alerts = [];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    OAD._assert(Array.isArray(parsed.data_hygiene_warnings), 'data_hygiene_warnings must be an array');
+    OAD._assert(parsed.data_hygiene_warnings.some(w => w.thread_uuid === 'dev-hyg-masked'), 'the masked case must appear in data_hygiene_warnings');
+
+    OAD._assert(Array.isArray(parsed.che_alerts), 'che_alerts must be an array');
+    OAD._assert(parsed.che_alerts.some(a => a.thread_uuid === 'dev-hyg-stale' && a.code === 'CHE-006'), 'the stale-open case must produce a CHE-006 alert');
+    OAD._assert(parsed.che_alerts.every(a => 'code' in a && 'severity' in a && 'message' in a), 'every CHE alert must have code/severity/message, not just CHE-006');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.health_alerts = origAlerts;
+  }
+});
+
+OAD.test('exportDevDiagnostic: toat_diagnostic exposes the winner, its tier, and the full ranked candidate list', function () {
+  const orig = OAD.DB.threads;
+  const origToat = OAD.DB.toat;
+  try {
+    const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
+    const yStr = _localDateStr(yesterday);
+    const openStale = OAD.makeThread({ id: 1, uuid: 'toat-diag-open', title: 'Open stale', status: 'open', next_action_date: yStr });
+    const waitingStale = OAD.makeThread({ id: 2, uuid: 'toat-diag-waiting', title: 'Waiting stale', status: 'waiting', next_action_date: yStr });
+    OAD.DB.threads = [openStale, waitingStale];
+    OAD.DB.toat = [];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const diag = parsed.toat_diagnostic;
+    OAD._assertEqual(diag.winner.uuid, 'toat-diag-open', 'tier 2 (open) must win over tier 3 (waiting)');
+    OAD._assertEqual(diag.winner.tier, 2, 'winner tier must be recorded as 2');
+    OAD._assert(diag.candidates.some(c => c.uuid === 'toat-diag-open' && c.tier === 2 && c.won === true), 'the winning candidate must be marked won in the full candidate list');
+    OAD._assert(diag.candidates.some(c => c.uuid === 'toat-diag-waiting' && c.tier === 3 && c.won === false), 'the non-winning tier-3 candidate must still appear, marked not won');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.toat = origToat;
+  }
+});
+
+OAD.test('exportDevDiagnostic: focus_now_diagnostic exposes the winner\'s pressure and the real top-5 candidate pool', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const todayStr = OAD.todayStr();
+    const high = OAD.makeThread({ id: 1, uuid: 'focus-diag-high', title: 'High pressure', status: 'open', priority: 'critical', next_action_date: todayStr, current_assumption: '' });
+    const low = OAD.makeThread({ id: 2, uuid: 'focus-diag-low', title: 'Low pressure', status: 'open', priority: 'low', next_action_date: todayStr });
+    const notDueYet = OAD.makeThread({ id: 3, uuid: 'focus-diag-future', title: 'Not due yet', status: 'open', priority: 'critical', next_action_date: '2099-01-01' });
+    OAD.DB.threads = [high, low, notDueYet];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const diag = parsed.focus_now_diagnostic;
+    OAD._assertEqual(diag.winner.uuid, 'focus-diag-high', 'the higher-pressure due-now thread should win Focus Now');
+    OAD._assert(diag.winner.pressure > 0, 'winner must carry a real pressure score');
+    OAD._assert(!diag.top5.some(c => c.uuid === 'focus-diag-future'), 'a thread not yet due must not appear in the top5 candidate pool, even if its pressure would otherwise be high');
+    OAD._assert(diag.top5.length <= 5, 'top5 must never exceed 5 entries');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: this_week_diagnostic reports a real definition and membership matching OAD.Due.dashboardData directly', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const in3 = new Date(); in3.setDate(in3.getDate() + 3);
+    const t = OAD.makeThread({ id: 1, uuid: 'week-diag-t1', title: 'Due in 3 days', status: 'open', next_action_date: _localDateStr(in3) });
+    OAD.DB.threads = [t];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const diag = parsed.this_week_diagnostic;
+    OAD._assert(typeof diag.definition === 'string' && diag.definition.indexOf('next_action_date') !== -1, 'definition must be a real plain-text description mentioning next_action_date');
+    OAD._assert(diag.member_uuids.indexOf('week-diag-t1') !== -1, 'the thread due in 3 days must appear in the actual membership list');
+
+    // Cross-check against the real production call directly, not just this export's own claim.
+    const todayStr = OAD.todayStr();
+    const in7Dt = new Date(); in7Dt.setHours(0, 0, 0, 0); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const real = OAD.Due.dashboardData(todayStr, in7Str);
+    OAD._assertEqual(diag.member_uuids.slice().sort().join(','), real.week.map(x => x.uuid).slice().sort().join(','), 'member_uuids must exactly match a real OAD.Due.dashboardData().week call');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: stale_closed_edges catches a closed thread still blocking a non-closed thread (real smoke-test shape: APEX Guidance case)', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const closedBlocker = OAD.makeThread({
+      id: 1, uuid: 'stale-edge-closed', title: 'Closed but still blocking', status: 'closed',
+      connections: [{ uuid: 'edge-1', to_uuid: 'stale-edge-open', to_label: 'Open target', edge_type: 'blocks' }]
+    });
+    const openTarget = OAD.makeThread({ id: 2, uuid: 'stale-edge-open', title: 'Open target', status: 'open' });
+    OAD.DB.threads = [closedBlocker, openTarget];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const hit = parsed.stale_closed_edges.find(e => e.thread_uuid === 'stale-edge-closed');
+    OAD._assert(!!hit, 'a closed thread with an outbound edge to a non-closed thread must be flagged');
+    OAD._assertEqual(hit.to_uuid, 'stale-edge-open', 'must correctly identify the target thread');
+    OAD._assertEqual(hit.to_status, 'open', 'must correctly report the target\'s current status');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: stale_closed_edges does not flag a closed thread blocking another closed thread', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const closedBlocker = OAD.makeThread({
+      id: 1, uuid: 'stale-edge-closed2', title: 'Closed, blocks another closed', status: 'closed',
+      connections: [{ uuid: 'edge-2', to_uuid: 'stale-edge-closed-target', to_label: 'Closed target', edge_type: 'blocks' }]
+    });
+    const closedTarget = OAD.makeThread({ id: 2, uuid: 'stale-edge-closed-target', title: 'Closed target', status: 'closed' });
+    OAD.DB.threads = [closedBlocker, closedTarget];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    OAD._assert(!parsed.stale_closed_edges.some(e => e.thread_uuid === 'stale-edge-closed2'), 'a closed thread blocking another closed thread is not stale — both sides are done');
+  } finally {
+    OAD.DB.threads = orig;
   }
 });
 
