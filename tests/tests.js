@@ -3122,6 +3122,93 @@ OAD.test('ADE-002: parent_uuid creates enables edge', function () {
   }
 });
 
+OAD.test('_adeAddEdge: does not add a second edge of a DIFFERENT type to the same target', function () {
+  // Root-cause regression for the "corrected edge silently duplicates back" bug: a user (or a
+  // corrective import) reclassifies an auto-generated edge from `enables` to `blocked_by`.
+  // _adeAddEdge must recognize a relationship ALREADY exists between this pair — regardless of
+  // type — and defer, rather than layering its own inferred type on top of it.
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    const t1 = OAD.addThread(OAD.makeThread({ title: 'Reclass source', status: 'open' }));
+    const t2 = OAD.addThread(OAD.makeThread({ title: 'Reclass target', status: 'open' }));
+    OAD.DB.ade_suppressions = [];
+    t1.connections = [{
+      uuid: 'edge-1', to_uuid: t2.uuid, to_label: t2.title, edge_type: 'blocked_by',
+      auto_generated: true, rule: 'ADE-002', confidence: 1, confirmed_by_user: true,
+      created_at: '2026-01-01T00:00:00.000Z'
+    }];
+    const added = OAD._adeAddEdge(t1, t2, 'enables', 'ADE-002', 1.0);
+    OAD._assert(!added, '_adeAddEdge should refuse to add a differently-typed edge to an already-connected target');
+    OAD._assertEqual((t1.connections || []).length, 1, 'no duplicate edge should have been created');
+    OAD._assertEqual(t1.connections[0].edge_type, 'blocked_by', 'the original, reclassified edge type must be untouched');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-002: does not re-duplicate a parent/child edge the user already reclassified', function () {
+  // End-to-end version of the same regression, through the actual rule that caused it in
+  // production: a thread's ADE-002 `enables` edge was corrected to `blocked_by` via a corrective
+  // import; re-running ADE-002 (which happens automatically after every import, see
+  // OAD._confirmImport) must not silently re-add the `enables` edge alongside it.
+  const orig = OAD.DB.threads;
+  const origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.ade_suppressions = [];
+    const parent = OAD.addThread(OAD.makeThread({ title: 'Reclassified parent', status: 'open' }));
+    const child  = OAD.addThread(OAD.makeThread({ title: 'Reclassified child', status: 'open', parent_uuid: parent.uuid }));
+    parent.connections = [{
+      uuid: 'edge-2', to_uuid: child.uuid, to_label: child.title, edge_type: 'blocked_by',
+      auto_generated: true, rule: 'ADE-002', confidence: 1, confirmed_by_user: true,
+      created_at: '2026-01-01T00:00:00.000Z'
+    }];
+    OAD._ade002_parentChild();
+    OAD._assertEqual((parent.connections || []).length, 1, 'ADE-002 must not add a second edge to the reclassified target');
+    OAD._assertEqual(parent.connections[0].edge_type, 'blocked_by', 'reclassified edge type survives a re-run of ADE-002');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('CHE-011: flags a thread with conflicting edge types to the same target', function () {
+  const thread = OAD.makeThread({
+    title: 'Conflicted thread', status: 'open',
+    connections: [
+      { uuid: 'e1', to_uuid: 'target-1', to_label: 'Target', edge_type: 'blocked_by', confirmed_by_user: true },
+      { uuid: 'e2', to_uuid: 'target-1', to_label: 'Target', edge_type: 'enables', auto_generated: true, confirmed_by_user: false }
+    ]
+  });
+  const alerts = OAD._che011_conflictingEdges(thread);
+  OAD._assertEqual(alerts.length, 1, 'exactly one CHE-011 alert should fire for the conflicting pair');
+  OAD._assertEqual(alerts[0].type, 'CHE-011', 'alert type should be CHE-011');
+  OAD._assert(!alerts[0].auto_fixable, 'CHE-011 is detection-only, not auto-fixable');
+});
+
+OAD.test('CHE-011: does not flag a thread with clean, non-conflicting edges', function () {
+  const thread = OAD.makeThread({
+    title: 'Clean thread', status: 'open',
+    connections: [
+      { uuid: 'e1', to_uuid: 'target-1', to_label: 'A', edge_type: 'blocked_by' },
+      { uuid: 'e2', to_uuid: 'target-2', to_label: 'B', edge_type: 'enables' }
+    ]
+  });
+  OAD._assertEqual(OAD._che011_conflictingEdges(thread).length, 0, 'distinct targets, and a single type per target, should never flag');
+});
+
+OAD.test('CHE-011: does not flag a closed thread', function () {
+  const thread = OAD.makeThread({
+    title: 'Closed conflicted thread', status: 'closed',
+    connections: [
+      { uuid: 'e1', to_uuid: 'target-1', to_label: 'Target', edge_type: 'blocked_by' },
+      { uuid: 'e2', to_uuid: 'target-1', to_label: 'Target', edge_type: 'enables' }
+    ]
+  });
+  OAD._assertEqual(OAD._che011_conflictingEdges(thread).length, 0, 'closed threads are not actionable, so are not worth flagging');
+});
+
 OAD.test('computeSuppressedChildUUIDs: suppresses a lower-urgency child under an active parent', function () {
   const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
   const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-08-01' });

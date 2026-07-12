@@ -597,8 +597,18 @@ OAD._adeAddEdge = function (fromThread, toThread, edgeType, rule, confidence) {
   });
   if (suppressed) return false;
   fromThread.connections = fromThread.connections || [];
+  // Deliberately matches on to_uuid ALONE, not (to_uuid, edgeType) — auto-generation exists to
+  // fill gaps, not to assert a fact over one that's already there. The old (to_uuid, edgeType)
+  // match meant that once a user (or a corrective import) reclassified an auto-generated edge to
+  // a different, more accurate type, the next runADE() call would silently re-add a duplicate of
+  // the original type right alongside it — the rule couldn't tell "no relationship exists yet"
+  // apart from "a relationship exists, just not typed the way I'd have inferred." Found via a live
+  // export review: a corrective import changed a `blocked_by` for `enables`, matching what the
+  // thread's own next_action text already said, and runCHE()'s automatic post-import ADE pass
+  // silently re-created the `enables` edge it had just been corrected away from. See CHE-011 below
+  // for the permanent detection safety net for this class of bug.
   var exists = fromThread.connections.some(function (c) {
-    return c.to_uuid === toThread.uuid && c.edge_type === edgeType;
+    return c.to_uuid === toThread.uuid;
   });
   if (exists) return false;
   fromThread.connections.push({
@@ -853,6 +863,39 @@ OAD._che010_duplicateTitles = function (threads) {
   return alerts;
 };
 
+// CHE-011: A thread has multiple connections to the same target with different edge types (e.g.
+// both `blocked_by` and `enables` pointing at the same to_uuid) — the graph asserting two
+// different relationships to the same thread at once. Permanent safety net for the class of bug
+// fixed at the source in OAD._adeAddEdge above (an auto-generation rule re-asserting its own edge
+// type after a user had already reclassified it) — this check doesn't depend on knowing which
+// rule or code path caused the duplication, so it also catches anything already sitting in the
+// data from before that fix landed, or any future path that makes the same mistake.
+// Detection-only (auto_fixable: false), like CHE-010 — deciding which of several conflicting
+// edges reflects the real relationship needs a human, not a field patch, and applyHealthAlertFix
+// only knows how to assign fields, not remove connections.
+OAD._che011_conflictingEdges = function (thread) {
+  if (thread.status === 'closed') return [];
+  var byTarget = {};
+  (thread.connections || []).forEach(function (c) {
+    (byTarget[c.to_uuid] = byTarget[c.to_uuid] || []).push(c);
+  });
+  var alerts = [];
+  Object.keys(byTarget).forEach(function (toUuid) {
+    var edges = byTarget[toUuid];
+    var types = {};
+    edges.forEach(function (c) { types[c.edge_type] = true; });
+    if (Object.keys(types).length <= 1) return;
+    var toLabel = edges[0].to_label || toUuid;
+    alerts.push(OAD._makeHealthAlert(
+      thread, 'WARNING', 'CHE-011',
+      'Conflicting edges — "' + thread.title + '" has ' + edges.length + ' connections to "' + toLabel +
+        '" with different types (' + Object.keys(types).sort().join(', ') + '). Review which one reflects the real relationship.',
+      false, null
+    ));
+  });
+  return alerts;
+};
+
 OAD.runCHE = function () {
   var threads = OAD.DB.threads || [];
   var today = new Date(); today.setHours(0, 0, 0, 0);
@@ -866,6 +909,7 @@ OAD.runCHE = function () {
     a = OAD._che001_nullDeadline(t);  if (a) fresh.push(a);
     a = OAD._che002_noLeadTime(t);    if (a) fresh.push(a);
     a = OAD._che006_staleNextAction(t, today); if (a) fresh.push(a);
+    OAD._che011_conflictingEdges(t).forEach(function (a2) { fresh.push(a2); });
   });
 
   OAD._che010_duplicateTitles(threads).forEach(function (a) { fresh.push(a); });
