@@ -691,7 +691,18 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
     });
   });
 
-  // Merge top-level edges — skips duplicates (matched by edge UUID or same from/to/type)
+  // Merge top-level edges — skips duplicates (matched by edge UUID, or by to_uuid alone).
+  // Every OAD.exportThreads() output carries a full flattened `edges` array mirroring every
+  // thread's connections (see below, "Derive flat top-level edges array for ADE-aware
+  // consumers") — so ANY re-import of a previously-exported file, even one where only a couple
+  // of thread fields changed, round-trips this array. If that file predates a later edge-type
+  // correction (e.g. someone re-imports an older cached export, or two sessions work off
+  // different snapshots), matching on (to_uuid, edge_type) alone can't tell "this edge never
+  // existed" apart from "this pair's relationship was already established, just re-typed since
+  // this snapshot was taken" — so a stale `enables` edge gets silently re-merged in right
+  // alongside an already-corrected `blocked_by` edge to the same target. Same class of bug as
+  // OAD._adeAddEdge (js/engine.js) and the same fix: defer to whatever relationship already
+  // exists for this exact pair, regardless of type, rather than layering a stale one on top.
   var edgesMerged = 0;
   (results.edges || []).forEach(function (edge) {
     if (!edge.from_uuid || !edge.to_uuid) return;
@@ -699,8 +710,7 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
     if (!fromThread) return;
     fromThread.connections = fromThread.connections || [];
     var alreadyExists = fromThread.connections.some(function (c) {
-      return (c.uuid && c.uuid === edge.id) ||
-             (c.to_uuid === edge.to_uuid && c.edge_type === edge.label);
+      return (c.uuid && c.uuid === edge.id) || c.to_uuid === edge.to_uuid;
     });
     if (!alreadyExists) {
       fromThread.connections.push({

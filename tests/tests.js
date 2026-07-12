@@ -515,6 +515,52 @@ OAD.test('applyImport: syncs connections and parent_uuid on update', function ()
   OAD._assertEqual(updated.connections[0].to_uuid, parent.uuid, 'connection to_uuid correct');
 });
 
+OAD.test('applyImport: top-level edges merge does not re-add a stale edge type to an already-connected target', function () {
+  // Real-world regression: OAD.exportThreads() always includes a full flattened `edges` array
+  // mirroring every connection (see js/data.js, "Derive flat top-level edges array for
+  // ADE-aware consumers"), so re-importing ANY previously-exported file round-trips it. If that
+  // file predates a later edge-type correction, the OLD dedup check here
+  // ((to_uuid, edge_type) match) couldn't tell "no relationship yet" apart from "already
+  // reclassified since this snapshot" -- so a stale `enables` edge from an older export got
+  // silently merged in right alongside an already-corrected `blocked_by` edge to the same
+  // target. Confirmed happening live: a full-export reimport recreated exactly this duplicate
+  // on 4 separate edges in one pass, hours after OAD._adeAddEdge's own version of this bug had
+  // already been fixed -- this is a second, independent occurrence of the same root cause.
+  const parent = OAD.addThread(OAD.makeThread({ title: 'Merge-edge parent', status: 'open' }));
+  const child  = OAD.addThread(OAD.makeThread({ title: 'Merge-edge child', status: 'open' }));
+  parent.connections = [{
+    uuid: 'edge-corrected', to_uuid: child.uuid, to_label: child.title, edge_type: 'blocked_by',
+    auto_generated: true, rule: 'ADE-002', confidence: 1, confirmed_by_user: true,
+    created_at: '2026-01-01T00:00:00.000Z'
+  }];
+  const staleTopLevelEdges = [{
+    id: 'edge-stale-original', from_uuid: parent.uuid, to_uuid: child.uuid, label: 'enables',
+    to_label: child.title, auto_generated: true, rule: 'ADE-002', confidence: 1,
+    confirmed_by_user: false, created_at: '2025-12-01T00:00:00.000Z'
+  }];
+  const result = OAD.applyImport({ create: [], update: [], close: [], edges: staleTopLevelEdges }, []);
+  OAD._assertEqual(result.edges_merged, 0, 'a stale differently-typed edge to an already-connected target must not be merged in');
+  OAD._assertEqual((parent.connections || []).length, 1, 'no duplicate edge should exist on the parent');
+  OAD._assertEqual(parent.connections[0].edge_type, 'blocked_by', 'the already-corrected edge type must survive the import untouched');
+});
+
+OAD.test('applyImport: top-level edges merge still restores a genuinely deleted edge to a target with no other connection', function () {
+  // Sanity check the fix isn't overbroad: this merge path exists specifically to restore edges
+  // that are otherwise missing entirely -- that must keep working for a target with zero
+  // existing connections.
+  const parent = OAD.addThread(OAD.makeThread({ title: 'Restore-edge parent', status: 'open' }));
+  const child  = OAD.addThread(OAD.makeThread({ title: 'Restore-edge child', status: 'open' }));
+  parent.connections = [];
+  const edges = [{
+    id: 'edge-to-restore', from_uuid: parent.uuid, to_uuid: child.uuid, label: 'blocks',
+    to_label: child.title, auto_generated: false, rule: null, confidence: 1,
+    confirmed_by_user: true, created_at: '2026-01-01T00:00:00.000Z'
+  }];
+  const result = OAD.applyImport({ create: [], update: [], close: [], edges: edges }, []);
+  OAD._assertEqual(result.edges_merged, 1, 'a genuinely missing edge to an unconnected target must still be restored');
+  OAD._assertEqual((parent.connections || []).length, 1, 'the restored edge should now exist');
+});
+
 // ── Tests: importThreads ─────────────────────────────────────────────
 
 OAD.test('parseImportFile: row without uuid goes to create list', function () {
