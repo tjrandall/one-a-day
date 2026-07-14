@@ -258,45 +258,86 @@ OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
 };
 
 OAD.genDailyIntercept = async function () {
-  const todayStr = OAD.todayStr();
   const persona = OAD.DB.persona || {};
-  
-  const loadScore = typeof OAD.getDayLoad === 'function' ? OAD.getDayLoad(todayStr) : 0;
+
+  // Per ticket-daily-intercept-content-accuracy.md: replaces getDayLoad()'s raw pressure-sum
+  // (the same "215 isn't a real unit" failure already fixed for Critical Load/Avg Pressure) with
+  // the same Load Overview counts shown on the dashboard, so the model can only reference real,
+  // already-trustworthy numbers — never compute a new one.
+  const overview = OAD.Due.loadOverview();
   const overdueCadences = (OAD.DB.cadences || []).filter(c => OAD.cadenceOverdue(c)).map(c => c.title);
   // Was filtering on the dead status === 'stalled' — see the identical fix note in
   // OAD.genProactiveCounsel above.
   const stalledThreads = OAD.Due.stalledThreads().map(t => t.title);
 
-  // Feed the AI exactly what the user is staring at on their dashboard today
-  const overdueThreads = (OAD.DB.threads || []).filter(t => OAD.isActionOverdue(t) && t.status !== 'closed' && t.status !== 'dormant');
-  const todayThreads = (OAD.DB.threads || []).filter(t => OAD.TemporalStatus.isDueToday(t, new Date()) && t.status !== 'closed' && !OAD.isActionOverdue(t));
-  
+  // Feed the AI exactly what the user is staring at on their dashboard today. The ball-in-their-
+  // court exclusion (waiting + user_action_complete) and the real-next-action requirement mirror
+  // OAD.TemporalStatus.isStalled's own exclusion (js/threadTemporalStatus.js) — reused, not
+  // reinvented, per the ticket's explicit instruction. Without it, OAD.isActionOverdue() alone
+  // (deliberately status-agnostic — see its own comment in js/engine.js) let a thread genuinely
+  // blocked on an external party (e.g. handed off, RFI resolved, nothing left for the user to do)
+  // land in OVERDUE TASKS and get labeled "avoided" by the model — a false accusation for a
+  // thread that was correctly left alone.
+  const overdueThreads = (OAD.DB.threads || []).filter(t =>
+    OAD.isActionOverdue(t) &&
+    t.status !== 'closed' &&
+    t.status !== 'dormant' &&
+    !(t.status === 'waiting' && t.user_action_complete) &&
+    !!(t.next_action && t.next_action.trim())
+  );
+  // Same ball-in-their-court exclusion as overdueThreads above — a thread due today with nothing
+  // left for the user to do shouldn't be told to the model as something to "crush," any more than
+  // it should be called "avoided."
+  const todayThreads = (OAD.DB.threads || []).filter(t =>
+    OAD.TemporalStatus.isDueToday(t, new Date()) &&
+    t.status !== 'closed' &&
+    !OAD.isActionOverdue(t) &&
+    !(t.status === 'waiting' && t.user_action_complete)
+  );
+
+  // A thread with a passed contingency_trigger_date isn't being avoided — a decision about it was
+  // already made in advance (contingency_action, if set) and just needs executing. Without this
+  // tag the agenda line was just "[Pressure: N] Title", giving the model nothing to distinguish
+  // "this looks neglected" from "this was already decided, on a schedule, and the schedule hit" —
+  // confirmed live: Orpheus Ocean (contingency "let it go if no response by July 6") got called a
+  // "missed opportunity" instead of "decision already made, needs executing" because the model had
+  // only the title and pressure to go on. Per the ticket, this check must run before any avoidance
+  // framing gets written, for every thread in the agenda, not just the ones already past due.
+  function contingencyNote(t) {
+    if (!t.contingency_trigger_date || OAD.daysUntil(t.contingency_trigger_date) > 0) return '';
+    var action = (t.contingency_action || '').trim();
+    return ' [CONTINGENCY TRIGGERED' + (action ? ': ' + action : ' — decision already made, execute it') + ']';
+  }
+
   let agendaLines = [];
   if (overdueThreads.length > 0) {
     agendaLines.push("OVERDUE TASKS:");
-    overdueThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}] ${t.title}`));
+    overdueThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}]${contingencyNote(t)} ${t.title}`));
   }
   if (todayThreads.length > 0) {
     agendaLines.push("DUE TODAY:");
-    todayThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}] ${t.title}`));
+    todayThreads.forEach(t => agendaLines.push(`- [Pressure: ${OAD.pressure(t)}]${contingencyNote(t)} ${t.title}`));
   }
   if (agendaLines.length === 0) {
     agendaLines.push("No tasks due today or overdue.");
   }
-  
+
   // Also pass the absolute highest pressure looming task (if it's not already on today's agenda) to check for blind spots
   const highestLooming = (OAD.DB.threads || [])
     .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && !OAD.TemporalStatus.isDueToday(t, new Date()) && !OAD.isActionOverdue(t))
     .sort((a, b) => OAD.pressure(b) - OAD.pressure(a))[0];
-  
+
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.dailyIntercept) || {};
-  
+
   const systemPrompt = (promptTemplate.system || "")
     .replace('{{working}}', JSON.stringify(persona.what_is_working || []))
     .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []));
 
   const userMsg = (promptTemplate.user || "")
-    .replace('{{loadScore}}', loadScore)
+    .replace('{{overdueCount}}', overview.overdue.count)
+    .replace('{{stalledCount}}', overview.stalled.count)
+    .replace('{{dueThisWeekCount}}', overview.dueThisWeek.count)
+    .replace('{{criticalPressureCount}}', overview.criticalPressure.count)
     .replace('{{overdueCadences}}', JSON.stringify(overdueCadences))
     .replace('{{stalledThreads}}', JSON.stringify(stalledThreads))
     .replace('{{agendaLines}}', agendaLines.join('\\n'))

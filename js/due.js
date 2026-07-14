@@ -194,6 +194,39 @@ OAD.Due.pressureDistribution = function () {
   return tiers;
 };
 
+// Load Overview — per ticket-enterprise-mode-and-load-overview.md Part 2. Replaces the single
+// "Critical Load" headline (previously pressureDist['80+'] + pressureDist['50-79'], one number
+// standing in for four different kinds of urgency) with four independent counts pulled from a
+// single source, so every surface that shows them (persona bar, daily dashboard, list view, DEV
+// export) can't drift from each other the way Critical Load itself already drifted from its own
+// tier breakdown once (a live report: headline read 16, tiers summed to 22). These four are
+// deliberately allowed to overlap — a thread can be both Stalled and Critical Pressure — this is
+// not a de-duplicated total, it's four shapes shown side by side.
+//
+// Overdue/Due This Week are pulled from OAD.Due.dashboardData's own suppression-filtered bucket
+// pipeline (not re-filtered here) so this can never disagree with the actual Overdue Tasks/This
+// Week lists rendered right next to it. Critical Pressure is 80+ ONLY (not 80+ + 50-79 like the
+// old Critical Load) — the ticket's explicit definition of "the actual high-stakes-right-now
+// signal," distinct from Stalled/Overdue/Due This Week, which already exist as their own real,
+// browsable buckets elsewhere in the app.
+OAD.Due.loadOverview = function () {
+  var todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+  var todayStr = todayDt.toISOString().slice(0, 10);
+  var in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+  var in7Str = in7Dt.toISOString().slice(0, 10);
+
+  var due = OAD.Due.dashboardData(todayStr, in7Str);
+  var stalled = OAD.Due.stalledThreads();
+  var critical = OAD.Due.criticalLoad(80);
+
+  return {
+    overdue:          { count: due.overdue.length, threadUUIDs: due.overdue.map(function (t) { return t.uuid; }) },
+    stalled:          { count: stalled.length,      threadUUIDs: stalled.map(function (t) { return t.uuid; }) },
+    dueThisWeek:      { count: due.week.length,     threadUUIDs: due.week.map(function (t) { return t.uuid; }) },
+    criticalPressure: { count: critical.count,      threadUUIDs: critical.threadUUIDs }
+  };
+};
+
 // One call for the full dashboard pipeline. Scores the active list exactly once — getFocusUUID
 // and the suppression/bucket pipeline below all reuse this same scored array.
 OAD.Due.dashboardData = function (todayStr, in7Str) {

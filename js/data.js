@@ -1081,6 +1081,16 @@ OAD.exportDevDiagnostic = function () {
   base.this_week_diagnostic = OAD._thisWeekDiagnostic();
   base.stale_closed_edges = OAD._staleClosedEdges();
 
+  // Per ticket-enterprise-mode-and-load-overview.md Part 3: every one of these was already a real
+  // function, only reachable by hand-typing it into devtools — the actual problem tonight wasn't
+  // that the numbers were wrong, it was that "what does this dashboard number actually mean" had
+  // no answer without a live console session. Now answerable from an export file alone.
+  base.pressure_distribution = OAD.Due.pressureDistribution();
+  base.active_threads_by_score = OAD.Due.activeThreads().map(function (t) {
+    return { uuid: t.uuid, title: t.title, score: t._score };
+  });
+  base.load_overview = OAD.Due.loadOverview();
+
   return JSON.stringify(base, null, 2);
 };
 
@@ -1560,7 +1570,7 @@ OAD.isEnterpriseMode = function () {
 };
 
 OAD.saveDB = function () {
-  if (!OAD._DB_PERSIST) return;
+  if (!OAD._DB_PERSIST) return Promise.resolve();
   try {
     if (!OAD.isEnterpriseMode()) {
       localStorage.setItem(OAD._DB_KEY, JSON.stringify(OAD.DB));
@@ -1570,8 +1580,14 @@ OAD.saveDB = function () {
   } catch (e) {
     console.warn('[OAD] saveDB failed:', e);
   }
-  // Also push to Supabase when authenticated (fire and forget)
-  if (OAD.supabase && OAD._userId) OAD._saveToCloud();
+  // Push to Supabase when authenticated, and return that promise instead of firing-and-forgetting
+  // it — per ticket-enterprise-mode-and-load-overview.md Part 4. Existing call sites that don't
+  // await this are unaffected (an un-awaited async call behaves exactly as fire-and-forget did);
+  // this just lets "done" mean "persisted" for anything that actually needs that guarantee. See
+  // _saveToCloud's pending-save tracking below for how a hard refresh under Enterprise Mode (no
+  // synchronous local-cache fallback to land on) is protected against racing ahead of this.
+  if (OAD.supabase && OAD._userId) return OAD._saveToCloud();
+  return Promise.resolve();
 };
 
 OAD.loadDB = function () {
@@ -1610,8 +1626,27 @@ OAD.clearDB = function () {
 
 // ── Supabase cloud persistence ──────────────────────────────────────────
 
+// Counts cloud saves that haven't resolved yet. Enterprise Mode wipes the local cache on every
+// save instead of keeping a synchronous fallback (by design — that's the actual HIPAA protection,
+// not a bug to route around), which means a hard refresh has nothing to land on but whatever's
+// already committed to Supabase. Before this counter existed, saveDB's cloud push was pure
+// fire-and-forget, so a refresh that happened to land mid-save could read back older data than
+// what was just on screen, with no signal anything was still in flight. Per
+// ticket-enterprise-mode-and-load-overview.md Part 4: a JS await inside this app can't stop a real
+// browser reload keystroke, so the actual enforcement point is the beforeunload guard just below —
+// turning a silent, undetectable race into a choice the user gets to make.
+OAD._pendingCloudSaves = 0;
+
+window.addEventListener('beforeunload', function (e) {
+  if (OAD._pendingCloudSaves > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
 OAD._saveToCloud = async function () {
   if (OAD._userId && OAD._userId.startsWith('demo-')) return; // bypass mock demo users
+  OAD._pendingCloudSaves++;
   try {
     var { error } = await OAD.supabase
       .from('user_data')
@@ -1619,6 +1654,8 @@ OAD._saveToCloud = async function () {
     if (error) console.warn('[OAD] cloud save failed:', error.message);
   } catch (e) {
     console.warn('[OAD] cloud save error:', e);
+  } finally {
+    OAD._pendingCloudSaves--;
   }
 };
 

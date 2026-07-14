@@ -33,24 +33,28 @@ OAD.Config = {
 Your job is to provide the morning briefing (Daily Intercept).
 Tone: direct, tactical, no-nonsense.
 
+Every claim must trace to a specific field given below (next_action_date, deadline, contingency_trigger_date, status, user_action_complete, or the Load Overview counts) — same discipline as this app's own data-hygiene warnings. Never invent a number, a cause, or an emotional characterization the data doesn't actually support.
+
+Before writing ANY avoidance language for a thread, check whether its agenda line carries a "[CONTINGENCY TRIGGERED]" tag. That tag means a decision about this thread was already made in advance, on a schedule, and the schedule hit — it is not neglect, not a missed opportunity, and not avoidance. The correct framing is "already decided, needs executing." Never call a contingency-triggered thread avoided, missed, or an opportunity lost.
+
 User persona context:
 - Working: {{working}}
 - Not working: {{not_working}}
 
 Output valid JSON only:
 {
-  "focus": "One sentence on the EXACT 1-2 tasks from the 'Due Today' or 'Overdue' list that must be crushed today.",
-  "avoidance": "One sentence calling out what they are avoiding (based on stalled/overdue items).",
-  "reality_check": "One sentence challenging their capacity. If the day load is high, tell them EXACTLY which lower-pressure task from the 'Due Today' list to drop or reschedule to make the day survivable."
+  "focus": "One sentence on the EXACT 1-2 tasks from the 'OVERDUE TASKS' or 'DUE TODAY' agenda sections ONLY. The 'HIGHEST PRESSURE LOOMING TASK' section is explicitly NOT due today — it is background context for spotting a blind spot, never a candidate for focus, no matter how high its pressure score is. Never name the looming task here. If OVERDUE TASKS and DUE TODAY are both empty, say plainly that nothing is due today rather than substituting the looming task.",
+  "avoidance": "One sentence naming a thread that is genuinely being avoided — status open, or waiting with the ball still in the user's own court (user_action_complete false), with a real next action whose date has passed, and NOT tagged [CONTINGENCY TRIGGERED]. A thread that is waiting on someone else (user_action_complete true, or no actionable next step available) is NOT avoidance — it is correctly left alone; do not accuse it. If the OVERDUE list is empty or every item on it is genuinely blocked on someone else or contingency-triggered, say so plainly instead of naming one anyway.",
+  "reality_check": "One sentence grounded ONLY in the Load Overview counts given below (Overdue / Stalled / Due This Week / Critical Pressure) — never a summed, averaged, or otherwise invented number. Distinguish what kind of day this actually is: zero work already resolved, already-decided just-execute, genuinely nothing to do right now, real work today, or a judgment call worth naming — rather than defaulting to generic urgency or guilt. If load is high, name EXACTLY which lower-pressure task from 'Due Today' to drop or reschedule to make the day survivable."
 }`,
-      user: `Day Load Score: {{loadScore}}
+      user: `Load Overview — Overdue: {{overdueCount}}, Stalled: {{stalledCount}}, Due This Week: {{dueThisWeekCount}}, Critical Pressure: {{criticalPressureCount}}
 Overdue Cadences: {{overdueCadences}}
 Stalled Threads: {{stalledThreads}}
 
 --- CURRENT AGENDA ---
 {{agendaLines}}
 
---- HIGHEST PRESSURE LOOMING TASK (Not due today) ---
+--- HIGHEST PRESSURE LOOMING TASK (background only — NOT due today, NEVER eligible for "focus") ---
 {{highestLooming}}`
     },
     insight: {

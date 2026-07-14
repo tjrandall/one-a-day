@@ -1666,6 +1666,39 @@ OAD.test('suggestArea: family → Family (not Relationships)', function () {
     OAD._assert(!alertFired, 'By When alert should not fire for closing action with no date');
   });
 
+  // ── _cawStep3 render: contingency date/action pre-fill ───────────────
+  // Real bug this closes: unlike the regular edit-thread modal (which always pre-fills its
+  // contingency inputs from the thread's own current value), this wizard's step 3 previously
+  // defaulted straight to blank on first visit — so answering "not done" on a thread that already
+  // had a contingency date/action set, then saving without manually re-typing them, silently wiped
+  // both to empty. Per the pattern already used for ca-contact just above in this same template.
+
+  OAD.test('cawStep3: contingency date/action pre-fill from the thread\'s existing values on first visit, not blank', function () {
+    const t = OAD.addThread(OAD.makeThread({
+      title: 'CAW ctg prefill', status: 'open',
+      contingency_trigger_date: '2026-07-06', contingency_action: 'Let it go'
+    }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Sent follow-up', assumption_verified: false }, step2: null };
+    OAD._cawStep3();
+    OAD._assertEqual(document.getElementById('ca-ctg-date').value, '2026-07-06', 'first visit to step 3 must pre-fill the existing contingency_trigger_date, not leave it blank');
+    OAD._assertEqual(document.getElementById('ca-ctg-action').value, 'Let it go', 'first visit to step 3 must pre-fill the existing contingency_action, not leave it blank');
+    OAD.closeModal();
+    OAD._caw = null;
+  });
+
+  OAD.test('cawStep3: revisiting step 3 preserves what was actually typed in this wizard session, including an intentional clear', function () {
+    const t = OAD.addThread(OAD.makeThread({
+      title: 'CAW ctg revisit', status: 'open',
+      contingency_trigger_date: '2026-07-06', contingency_action: 'Let it go'
+    }));
+    OAD._caw = { id: t.id, step1: { what_done: 'Sent follow-up', assumption_verified: false }, step2: { ctg_date: '', ctg_action: '' } };
+    OAD._cawStep3();
+    OAD._assertEqual(document.getElementById('ca-ctg-date').value, '', 'a value already cleared within this wizard session must stay cleared, not be silently re-filled from the thread');
+    OAD._assertEqual(document.getElementById('ca-ctg-action').value, '', 'same for contingency_action');
+    OAD.closeModal();
+    OAD._caw = null;
+  });
+
 }());
 
 // ── Tests: bulkImport dedup guard ────────────────────────────────────
@@ -4708,6 +4741,30 @@ OAD.test('exportDevDiagnostic: stale_closed_edges does not flag a closed thread 
   }
 });
 
+OAD.test('exportDevDiagnostic: pressure_distribution, active_threads_by_score, and load_overview match the live console functions directly (ticket-enterprise-mode-and-load-overview.md Part 3)', function () {
+  // These were the exact functions hand-typed into devtools to diagnose a live discrepancy — the
+  // whole point of Part 3 is that an export file alone must be able to answer the same question.
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'dx-critical', title: 'Critical', status: 'open', priority: 'critical', contingency_trigger_date: OAD.todayStr() }),
+      OAD.makeThread({ id: 2, uuid: 'dx-low', title: 'Low', status: 'open', priority: 'low' })
+    ];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const liveDist = OAD.Due.pressureDistribution();
+    const liveActive = OAD.Due.activeThreads();
+    const liveOverview = OAD.Due.loadOverview();
+
+    OAD._assertEqual(JSON.stringify(parsed.pressure_distribution), JSON.stringify(liveDist), 'exported pressure_distribution must match OAD.Due.pressureDistribution() called live');
+    OAD._assertEqual(parsed.active_threads_by_score.length, liveActive.length, 'exported active_threads_by_score must include every active thread');
+    OAD._assert(parsed.active_threads_by_score.every(function (row) { return 'uuid' in row && 'title' in row && 'score' in row; }), 'each active_threads_by_score row must expose uuid/title/score');
+    OAD._assertEqual(parsed.load_overview.criticalPressure.count, liveOverview.criticalPressure.count, 'exported load_overview.criticalPressure must match OAD.Due.loadOverview() called live');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
 // ── Tests: OAD.Due.criticalLoad / pressureDistribution (ticket-pressure-propagation-and-critical-load.md) ──
 
 OAD.test('Due.criticalLoad: counts open/waiting threads at or above the threshold, defaulting to pressureThresholds.high', function () {
@@ -4790,13 +4847,40 @@ OAD.test('Due.pressureDistribution: dormant/inbox/closed threads never appear in
   }
 });
 
-OAD.test('renderPersonaBar/renderListView/renderDailyView: rendered Critical Load headline always equals the sum of the 80+ and 50-79 tiers it displays (regression — headline read 16, tiers summed to 22)', function () {
-  // Real reported case: the headline used to be an independently-thresholded count (>=60,
-  // pressureThresholds.high) shown next to a tier breakdown with a different boundary (>=50,
-  // pressureDistribution's own fixed tiers) -- the two could legitimately disagree, and did.
-  // Deriving the headline directly from the same tiers makes that structurally impossible; this
-  // locks it in across all three render sites that show the metric, using whatever real
-  // pressures the mock threads land on rather than assuming a specific score.
+// ── Tests: OAD.Due.loadOverview / Load Overview UI (ticket-enterprise-mode-and-load-overview.md Part 2) ──
+// Replaces the old single "Critical Load" headline (dist['80+'] + dist['50-79'], one number
+// standing in for four kinds of urgency) with four distinct counts. These tests lock in (a) that
+// each count matches its own single-purpose source function exactly, so the four can never drift
+// from each other the way Critical Load itself once drifted from its own tier breakdown (a live
+// report: headline read 16, tiers summed to 22), and (b) that all four render together, labeled,
+// on every surface that used to show the old single number.
+
+OAD.test('Due.loadOverview: four counts each match their own single-purpose source function exactly', function () {
+  const orig = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'lo-overdue', title: 'Overdue', status: 'open', priority: 'high', deadline: '2000-01-01' }),
+      OAD.makeThread({ id: 2, uuid: 'lo-critical', title: 'Critical', status: 'open', priority: 'critical', contingency_trigger_date: OAD.todayStr() }),
+      OAD.makeThread({ id: 3, uuid: 'lo-plain', title: 'Plain', status: 'open', priority: 'low' })
+    ];
+
+    const overview = OAD.Due.loadOverview();
+    const todayDt = new Date(); todayDt.setHours(0, 0, 0, 0);
+    const todayStr = todayDt.toISOString().slice(0, 10);
+    const in7Dt = new Date(todayDt); in7Dt.setDate(in7Dt.getDate() + 7);
+    const in7Str = in7Dt.toISOString().slice(0, 10);
+    const due = OAD.Due.dashboardData(todayStr, in7Str);
+
+    OAD._assertEqual(overview.overdue.count, due.overdue.length, 'loadOverview.overdue must match dashboardData\'s own overdue bucket exactly');
+    OAD._assertEqual(overview.dueThisWeek.count, due.week.length, 'loadOverview.dueThisWeek must match dashboardData\'s own week bucket exactly');
+    OAD._assertEqual(overview.stalled.count, OAD.Due.stalledThreads().length, 'loadOverview.stalled must match Due.stalledThreads() exactly');
+    OAD._assertEqual(overview.criticalPressure.count, OAD.Due.criticalLoad(80).count, 'loadOverview.criticalPressure must match Due.criticalLoad(80) exactly, not the old 80+/50-79 blend');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('renderPersonaBar/renderListView/renderDailyView: Load Overview renders Overdue, Stalled, Due This Week, and Critical Pressure together, each matching Due.loadOverview()', function () {
   const origThreads = OAD.DB.threads;
   const origPersona = OAD.DB.persona;
   const panel = document.getElementById('detail-content');
@@ -4811,38 +4895,263 @@ OAD.test('renderPersonaBar/renderListView/renderDailyView: rendered Critical Loa
     ];
     OAD.DB.persona = { name: 'Test', life_context: { pressure_level: 'moderate', hard_deadline: null } };
 
-    const dist = OAD.Due.pressureDistribution();
-    const expected = String(dist['80+'] + dist['50-79']);
+    const overview = OAD.Due.loadOverview();
+    const findStat = function (root, label) {
+      return Array.from(root.querySelectorAll('.persona-stat')).find(function (el) { return el.textContent.indexOf(label) !== -1; });
+    };
 
     if (bar) {
       OAD.renderPersonaBar();
-      const statValues = Array.from(bar.querySelectorAll('.persona-stat')).find(function (el) {
-        return el.textContent.indexOf('Critical Load') !== -1;
+      ['Overdue', 'Stalled', 'Due This Week', 'Critical Pressure'].forEach(function (label) {
+        const stat = findStat(bar, label);
+        OAD._assert(stat !== undefined, 'renderPersonaBar should render a "' + label + '" stat');
       });
-      OAD._assert(statValues !== undefined, 'renderPersonaBar should render a Critical Load stat');
-      OAD._assertEqual(statValues.querySelector('.val').textContent, expected, 'renderPersonaBar headline must equal dist[80+] + dist[50-79]');
+      OAD._assertEqual(findStat(bar, 'Critical Pressure').querySelector('.val').textContent, String(overview.criticalPressure.count), 'renderPersonaBar Critical Pressure must equal loadOverview.criticalPressure.count exactly');
     }
 
     if (panel) {
       OAD.renderListView();
-      const listStat = Array.from(panel.querySelectorAll('.persona-stat')).find(function (el) {
-        return el.textContent.indexOf('Critical Load') !== -1;
+      ['Overdue', 'Stalled', 'Due This Week', 'Critical Pressure'].forEach(function (label) {
+        const stat = findStat(panel, label);
+        OAD._assert(stat !== undefined, 'renderListView should render a "' + label + '" stat');
       });
-      OAD._assert(listStat !== undefined, 'renderListView should render a Critical Load stat');
-      OAD._assertEqual(listStat.querySelector('.val').textContent, expected, 'renderListView headline must equal dist[80+] + dist[50-79]');
+      OAD._assertEqual(findStat(panel, 'Critical Pressure').querySelector('.val').textContent, String(overview.criticalPressure.count), 'renderListView Critical Pressure must equal loadOverview.criticalPressure.count exactly');
 
       OAD.renderDailyView();
-      const cards = Array.from(panel.querySelectorAll('.ds-metric-card')).find(function (el) {
-        return el.textContent.indexOf('Critical Load') !== -1;
+      const findCard = function (label) {
+        return Array.from(panel.querySelectorAll('.ds-metric-card')).find(function (el) { return el.textContent.indexOf(label) !== -1; });
+      };
+      OAD._assert(panel.querySelector('.ds-section-label') !== null && panel.querySelector('.ds-section-label').textContent.indexOf('Load Overview') !== -1, 'renderDailyView should label the section "Load Overview"');
+      ['Overdue', 'Stalled', 'Due This Week', 'Critical Pressure'].forEach(function (label) {
+        OAD._assert(findCard(label) !== undefined, 'renderDailyView should render a "' + label + '" metric card');
       });
-      OAD._assert(cards !== undefined, 'renderDailyView should render a Critical Load metric card');
-      OAD._assertEqual(cards.querySelector('.ds-metric-value').textContent, expected, 'renderDailyView headline must equal dist[80+] + dist[50-79]');
+      OAD._assertEqual(findCard('Critical Pressure').querySelector('.ds-metric-value').textContent, String(overview.criticalPressure.count), 'renderDailyView Critical Pressure must equal loadOverview.criticalPressure.count exactly');
     }
   } finally {
     OAD.DB.threads = origThreads;
     OAD.DB.persona = origPersona;
     if (panel) panel.innerHTML = originalPanelHTML;
     if (bar) bar.innerHTML = originalBarHTML;
+  }
+});
+
+// ── Tests: OAD.genDailyIntercept (ticket-daily-intercept-content-accuracy.md) ──────────────
+// _llmCall is mocked (never hits the network) so these assert on the ACTUAL prompt content sent
+// to the model — the false accusation and the fabricated number were both bugs in what gets fed
+// in, not in the model's output, so that's what has to be locked down.
+
+OAD.test('genDailyIntercept: a waiting thread with the ball in its own court (user_action_complete) never appears in OVERDUE TASKS or DUE TODAY', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    const pastDate = '2000-01-01';
+    const blockedOverdue = OAD.makeThread({
+      id: 1, uuid: 'di-blocked-overdue', title: 'SBA VetCert waiting on Federal review',
+      status: 'waiting', user_action_complete: true, next_action: 'Wait for SBA', next_action_date: pastDate
+    });
+    const blockedToday = OAD.makeThread({
+      id: 2, uuid: 'di-blocked-today', title: 'Also blocked, due today',
+      status: 'waiting', user_action_complete: true, next_action: 'Wait', next_action_date: OAD.todayStr()
+    });
+    const genuinelyAvoided = OAD.makeThread({
+      id: 3, uuid: 'di-avoided', title: 'Genuinely avoided task',
+      status: 'open', next_action: 'Call the client back', next_action_date: pastDate
+    });
+    OAD.DB.threads = [blockedOverdue, blockedToday, genuinelyAvoided];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    OAD._assert(capturedUserMsg.indexOf('SBA VetCert') === -1, 'a waiting thread with user_action_complete must never appear in OVERDUE TASKS — it is correctly left alone, not avoided');
+    OAD._assert(capturedUserMsg.indexOf('Also blocked, due today') === -1, 'the same exclusion must apply to DUE TODAY, not just OVERDUE');
+    OAD._assert(capturedUserMsg.indexOf('Genuinely avoided task') !== -1, 'a genuinely actionable overdue thread must still appear — the fix must not exclude everything');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: an overdue thread with no real next_action text is excluded even if status/dates would otherwise qualify', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    const noNextAction = OAD.makeThread({
+      id: 1, uuid: 'di-no-next-action', title: 'Overdue with blank next action',
+      status: 'open', next_action: '', next_action_date: '2000-01-01'
+    });
+    OAD.DB.threads = [noNextAction];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    // The thread legitimately still appears under "Stalled Threads" (OAD.Due.stalledThreads()
+    // doesn't require next_action text, and correctly so — that's a separate, unrelated part of
+    // the prompt this ticket didn't touch: `Stalled Threads: ["Overdue with blank next action"]`).
+    // What must specifically be excluded is the OVERDUE TASKS agenda line, which is only ever
+    // written in the `- [Pressure: N] Title` bullet format — distinct from the quoted JSON-array
+    // entry the Stalled Threads line uses.
+    OAD._assert(capturedUserMsg.indexOf('] Overdue with blank next action') === -1, 'a thread with no real next action text is not a legitimate avoidance candidate, regardless of dates');
+    OAD._assert(capturedUserMsg.indexOf('OVERDUE TASKS:') === -1, 'with no qualifying thread, the OVERDUE TASKS section must not even appear');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: feeds real Load Overview counts, never the old summed/fabricated Day Load Score', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'di-load-1', title: 'Critical', status: 'open', priority: 'critical', contingency_trigger_date: OAD.todayStr() }),
+      OAD.makeThread({ id: 2, uuid: 'di-load-2', title: 'Plain', status: 'open', priority: 'low' })
+    ];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    const overview = OAD.Due.loadOverview();
+    const expectedLine = `Load Overview — Overdue: ${overview.overdue.count}, Stalled: ${overview.stalled.count}, Due This Week: ${overview.dueThisWeek.count}, Critical Pressure: ${overview.criticalPressure.count}`;
+    OAD._assert(capturedUserMsg.indexOf(expectedLine) !== -1, 'must feed the real Load Overview counts verbatim, matching OAD.Due.loadOverview() exactly');
+    OAD._assert(capturedUserMsg.indexOf('Day Load Score') === -1, 'must not reference the old fabricated Day Load Score label at all');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: the highest-pressure looming task is never also in the OVERDUE/DUE TODAY agenda, and the prompt explicitly forbids using it for focus (MOHELA-shaped bug)', async function () {
+  // Real bug this closes: the model generated "Crush MOHELA" as today's focus line by pulling
+  // from the HIGHEST PRESSURE LOOMING TASK section (background-only, explicitly "not due today")
+  // instead of OVERDUE TASKS/DUE TODAY, even though MOHELA's own next_action_date was weeks out.
+  // The two lists are already mutually exclusive by construction (highestLooming explicitly
+  // excludes isDueToday/isActionOverdue) — this test locks that invariant in and confirms the
+  // prompt itself carries an explicit, unambiguous instruction not to cross the two, since the
+  // free-text output can't be validated after the fact.
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'di-mohela-shaped', title: 'MOHELA — Select Repayment Plan', status: 'open', priority: 'critical', next_action_date: '2099-09-01', contingency_trigger_date: OAD.todayStr() })
+    ];
+
+    let capturedSystemPrompt = null;
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages, systemPrompt) {
+      capturedUserMsg = messages[0].content;
+      capturedSystemPrompt = systemPrompt;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    OAD._assert(capturedUserMsg.indexOf('OVERDUE TASKS') === -1, 'a thread due weeks out must not appear in OVERDUE TASKS');
+    OAD._assert(capturedUserMsg.indexOf('DUE TODAY') === -1, 'a thread due weeks out must not appear in DUE TODAY either');
+    OAD._assert(capturedUserMsg.indexOf('MOHELA') !== -1, 'it must still appear SOMEWHERE — as the highest-pressure looming task, for blind-spot awareness');
+    OAD._assert(capturedUserMsg.indexOf('NEVER eligible for') !== -1, 'the looming-task section header itself must carry the explicit exclusion');
+    OAD._assert(capturedSystemPrompt.indexOf('OVERDUE TASKS') !== -1 && capturedSystemPrompt.indexOf('DUE TODAY') !== -1, 'the focus field\'s own instruction must name the two eligible sections explicitly');
+    OAD._assert(capturedSystemPrompt.toLowerCase().indexOf('never name the looming task') !== -1, 'the focus field\'s instruction must explicitly forbid naming the looming task, not just describe what focus should contain');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: a passed contingency_trigger_date is tagged [CONTINGENCY TRIGGERED] with the real contingency_action, not left for the model to guess at', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    // Real case this reproduces: Orpheus Ocean's contingency ("let it go if no response by
+    // July 6") had passed, but the agenda line was just "[Pressure: N] Title" with zero
+    // contingency signal, and the model called it a "missed opportunity" instead of "decision
+    // already made, needs executing."
+    const triggered = OAD.makeThread({
+      id: 1, uuid: 'di-ctg-triggered', title: 'Orpheus Ocean — Cold Outreach to Jake Russell',
+      status: 'waiting', next_action: 'Follow up sent. If no response, let it go.', next_action_date: '2000-01-01',
+      contingency_trigger_date: '2000-01-01', contingency_action: 'Let it go — two unanswered outreaches is the limit'
+    });
+    OAD.DB.threads = [triggered];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    OAD._assert(capturedUserMsg.indexOf('[CONTINGENCY TRIGGERED: Let it go — two unanswered outreaches is the limit]') !== -1, 'a passed contingency_trigger_date must be tagged with the real contingency_action text, so the model has something real to reason from instead of the title alone');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: a passed contingency_trigger_date with no contingency_action set still gets a generic execute-it tag', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    const t = OAD.makeThread({
+      id: 1, uuid: 'di-ctg-no-action', title: 'Triggered but no action text',
+      status: 'open', next_action: 'Something', next_action_date: '2000-01-01',
+      contingency_trigger_date: '2000-01-01', contingency_action: ''
+    });
+    OAD.DB.threads = [t];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    OAD._assert(capturedUserMsg.indexOf('[CONTINGENCY TRIGGERED — decision already made, execute it]') !== -1, 'an empty contingency_action must still produce a generic tag, not silently omit the trigger entirely');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('genDailyIntercept: a future contingency_trigger_date gets no tag at all', async function () {
+  const origThreads = OAD.DB.threads;
+  const origLLMCall = OAD._llmCall;
+  try {
+    const future = new Date(); future.setDate(future.getDate() + 30);
+    const t = OAD.makeThread({
+      id: 1, uuid: 'di-ctg-future', title: 'Not triggered yet',
+      status: 'open', next_action: 'Something', next_action_date: '2000-01-01',
+      contingency_trigger_date: future.toISOString().slice(0, 10), contingency_action: 'Some future action'
+    });
+    OAD.DB.threads = [t];
+
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ focus: 'x', avoidance: 'y', reality_check: 'z' });
+    };
+
+    await OAD.genDailyIntercept();
+
+    OAD._assert(capturedUserMsg.indexOf('CONTINGENCY TRIGGERED') === -1, 'a contingency_trigger_date that has not passed yet must not be tagged as triggered');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD._llmCall = origLLMCall;
   }
 });
 

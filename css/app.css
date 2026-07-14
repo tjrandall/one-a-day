@@ -826,6 +826,15 @@ button.success:hover { opacity: .88; }
   gap: 16px;
 }
 
+.ds-section-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 20px 0 12px;
+}
+
 .ds-metric-card {
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.005) 100%);
   backdrop-filter: blur(8px);
@@ -865,6 +874,14 @@ button.success:hover { opacity: .88; }
 
 .ds-metric-value.stalled {
   color: var(--medium);
+}
+
+.ds-metric-value.p-high {
+  color: var(--critical);
+}
+
+.ds-metric-value.p-low {
+  color: var(--low);
 }
 
 .ds-metric-value.deadline {

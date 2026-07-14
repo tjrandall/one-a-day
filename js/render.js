@@ -201,25 +201,24 @@ OAD.renderPersonaBar = function () {
 
   const threads = OAD.getVisibleThreads();
   const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
-  const stalled = OAD.Due.stalledThreads().length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
-  // Critical Load is deliberately derived FROM pressureDistribution's own tiers (80+ and
-  // 50-79), not from a separately-thresholded count — the two used to be computed independently
-  // (a >=60 threshold headline next to an >=50 tier breakdown), which meant the number shown
-  // here could legitimately disagree with the "N at 80+ / N at 50-79" breakdown shown elsewhere
-  // for the exact same metric (caught via a live report: headline read 16, tiers summed to 22).
-  // Deriving one from the other makes that drift structurally impossible, not just unlikely.
-  const pressureDist = OAD.Due.pressureDistribution();
-  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
-  const criticalCls  = criticalCount > 0 ? 'pressure-high' : 'pressure-low';
+  // Load Overview replaces the old single "Critical Load" number (pressureDist['80+'] +
+  // pressureDist['50-79']) with the same four distinct counts shown everywhere else this metric
+  // appears — see OAD.Due.loadOverview (js/due.js) for why these can't drift from each other or
+  // from the Overdue/This Week/Stalled lists rendered on the dashboard. Per
+  // ticket-enterprise-mode-and-load-overview.md Part 2.
+  const overview = OAD.Due.loadOverview();
+  const criticalCls = overview.criticalPressure.count > 0 ? 'pressure-high' : 'pressure-low';
   const p = OAD.DB.persona;
   const dl = p.life_context.hard_deadline ? OAD.formatDate(p.life_context.hard_deadline) : '—';
 
   bar.innerHTML = `
     <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${open}</span></div>
-    <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalled}</span></div>
+    <div class="persona-stat"><span class="text-muted text-sm">Overdue</span><span class="val" style="color:var(--critical)">${overview.overdue.count}</span></div>
+    <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${overview.stalled.count}</span></div>
+    <div class="persona-stat"><span class="text-muted text-sm">Due This Week</span><span class="val">${overview.dueThisWeek.count}</span></div>
     ${dormant ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormant}</span></div>` : ''}
-    <div class="persona-stat" title="Threads at or above pressure 50 (${pressureDist['80+']} at 80+, ${pressureDist['50-79']} at 50-79)"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalCount}</span></div>
+    <div class="persona-stat" title="Threads at pressure 80 or above"><span class="text-muted text-sm">Critical Pressure</span><span class="val ${criticalCls}">${overview.criticalPressure.count}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(p.life_context.pressure_level)}</span></div>
     <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(dl)}</span></div>
     <div style="margin-left:auto">
@@ -1740,14 +1739,12 @@ OAD.renderDailyView = function () {
   const persona = OAD.DB.persona;
   const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
-  // Critical Load is derived FROM the pressureDistribution tiers shown right below it (80+ and
-  // 50-79), not from an independently-thresholded count — the two used to disagree (a >=60
-  // threshold headline next to an >=50 tier breakdown), caught via a live report: headline read
-  // 16, the visible "6 at 80+ · 16 at 50-79" breakdown summed to 22. Deriving one from the other
-  // makes that drift structurally impossible, not just unlikely.
-  const pressureDist = OAD.Due.pressureDistribution();
-  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
-  const criticalCls = criticalCount > 0 ? 'p-high' : 'p-low';
+  // Load Overview replaces the old single "Critical Load" number (pressureDist['80+'] +
+  // pressureDist['50-79']) with four distinct counts — see OAD.Due.loadOverview (js/due.js) for
+  // why these can't drift from each other or from the Overdue/Stalled/This Week lists rendered
+  // elsewhere on this same dashboard. Per ticket-enterprise-mode-and-load-overview.md Part 2.
+  const overview = OAD.Due.loadOverview();
+  const criticalCls = overview.criticalPressure.count > 0 ? 'p-high' : 'p-low';
   let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
     ? OAD.formatDate(persona.life_context.hard_deadline) 
     : '—';
@@ -1780,24 +1777,36 @@ OAD.renderDailyView = function () {
           '<div class="ds-metric-value">' + due.active.length + '</div>' +
           '<div class="ds-metric-desc">In progress</div>' +
         '</div>' +
-        '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
-          '<div class="ds-metric-title">Stalled Tasks</div>' +
-          '<div class="ds-metric-value stalled">' + OAD.Due.stalledThreads().length + '</div>' +
-          '<div class="ds-metric-desc">Need attention</div>' +
-        '</div>' +
-        '<div class="ds-metric-card" role="button" title="' +
-          OAD.esc(pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79 · ' + pressureDist['20-49'] + ' at 20-49 · ' + pressureDist['0-19'] + ' at 0-19') +
-          '" onclick="OAD._activeListStatus=\'not-closed\'; OAD.renderListView();">' +
-          '<div class="ds-metric-title">Critical Load</div>' +
-          '<div class="ds-metric-value ' + criticalCls + '">' + criticalCount + '</div>' +
-          '<div class="ds-metric-desc">' + pressureDist['80+'] + ' at 80+ · ' + pressureDist['50-79'] + ' at 50-79</div>' +
-        '</div>' +
         ((window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && !['CCO', 'Director Alpha', 'Director Beta'].includes(window.OAD._demoRole)) ? '' :
         '<div class="ds-metric-card">' +
           '<div class="ds-metric-title">Hard Deadline</div>' +
           '<div class="ds-metric-value deadline">' + OAD.esc(hardDeadlineStr) + '</div>' +
           '<div class="ds-metric-desc">Target milestone</div>' +
         '</div>') +
+      '</div>' +
+
+      '<h2 class="ds-section-label">Load Overview</h2>' +
+      '<div class="ds-metrics-grid">' +
+        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
+          '<div class="ds-metric-title">Overdue</div>' +
+          '<div class="ds-metric-value ' + (overview.overdue.count > 0 ? 'p-high' : '') + '">' + overview.overdue.count + '</div>' +
+          '<div class="ds-metric-desc">Deadline breached</div>' +
+        '</div>' +
+        '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
+          '<div class="ds-metric-title">Stalled</div>' +
+          '<div class="ds-metric-value stalled">' + overview.stalled.count + '</div>' +
+          '<div class="ds-metric-desc">Drifted, no deadline breach</div>' +
+        '</div>' +
+        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
+          '<div class="ds-metric-title">Due This Week</div>' +
+          '<div class="ds-metric-value">' + overview.dueThisWeek.count + '</div>' +
+          '<div class="ds-metric-desc">Upcoming deadlines</div>' +
+        '</div>' +
+        '<div class="ds-metric-card" role="button" title="Threads at pressure 80 or above" onclick="OAD._activeListStatus=\'not-closed\'; OAD.renderListView();">' +
+          '<div class="ds-metric-title">Critical Pressure</div>' +
+          '<div class="ds-metric-value ' + criticalCls + '">' + overview.criticalPressure.count + '</div>' +
+          '<div class="ds-metric-desc">Pressure 80+, right now</div>' +
+        '</div>' +
       '</div>' +
 
       '<div class="ds-main-grid">' +
@@ -2733,14 +2742,12 @@ OAD.renderListView = function () {
 
   const threads = OAD.getVisibleThreads();
   const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
-  const stalledCount = OAD.Due.stalledThreads().length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
-  // Same derivation as renderPersonaBar/renderDailyView -- Critical Load is the sum of the
-  // pressureDistribution '80+' and '50-79' tiers, not an independently-thresholded count, so it
-  // can never disagree with the tier breakdown shown for the same metric elsewhere in the app.
-  const pressureDist = OAD.Due.pressureDistribution();
-  const criticalCount = pressureDist['80+'] + pressureDist['50-79'];
-  const criticalCls = criticalCount > 0 ? 'pressure-high' : 'pressure-low';
+  // Load Overview replaces the old single "Critical Load" number — see OAD.Due.loadOverview
+  // (js/due.js) and renderPersonaBar above for why. Per ticket-enterprise-mode-and-load-overview.md
+  // Part 2.
+  const overview = OAD.Due.loadOverview();
+  const criticalCls = overview.criticalPressure.count > 0 ? 'pressure-high' : 'pressure-low';
   const persona = OAD.DB.persona;
   const hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
     ? OAD.formatDate(persona.life_context.hard_deadline)
@@ -2768,9 +2775,11 @@ OAD.renderListView = function () {
         <h2>All Tasks</h2>
         <div id="list-tab-persona-bar" class="persona-bar" style="border:1px solid var(--border); border-radius:var(--radius-lg); padding:12px 16px; margin:0; width:100%; box-sizing:border-box;">
           <div class="persona-stat"><span class="text-muted text-sm">Active</span><span class="val">${openCount}</span></div>
-          <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${stalledCount}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Overdue</span><span class="val" style="color:var(--critical)">${overview.overdue.count}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Stalled</span><span class="val" style="color:var(--stalled)">${overview.stalled.count}</span></div>
+          <div class="persona-stat"><span class="text-muted text-sm">Due This Week</span><span class="val">${overview.dueThisWeek.count}</span></div>
           ${dormantCount ? `<div class="persona-stat"><span class="text-muted text-sm">Dormant</span><span class="val" style="color:#8855dd">${dormantCount}</span></div>` : ''}
-          <div class="persona-stat" title="Threads at or above pressure 50 (${pressureDist['80+']} at 80+, ${pressureDist['50-79']} at 50-79)"><span class="text-muted text-sm">Critical Load</span><span class="val ${criticalCls}">${criticalCount}</span></div>
+          <div class="persona-stat" title="Threads at pressure 80 or above"><span class="text-muted text-sm">Critical Pressure</span><span class="val ${criticalCls}">${overview.criticalPressure.count}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Pressure Level</span><span class="val">${OAD.esc(pressureLevel)}</span></div>
           <div class="persona-stat"><span class="text-muted text-sm">Hard Deadline</span><span class="val">${OAD.esc(hardDeadlineStr)}</span></div>
           <div style="margin-left:auto">
