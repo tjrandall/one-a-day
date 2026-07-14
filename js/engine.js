@@ -507,6 +507,76 @@ OAD.getDayLoad = function (dateStr) {
   return collection.getDayLoad(dateStr);
 };
 
+// Mechanical score for how far a tendency-evidence cluster sits past the minimum evidentiary bar
+// (OAD.Config.personaPromotionThresholds) — NOT a calibrated probability the trait is true, and
+// deliberately not named "confidence" for that reason. Computed entirely from ledger counts; the
+// LLM never sees or produces this number, so a reader always knows this specific figure is real
+// arithmetic over real data, not model interpretation.
+//
+// min(), not average, across the three dimensions: a cluster that's huge on occurrence_count and
+// span_days but sits at exactly the floor on distinct_thread_count is precisely the "one hard
+// thread, not a real tendency" case this whole design exists to catch. An average would let two
+// strong dimensions paper over one weak one; min() means the weakest dimension always caps the
+// score. Saturates at 2x each threshold (comfortably past the bar, not "more must mean truer") —
+// exactly at the gate, every ratio is 0.5, so a cluster that just barely cleared reads 0.5, not
+// some falsely precise 0.72.
+OAD.tendencyEvidenceStrength = function (occurrenceCount, distinctThreadCount, spanDays, thresholds) {
+  var t = thresholds || (OAD.Config && OAD.Config.personaPromotionThresholds) || { minOccurrences: 3, minDistinctThreads: 2, minSpanDays: 14 };
+  function ratio(value, threshold) {
+    if (!threshold) return 0;
+    return Math.max(0, Math.min(1, value / (threshold * 2)));
+  }
+  return Math.min(
+    ratio(occurrenceCount, t.minOccurrences),
+    ratio(distinctThreadCount, t.minDistinctThreads),
+    ratio(spanDays, t.minSpanDays)
+  );
+};
+
+// Groups un-consumed tendency_evidence rows by life_area (the simplest deterministic grouping
+// available on every thread already — no separate clustering inference of its own to introduce
+// as a new drift surface) and returns only the clusters that clear ALL three
+// personaPromotionThresholds. This is the statistical gate between "a signal happened" and "this
+// is eligible to be proposed as a persona trait" — per the tendency-detection redesign, nothing
+// downstream may skip this gate to go straight from one excuse to a persona write.
+OAD.evaluateTendencyCandidates = function () {
+  var thresholds = (OAD.Config && OAD.Config.personaPromotionThresholds) || { minOccurrences: 3, minDistinctThreads: 2, minSpanDays: 14 };
+  var evidence = ((OAD.DB.persona && OAD.DB.persona.tendency_evidence) || []).filter(function (e) { return !e.consumed; });
+
+  var byArea = {};
+  evidence.forEach(function (e) {
+    (byArea[e.life_area] = byArea[e.life_area] || []).push(e);
+  });
+
+  var candidates = [];
+  Object.keys(byArea).forEach(function (area) {
+    var rows = byArea[area];
+    var occurrenceCount = rows.length;
+    var distinctThreadCount = new Set(rows.map(function (r) { return r.thread_uuid; })).size;
+    var dates = rows.map(function (r) { return new Date(r.date + 'T00:00:00').getTime(); });
+    var spanDays = Math.round((Math.max.apply(null, dates) - Math.min.apply(null, dates)) / 86400000);
+
+    if (occurrenceCount < thresholds.minOccurrences) return;
+    if (distinctThreadCount < thresholds.minDistinctThreads) return;
+    if (spanDays < thresholds.minSpanDays) return;
+
+    candidates.push({
+      life_area: area,
+      occurrence_count: occurrenceCount,
+      distinct_thread_count: distinctThreadCount,
+      span_days: spanDays,
+      evidence_row_ids: rows.map(function (r) { return r.id; }),
+      evidence_thread_uuids: Array.from(new Set(rows.map(function (r) { return r.thread_uuid; }))),
+      excuse_texts: rows.map(function (r) { return r.excuse_text; }).filter(Boolean),
+      first_observed: rows.reduce(function (min, r) { return r.date < min ? r.date : min; }, rows[0].date),
+      last_observed: rows.reduce(function (max, r) { return r.date > max ? r.date : max; }, rows[0].date),
+      evidence_strength: OAD.tendencyEvidenceStrength(occurrenceCount, distinctThreadCount, spanDays, thresholds)
+    });
+  });
+
+  return candidates;
+};
+
 // Composite "how will this day actually feel" score for the This Week's Load widget —
 // distinct from getDayLoad() above, which is a pure pressure-sum feeding pressure()'s own
 // cross-load multiplier and must stay that way to avoid a new feedback loop. This adds:
@@ -838,6 +908,74 @@ OAD._che006_staleNextAction = function (thread, today) {
   );
 };
 
+// CHE-012: Next Action hasn't been touched since Current Assumption was last revised — the
+// thread's stated next step may no longer reflect its own most recent reasoning. Requires BOTH
+// timestamps to actually exist (legacy threads predating this tracking get null from
+// OAD._normalizeDB, js/data.js) — silence, not a false positive, when either is unknown. Both
+// stamped centrally by OAD.updateThread whenever the corresponding field's value actually
+// changes, so this covers manual edits, the Pushback/Complete Action wizards, and import sync
+// alike — no second stamping site to drift.
+OAD._che012_staleNextActionVsAssumption = function (thread) {
+  if (thread.status === 'closed') return null;
+  if (!thread.next_action_updated_at || !thread.current_assumption_updated_at) return null;
+  if (new Date(thread.next_action_updated_at) >= new Date(thread.current_assumption_updated_at)) return null;
+  return OAD._makeHealthAlert(
+    thread, 'WARNING', 'CHE-012',
+    'Next action was last updated ' + thread.next_action_updated_at.slice(0, 10) + ', but Current Assumption changed more recently (' + thread.current_assumption_updated_at.slice(0, 10) + ') — the next step may no longer match the latest thinking.',
+    false, null
+  );
+};
+
+// CHE-013: closing_condition_type 'action' means the thread's own definition of "done" IS an
+// action, not an external outcome — an empty or too-short next_action here means there's no real
+// defined next step for a thread that specifically needs one to ever close.
+OAD._che013_missingActionStep = function (thread) {
+  if (thread.status === 'closed') return null;
+  if (thread.closing_condition_type !== 'action') return null;
+  var minLength = (OAD.Config && OAD.Config.cheMinNextActionLength) || 8;
+  var text = (thread.next_action || '').trim();
+  if (text.length >= minLength) return null;
+  return OAD._makeHealthAlert(
+    thread, 'WARNING', 'CHE-013',
+    (text ? 'Next action ("' + text + '") is too short' : 'Next action is empty') + ' for a thread whose closing condition IS an action — there\'s no real defined next step for something that specifically needs one to ever close.',
+    false, null
+  );
+};
+
+// CHE-014: Next Action's own text mentions an explicit date that disagrees with the structured
+// next_action_date/deadline actually driving the thread's scheduling — the text and the fields
+// tell two different stories about when this happens. Reuses OAD._parseNaturalDate — the same
+// date-in-text extraction CHE-001 already uses, not a new mechanism — so this only fires on an
+// explicit date mentioned in the text. It deliberately does NOT attempt to detect vague urgency
+// language ("ASAP", "...") with a keyword list; that's a semantic judgment call, a genuinely
+// different mechanism (would need an LLM), not built here.
+OAD._che014_urgencyContradiction = function (thread) {
+  if (thread.status === 'closed') return null;
+  var mentioned = OAD._parseNaturalDate(thread.next_action);
+  if (!mentioned) return null;
+  var minGapDays = (OAD.Config && OAD.Config.cheContradictionMinGapDays) || 14;
+  var mentionedDt = new Date(mentioned + 'T00:00:00');
+
+  var fields = [
+    { label: 'next_action_date', value: thread.next_action_date },
+    { label: 'deadline', value: thread.deadline }
+  ];
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    if (!f.value || f.value === mentioned) continue;
+    var fieldDt = new Date(f.value + 'T00:00:00');
+    var gapDays = Math.round((fieldDt - mentionedDt) / 86400000);
+    if (gapDays >= minGapDays) {
+      return OAD._makeHealthAlert(
+        thread, 'WARNING', 'CHE-014',
+        'Next action mentions ' + mentioned + ', but ' + f.label + ' is set to ' + f.value + ' (' + gapDays + ' days later) — the text and the field disagree about when this actually happens.',
+        false, null
+      );
+    }
+  }
+  return null;
+};
+
 // CHE-010: Duplicate or near-duplicate open/waiting thread titles (>85% Jaccard similarity).
 OAD._che010_duplicateTitles = function (threads) {
   var alerts = [];
@@ -910,6 +1048,9 @@ OAD.runCHE = function () {
     a = OAD._che002_noLeadTime(t);    if (a) fresh.push(a);
     a = OAD._che006_staleNextAction(t, today); if (a) fresh.push(a);
     OAD._che011_conflictingEdges(t).forEach(function (a2) { fresh.push(a2); });
+    a = OAD._che012_staleNextActionVsAssumption(t); if (a) fresh.push(a);
+    a = OAD._che013_missingActionStep(t); if (a) fresh.push(a);
+    a = OAD._che014_urgencyContradiction(t); if (a) fresh.push(a);
   });
 
   OAD._che010_duplicateTitles(threads).forEach(function (a) { fresh.push(a); });

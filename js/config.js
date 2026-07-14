@@ -129,20 +129,30 @@ Based on this, generate a proactive suggestion.`
     },
     personaLesson: {
       system: `You are the executive coach engine for One-A-Day.
-The user just procrastinated on a thread {{pushCount}} times and gave an excuse.
-Analyze if this reveals a deeper pattern that should be added to their Persona.
+An evidence cluster has ALREADY cleared a statistical bar for being a real, cross-cutting
+pattern — NOT a single thread's issue, NOT one hard stretch on the calendar: {{occurrenceCount}}
+occurrences across {{distinctThreadCount}} distinct threads in the "{{lifeArea}}" life area,
+spanning {{spanDays}} days. That gate has already been checked by real arithmetic before you were
+ever called — your job is not to re-decide whether this is a pattern, it is to characterize what
+the pattern actually IS, using only the real excuse text given below as evidence, and to propose
+one concrete, structural adjustment — not just a description with no action attached.
 Output valid JSON only:
 {
   "warrants_update": true,
   "target_list": "assumption_tendencies",
-  "proposed_addition": "Short, punchy statement of the blind spot.",
-  "coach_message": "What to tell the user about why you are adding this."
+  "proposed_addition": "Short, punchy statement of the actual pattern, grounded in the excuses given below — not a generic restatement of 'procrastination.'",
+  "suggested_adjustment": "One concrete, structural change (a cadence, a default, a closing-condition edit, a scheduling rule) that would address the root cause — never leave this empty if warrants_update is true.",
+  "coach_message": "What to tell the user about why this is being proposed, referencing the actual occurrence count / thread count / span given below — not your own confidence in the pattern."
 }
-If this is just a one-off and doesn't reveal a deeper pattern, return {"warrants_update": false}.
+Only return {"warrants_update": false} if, having actually read the excuses, they describe unrelated, situational blockers with no common thread — the statistical gate does not guarantee the excuses will cohere into one real story, and you are the check for that.
 Note: "target_list" must be exactly "assumption_tendencies" or "what_is_not_working".`,
-      user: `Thread: "{{title}}"
-Procrastinated: {{pushCount}} times
-User's excuse: "{{userReason}}"
+      user: `Life area: {{lifeArea}}
+Occurrences: {{occurrenceCount}}
+Distinct threads involved: {{distinctThreadCount}}
+Span: {{spanDays}} days ({{firstObserved}} to {{lastObserved}})
+Excuses given, in the order they were recorded:
+{{excuseTexts}}
+
 Current Assumption Tendencies: {{assumption_tendencies}}
 Current What's Not Working: {{not_working}}`
     }
@@ -169,6 +179,18 @@ Current What's Not Working: {{not_working}}`
   tryScoreThresholds: JSON.parse(localStorage.getItem('oad_try_score_thresholds')) || {
     success: 80,
     warning: 60
+  },
+  // Gate a tendency-evidence cluster must clear before it's even eligible to become a proposed
+  // persona trait (golden rule: no magic numbers in the code). Starting defaults, not derived
+  // from real base-rate data — tune as real clusters are observed. All three must clear:
+  // minDistinctThreads exists specifically so one thread's repeated pushbacks reads as a THREAD
+  // problem, not a persona-level tendency; minSpanDays exists specifically so occurrences
+  // clustered in one hard stretch (a bad week) don't read as a standing pattern. See
+  // OAD.evaluateTendencyCandidates and OAD.tendencyEvidenceStrength (js/engine.js).
+  personaPromotionThresholds: JSON.parse(localStorage.getItem('oad_persona_promotion_thresholds')) || {
+    minOccurrences: 3,
+    minDistinctThreads: 2,
+    minSpanDays: 14
   },
   areaKeywords: JSON.parse(localStorage.getItem('oad_area_keywords')) || {
     'Job Search': ['job board', 'job search', 'job hunt', 'weekly job', 'apply to'],
@@ -232,6 +254,16 @@ Current What's Not Working: {{not_working}}`
     'Finances':   3,
     'Default':    3
   },
+  // CHE-013's floor for "next_action is too short to be a real step" on a closing_condition_type
+  // 'action' thread (golden rule: no magic numbers in the code). Starting default, not derived
+  // from a real sample — short enough that a genuine one-line action ("Call Jake back") still
+  // clears it comfortably.
+  cheMinNextActionLength: JSON.parse(localStorage.getItem('oad_che_min_next_action_length')) || 8,
+  // CHE-014's floor for "the date field is far enough out that an explicit near-term date
+  // mentioned in the next_action text is a real contradiction, not just describing the same
+  // date differently." Below this, a few days' difference between free text and the field is
+  // normal slop, not a sign the field is stale.
+  cheContradictionMinGapDays: JSON.parse(localStorage.getItem('oad_che_contradiction_min_gap_days')) || 14,
   defaultArea: localStorage.getItem('oad_default_area') || 'Personal Growth',
   dayNames: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
   timeSuffix: 'T00:00:00',

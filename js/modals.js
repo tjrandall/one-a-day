@@ -103,7 +103,7 @@ OAD._threadForm = function (t) {
 
     <div class="field">
       <label>Next Action</label>
-      <input id="f-next-action" type="text" value="${OAD.esc(t.next_action)}" placeholder="What is the specific next step?">
+      <textarea id="f-next-action" placeholder="What is the specific next step?">${OAD.esc(t.next_action)}</textarea>
     </div>
     <div class="field-row">
       <div class="field">
@@ -392,70 +392,123 @@ OAD._confirmPushback = function() {
     if (typeof OAD.genInsight === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
        OAD.genInsight(OAD.getThread(id)).then(insight => {
          if (insight) {
-           OAD.addInsight(id, insight);
+           OAD.addInsight(id, insight, 'auto');
            OAD.renderDetail(id);
          }
        }).catch(console.error);
     }
   }
 
-  // Hook: Persona Auto-Evolution
-  if (typeof OAD.extractPersonaLesson === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
-    const t = OAD.getThread(id);
-    OAD.extractPersonaLesson(t.title, data.date_push_count, reason).then(lesson => {
-      if (lesson && lesson.warrants_update) {
-        OAD.openPersonaUpdateModal(lesson);
-      }
-    }).catch(console.error);
+  // Hook: Tendency Evidence + Promotion (replaces the old single-thread "Persona Auto-Evolution").
+  // Logs this pushback's "Real Blocking Reason" text as structured, cross-thread evidence — its
+  // first real structured home (previously only reached current_assumption, overwritten every
+  // time, and a generic evolution_log note mixed in with every other event type) — then checks
+  // whether the resulting life_area cluster clears OAD.evaluateTendencyCandidates' statistical
+  // gate BEFORE ever making an LLM call about it. Per the tendency-detection redesign: no path
+  // from one excuse on one thread straight to a persona write.
+  const t = OAD.getThread(id);
+  if (t) OAD.logTendencyEvidence(t.uuid, 'pushback', reason);
+  if (t && typeof OAD.characterizeTendencyCluster === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
+    const candidate = OAD.evaluateTendencyCandidates().find(function (c) { return c.life_area === t.life_area; });
+    if (candidate) {
+      OAD.characterizeTendencyCluster(candidate).then(lesson => {
+        if (lesson && lesson.warrants_update) {
+          // Mark this cluster's evidence consumed only once actually surfaced to the user — a
+          // model that itself declines (warrants_update: false) leaves the evidence available to
+          // accumulate further, rather than being silently discarded.
+          const evidence = OAD.DB.persona.tendency_evidence || [];
+          candidate.evidence_row_ids.forEach(function (rowId) {
+            const row = evidence.find(function (r) { return r.id === rowId; });
+            if (row) row.consumed = true;
+          });
+          OAD.saveDB();
+          OAD.openPersonaUpdateModal(Object.assign({}, lesson, {
+            evidence_strength: candidate.evidence_strength,
+            occurrence_count: candidate.occurrence_count,
+            distinct_thread_count: candidate.distinct_thread_count,
+            span_days: candidate.span_days,
+            evidence_thread_uuids: candidate.evidence_thread_uuids,
+            first_observed: candidate.first_observed,
+            last_observed: candidate.last_observed
+          }));
+        }
+      }).catch(console.error);
+    }
   }
 };
 
+// Pending lesson lives on OAD, not round-tripped through an inline onclick attribute —
+// encodeURIComponent leaves apostrophes un-escaped (they're in its unreserved set), and this
+// modal's whole content is LLM-generated natural language (coach_message/proposed_addition),
+// which contains contractions and possessives constantly. Confirmed live: both Refute and Accept
+// Update silently threw "missing ) after argument list" and did nothing — no dismissal, no
+// logged pushback, no persona update, no visible error — the instant either field contained an
+// apostrophe. Same failure mode already fixed for OAD._pendingPushback/OAD._pendingImport
+// elsewhere in this file; this modal was just missed.
+OAD._pendingPersonaLesson = null;
+
 OAD.openPersonaUpdateModal = function (lesson) {
-  const encodedLesson = encodeURIComponent(JSON.stringify(lesson));
+  OAD._pendingPersonaLesson = lesson;
+  // evidence_strength is only present on cluster-derived lessons (OAD.characterizeTendencyCluster)
+  // — never absent on those, since it's computed mechanically, not asked of the model. Labeled
+  // explicitly as NOT a probability, matching the reasoning in OAD.tendencyEvidenceStrength
+  // (js/engine.js), so this never reads as more rigorous than it is.
+  const evidenceLine = (lesson.occurrence_count != null)
+    ? `${lesson.occurrence_count} occurrences across ${lesson.distinct_thread_count} distinct threads over ${lesson.span_days} days — evidence strength ${lesson.evidence_strength.toFixed(2)} (how far past the minimum evidentiary bar this cluster sits, not a probability the trait is true)`
+    : '';
   OAD.openModal(`
     <h2>Coach Observation</h2>
     <div id="coach-observation-content">
       <p style="margin-bottom: 16px; color: var(--text-muted);">${OAD.esc(lesson.coach_message)}</p>
+      ${evidenceLine ? `<p class="text-muted text-sm" style="margin-bottom:16px">${OAD.esc(evidenceLine)}</p>` : ''}
       <div class="field" style="margin-bottom: 16px;">
         <label>Proposed Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
         <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
           ${OAD.esc(lesson.proposed_addition)}
         </div>
       </div>
+      ${lesson.suggested_adjustment ? `
+      <div class="field" style="margin-bottom: 16px;">
+        <label>Suggested Adjustment:</label>
+        <div style="padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;">
+          ${OAD.esc(lesson.suggested_adjustment)}
+        </div>
+      </div>` : ''}
       <div class="field" style="margin-bottom: 16px;">
         <label>Push Back / Provide Context (Optional):</label>
         <textarea id="coach-rebuttal" placeholder="If the coach lacks context (e.g., waiting on government bureaucracy), explain it here..." style="width:100%; height:60px; padding:8px; border:1px solid var(--border); border-radius:4px;"></textarea>
       </div>
       <div class="modal-footer">
-        <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
-        <button class="primary" id="rebut-btn" onclick="OAD._rebutPersonaUpdate('${encodedLesson}')">Refute</button>
-        <button class="success" onclick="OAD._acceptPersonaUpdate('${encodedLesson}')">Accept Update</button>
+        <button class="secondary" onclick="OAD._pendingPersonaLesson=null; OAD.closeModal()">Dismiss</button>
+        <button class="primary" id="rebut-btn" onclick="OAD._rebutPersonaUpdate()">Refute</button>
+        <button class="success" onclick="OAD._acceptPersonaUpdate()">Accept Update</button>
       </div>
     </div>
   `);
 };
 
-OAD._rebutPersonaUpdate = async function (encodedLesson) {
+OAD._rebutPersonaUpdate = async function () {
+  if (!OAD._pendingPersonaLesson) return;
   const rebuttal = document.getElementById('coach-rebuttal').value.trim();
   if (!rebuttal) {
     alert("Please provide context to refute the observation.");
     return;
   }
-  
+
   const btn = document.getElementById('rebut-btn');
   btn.disabled = true;
   btn.textContent = 'Thinking...';
-  
+
   try {
-    const lesson = JSON.parse(decodeURIComponent(encodedLesson));
+    const lesson = OAD._pendingPersonaLesson;
     const response = await OAD.refutePersonaLesson(lesson, rebuttal);
-    
+
     let html = `<h2>Coach Response</h2>
       <p style="margin-bottom: 16px; color: ${response.conceded ? 'var(--success)' : 'var(--danger)'}; font-weight: 500;">${OAD.esc(response.coach_response)}</p>`;
-      
+
     if (response.warrants_update && response.proposed_addition) {
        lesson.proposed_addition = response.proposed_addition;
-       const newEncoded = encodeURIComponent(JSON.stringify(lesson));
+       OAD._pendingPersonaLesson = lesson;
        html += `
        <div class="field" style="margin-bottom: 16px;">
         <label>Revised Addition to <strong>${OAD.esc(lesson.target_list)}</strong>:</label>
@@ -463,17 +516,23 @@ OAD._rebutPersonaUpdate = async function (encodedLesson) {
           ${OAD.esc(lesson.proposed_addition)}
         </div>
        </div>
+       <div class="field" style="margin-bottom: 16px;">
+        <label>Push Back / Provide Context (Optional):</label>
+        <textarea id="coach-rebuttal" placeholder="If the coach still lacks context, explain further here..." style="width:100%; height:60px; padding:8px; border:1px solid var(--border); border-radius:4px;"></textarea>
+       </div>
        <div class="modal-footer">
-        <button class="secondary" onclick="OAD.closeModal()">Dismiss</button>
-        <button class="success" onclick="OAD._acceptPersonaUpdate('${newEncoded}')">Accept Revised Update</button>
+        <button class="secondary" onclick="OAD._pendingPersonaLesson=null; OAD.closeModal()">Dismiss</button>
+        <button class="primary" id="rebut-btn" onclick="OAD._rebutPersonaUpdate()">Refute</button>
+        <button class="success" onclick="OAD._acceptPersonaUpdate()">Accept Revised Update</button>
        </div>
        `;
     } else {
+       OAD._pendingPersonaLesson = null;
        html += `<div class="modal-footer">
         <button class="secondary" onclick="OAD.closeModal()">Close</button>
        </div>`;
     }
-    
+
     document.getElementById('coach-observation-content').innerHTML = html;
   } catch (e) {
     btn.disabled = false;
@@ -483,11 +542,29 @@ OAD._rebutPersonaUpdate = async function (encodedLesson) {
 };
 
 
-OAD._acceptPersonaUpdate = function (encodedLesson) {
-  const lesson = JSON.parse(decodeURIComponent(encodedLesson));
+// Writes a structured trait, not a bare string — the full evidentiary record (what threads, how
+// many occurrences, what span, the mechanically-computed evidence_strength) travels with the
+// trait itself, not just its text. OAD.personaTendencyText (js/data.js) reads .text back out for
+// every consumer, so this coexists with any pre-redesign plain-string entries without a
+// destructive migration. revalidate_after/expiry is a deliberately later phase — not implied here.
+OAD._acceptPersonaUpdate = function () {
+  if (!OAD._pendingPersonaLesson) return;
+  const lesson = OAD._pendingPersonaLesson;
   const listName = lesson.target_list === 'what_is_not_working' ? 'what_is_not_working' : 'assumption_tendencies';
   OAD.DB.persona[listName] = OAD.DB.persona[listName] || [];
-  OAD.DB.persona[listName].push(lesson.proposed_addition);
+  OAD.DB.persona[listName].push({
+    text: lesson.proposed_addition,
+    suggested_adjustment: lesson.suggested_adjustment || '',
+    evidence_strength: lesson.evidence_strength != null ? lesson.evidence_strength : null,
+    evidence_thread_uuids: lesson.evidence_thread_uuids || [],
+    occurrence_count: lesson.occurrence_count != null ? lesson.occurrence_count : null,
+    first_observed: lesson.first_observed || null,
+    last_observed: lesson.last_observed || null,
+    source: 'auto-promoted',
+    status: 'active',
+    added: OAD.todayStr()
+  });
+  OAD._pendingPersonaLesson = null;
   OAD.saveDB();
   OAD.closeModal();
 };
@@ -845,11 +922,11 @@ OAD.openPersonaModal = function () {
     </div>
     <div class="field">
       <label>What Is Not Working (one per line)</label>
-      <textarea id="f-not-working">${(p.what_is_not_working || []).join('\n')}</textarea>
+      <textarea id="f-not-working">${(p.what_is_not_working || []).map(OAD.personaTendencyText).join('\n')}</textarea>
     </div>
     <div class="field">
       <label>Assumption Tendencies (one per line)</label>
-      <textarea id="f-tendencies">${(p.assumption_tendencies || []).join('\n')}</textarea>
+      <textarea id="f-tendencies">${(p.assumption_tendencies || []).map(OAD.personaTendencyText).join('\n')}</textarea>
     </div>
     <div class="modal-footer">
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
@@ -864,10 +941,14 @@ OAD._savePersona = function () {
   p.life_context.hard_deadline_context = document.getElementById('f-deadline-ctx')?.value.trim() || '';
   p.tone_calibration.challenge_tolerance = document.getElementById('f-challenge-tol')?.value || 'medium';
   p.tone_calibration.current_mode    = document.getElementById('f-current-mode')?.value || 'problem-solving';
-  const toArr = id => (document.getElementById(id)?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
-  p.what_is_working    = toArr('f-working');
-  p.what_is_not_working = toArr('f-not-working');
-  p.assumption_tendencies = toArr('f-tendencies');
+  p.what_is_working = (document.getElementById('f-working')?.value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  // what_is_not_working/assumption_tendencies reconcile against the existing array rather than
+  // blindly replacing it — a naive re-split-and-replace (what this used to do) would silently
+  // flatten every auto-promoted trait's evidence_strength/evidence_thread_uuids/source back to a
+  // bare string the instant this modal was saved for any unrelated reason (e.g. just changing
+  // Pressure Level). See OAD.reconcilePersonaTendencyList (js/data.js).
+  p.what_is_not_working = OAD.reconcilePersonaTendencyList(p.what_is_not_working, document.getElementById('f-not-working')?.value);
+  p.assumption_tendencies = OAD.reconcilePersonaTendencyList(p.assumption_tendencies, document.getElementById('f-tendencies')?.value);
   OAD.saveDB();
   OAD.closeModal();
   OAD.renderPersonaBar();
@@ -1858,11 +1939,11 @@ OAD._cawStep3 = function () {
     <div class="field-row">
       <div class="field">
         <label>Contingency date</label>
-        <input id="ca-ctg-date" type="date" value="${OAD.esc(prev.ctg_date || '')}">
+        <input id="ca-ctg-date" type="date" value="${OAD.esc(prev.ctg_date !== undefined ? prev.ctg_date : (t.contingency_trigger_date || ''))}">
       </div>
       <div class="field">
         <label>Contingency action</label>
-        <input id="ca-ctg-action" type="text" value="${OAD.esc(prev.ctg_action || '')}" placeholder="If no response by that date…">
+        <input id="ca-ctg-action" type="text" value="${OAD.esc(prev.ctg_action !== undefined ? prev.ctg_action : (t.contingency_action || ''))}" placeholder="If no response by that date…">
       </div>
     </div>
     <div class="modal-footer">

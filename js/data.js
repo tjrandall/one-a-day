@@ -16,6 +16,12 @@ OAD.DB = {
   persona: {
     last_proactive_scan: null,
     assumption_tendencies: [],
+    // Structured, cross-thread, mechanically-scored evidence for tendency detection — separate
+    // from evolution_log (a mixed-event, single-thread audit trail) and from current_assumption
+    // (live per-thread working state). One row per raw signal (a pushback, a detected stall),
+    // never itself an inference. See OAD.evaluateTendencyCandidates (js/engine.js) for how rows
+    // get grouped and gated before anything is ever proposed as a persona trait.
+    tendency_evidence: [],
     counsel_history: [],
     what_is_working: [],
     what_is_not_working: [],
@@ -175,9 +181,23 @@ OAD.quickAddThread = function (rawText) {
   return thread;
 };
 
+// Stamps next_action_updated_at/current_assumption_updated_at whenever the corresponding field's
+// VALUE actually changes — centralized here, the one function every edit path already routes
+// through (edit modal, Coach Pushback wizard, Complete Action wizard, and import sync's
+// patch-only-actually-changed-fields loop, js/data.js applyImport), so this doesn't need a
+// second stamping call site added to each of them individually. These two timestamps are what
+// CHE-012 (js/engine.js) compares to detect a next_action that's older than the current
+// assumption it should be reflecting.
 OAD.updateThread = function (id, patch) {
   const t = OAD.getThread(id);
   if (!t) return null;
+  const now = new Date().toISOString();
+  if (patch.next_action !== undefined && patch.next_action !== t.next_action) {
+    patch.next_action_updated_at = now;
+  }
+  if (patch.current_assumption !== undefined && patch.current_assumption !== t.current_assumption) {
+    patch.current_assumption_updated_at = now;
+  }
   Object.assign(t, patch);
   OAD.saveDB();
   OAD._runAfterSave(t);
@@ -232,20 +252,111 @@ OAD.addEvolution = function (id, note) {
   OAD.saveDB();
 };
 
-OAD.addInsight = function (id, insight) {
+// Mechanical evidence log — one row per raw signal (a pushback, a detected stall), never itself
+// an inference about the person. 'stalled' rows are only ever written by
+// OAD.sweepStalledTendencyEvidence below, which calls OAD.TemporalStatus.isStalled — the same
+// consolidated function every other stall-aware surface already uses; this is not a second
+// definition. 'pushback' rows are written from the one real pushback call site
+// (js/modals.js OAD._confirmPushback) using the user's own "Real Blocking Reason" text as
+// excuse_text — the first real structured, cross-thread home that text has ever had.
+// `consumed` marks whether this row has already contributed to a promoted trait (see
+// OAD.evaluateTendencyCandidates, js/engine.js) — excluded from future candidate evaluation once
+// true, so a cluster that already surfaced doesn't re-propose on every subsequent pushback.
+OAD.logTendencyEvidence = function (threadUuid, eventType, excuseText) {
+  if (eventType !== 'stalled' && eventType !== 'pushback') {
+    throw new Error('OAD.logTendencyEvidence: eventType must be "stalled" or "pushback", got ' + JSON.stringify(eventType));
+  }
+  var t = OAD.getThreadByUUID(threadUuid);
+  if (!t) return null;
+
+  if (!OAD.DB.persona) OAD.DB.persona = {};
+  if (!Array.isArray(OAD.DB.persona.tendency_evidence)) OAD.DB.persona.tendency_evidence = [];
+
+  var row = {
+    id: OAD._generateUUID(),
+    thread_uuid: threadUuid,
+    life_area: t.life_area,
+    event_type: eventType,
+    date: OAD.todayStr(),
+    excuse_text: excuseText || '',
+    consumed: false
+  };
+  OAD.DB.persona.tendency_evidence.push(row);
+  OAD.saveDB();
+  return row;
+};
+
+// A thread that stays stalled for a month shouldn't write 30 near-duplicate rows — that would
+// inflate occurrence_count with the same ongoing fact repeated, not new evidence. One row per
+// thread per cooldown window.
+OAD._STALLED_EVIDENCE_COOLDOWN_DAYS = 7;
+
+// Reads the display text of a persona tendency entry regardless of shape — a plain string
+// (pre-redesign, or manually added) or a structured object (auto-promoted, carries
+// evidence_strength/evidence_thread_uuids/source/etc.). Every consumer of
+// assumption_tendencies/what_is_not_working must go through this rather than assume a shape, so
+// legacy entries and new structured ones can coexist without a one-time destructive migration.
+OAD.personaTendencyText = function (entry) {
+  return typeof entry === 'string' ? entry : (entry && entry.text) || '';
+};
+
+// Reconciles a hand-edited textarea (the Persona settings modal, one entry per line) against the
+// existing array WITHOUT discarding structured metadata on any entry whose text is unchanged. The
+// previous behavior — replace the whole array with freshly split textarea lines — would silently
+// flatten every auto-promoted trait's evidence_strength/evidence_thread_uuids/source back to a
+// bare string the instant the user saved Persona settings for any unrelated reason (e.g. just
+// changing Pressure Level). A line with no matching existing entry becomes a new
+// source:'manual' entry; an existing entry whose text no longer appears in the textarea is
+// dropped (an intentional deletion, not data loss).
+OAD.reconcilePersonaTendencyList = function (existingList, rawTextareaValue) {
+  var existing = existingList || [];
+  var lines = (rawTextareaValue || '').split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
+  var byText = {};
+  existing.forEach(function (entry) {
+    byText[OAD.personaTendencyText(entry)] = entry;
+  });
+  return lines.map(function (line) {
+    return byText[line] || { text: line, source: 'manual', added: OAD.todayStr() };
+  });
+};
+
+OAD.sweepStalledTendencyEvidence = function () {
+  var now = new Date();
+  var cooldownMs = OAD._STALLED_EVIDENCE_COOLDOWN_DAYS * 86400000;
+  var evidence = (OAD.DB.persona && OAD.DB.persona.tendency_evidence) || [];
+  (OAD.getVisibleThreads() || []).forEach(function (t) {
+    if (!OAD.TemporalStatus.isStalled(t, now)) return;
+    var recentRow = evidence.some(function (e) {
+      return e.thread_uuid === t.uuid && e.event_type === 'stalled' &&
+        (now - new Date(e.date + 'T00:00:00')) < cooldownMs;
+    });
+    if (recentRow) return;
+    OAD.logTendencyEvidence(t.uuid, 'stalled', '');
+  });
+};
+
+// source: 'manual' (the thread-detail Insight button, js/render.js OAD.generateInsight) or
+// 'auto' (silently fired after a non-closing edit-modal save, js/modals.js). Before this, both
+// paths called this function identically with no way to tell them apart afterward — every
+// insight looked the same in ai_insights/counsel_history regardless of whether a person actually
+// asked for it. Required, not defaulted: a missing/unrecognized source is a bug at the call site,
+// not something to paper over with a silent guess.
+OAD.addInsight = function (id, insight, source) {
+  if (source !== 'manual' && source !== 'auto') throw new Error('OAD.addInsight: source must be "manual" or "auto", got ' + JSON.stringify(source));
   const t = OAD.getThread(id);
   if (!t) return;
-  
+
   if (!t.ai_insights) t.ai_insights = [];
-  t.ai_insights.push(insight);
-  
+  t.ai_insights.push(Object.assign({}, insight, { source: source }));
+
   if (!OAD.DB.persona) OAD.DB.persona = {};
   if (!OAD.DB.persona.counsel_history) OAD.DB.persona.counsel_history = [];
-  
+
   OAD.DB.persona.counsel_history.push({
     thread_id: id,
     thread_title: t.title,
     insight,
+    source: source,
     date: OAD.todayStr()
   });
   OAD.saveDB();
@@ -265,8 +376,10 @@ OAD.makeThread = function (overrides) {
     closing_condition_type: 'outcome',
     closing_condition_met: false,
     current_assumption: '',
+    current_assumption_updated_at: null,
     assumption_verified: false,
     next_action: '',
+    next_action_updated_at: null,
     next_action_date: '',
     next_action_time: null, // optional 'HH:MM' (24h) — null means date-only, no specific time
     next_action_channel: '',
@@ -856,6 +969,10 @@ OAD.exportThreads = function () {
       // requirement for this specific field, and needs a decision, not a silent pick either way.
       assumption_verified:      t.assumption_verified      || false,
       next_action:              t.next_action              || '',
+      // current_assumption_updated_at is excluded here for the same reason current_assumption
+      // itself is (see the comment above) — its sibling, next_action_updated_at, IS exported,
+      // matching next_action's own export status.
+      next_action_updated_at:   t.next_action_updated_at   || null,
       next_action_date:         t.next_action_date         || '',
       next_action_time:         t.next_action_time         || null,
       next_action_channel:      t.next_action_channel      || '',
@@ -1055,14 +1172,27 @@ OAD.exportDevDiagnostic = function () {
   (OAD.DB.threads || []).forEach(function (t) { threadsByUUID[t.uuid] = t; });
 
   base.dev_export = true;
-  base.note = 'DEV-ONLY DIAGNOSTIC EXPORT — internal QA tool. Not the real user-facing export; not the future moat-protecting minimal export described in the Product Vision Document. Includes current_assumption/evolution_log/ai_insights and computed application state (temporal status, hygiene warnings, CHE alerts, TOAT/Focus Now candidate detail, This Week membership, stale-edge detection) that the real export deliberately omits.';
+  base.note = 'DEV-ONLY DIAGNOSTIC EXPORT — internal QA tool. Not the real user-facing export; not the future moat-protecting minimal export described in the Product Vision Document. Includes current_assumption/evolution_log/ai_insights/contingency_action/contingency_escalation/dormant_trigger/user_action_complete/stage and computed application state (temporal status, hygiene warnings, CHE alerts, TOAT/Focus Now candidate detail, This Week membership, stale-edge detection) that the real export deliberately omits.';
 
   base.threads.forEach(function (row) {
     var real = threadsByUUID[row.uuid];
     if (!real) return;
     row.current_assumption = real.current_assumption || '';
+    row.current_assumption_updated_at = real.current_assumption_updated_at || null;
     row.evolution_log = real.evolution_log || [];
     row.ai_insights = real.ai_insights || [];
+    // Added for field-adoption analysis — these five are real, live fields (edit-modal inputs,
+    // rendered in detail view, some feeding pressure/Runway Risk logic directly — see the
+    // conversation this export change came out of for the full per-field trace) that
+    // OAD.exportThreads() omits either deliberately (contingency_action/escalation, alongside
+    // current_assumption/evolution_log, per the moat-safe boundary comment above) or just never
+    // added (dormant_trigger, user_action_complete, stage — no export-exclusion rationale for
+    // these three, they simply weren't in the original field list).
+    row.contingency_action = real.contingency_action || '';
+    row.contingency_escalation = real.contingency_escalation || '';
+    row.dormant_trigger = real.dormant_trigger || '';
+    row.user_action_complete = real.user_action_complete || false;
+    row.stage = real.stage || null;
     row.computed_status = {
       is_overdue: OAD.TemporalStatus.isOverdue(real, now),
       is_due_today: OAD.TemporalStatus.isDueToday(real, now),
@@ -1190,6 +1320,7 @@ OAD._normalizeDB = function () {
   OAD.DB.persona          = OAD.DB.persona          || {};
   OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
   if (!Array.isArray(OAD.DB.persona.what_is_not_working)) OAD.DB.persona.what_is_not_working = [];
+  if (!Array.isArray(OAD.DB.persona.tendency_evidence)) OAD.DB.persona.tendency_evidence = [];
   if (!OAD.DB.persona.tone_calibration) OAD.DB.persona.tone_calibration = {};
 
   // Hydrate every persisted record into its real domain-model class. Records loaded from
@@ -1241,6 +1372,10 @@ OAD._normalizeDB = function () {
     if (!Object.prototype.hasOwnProperty.call(t, 'runway_ack_until')) t.runway_ack_until = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'next_action_time')) t.next_action_time = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'deadline_time')) t.deadline_time = null;
+    // Legacy threads predate this tracking — backfill to null (unknown), not a fabricated "just
+    // now." CHE-012 (js/engine.js) treats null as "can't tell, don't flag" rather than guessing.
+    if (!Object.prototype.hasOwnProperty.call(t, 'next_action_updated_at')) t.next_action_updated_at = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'current_assumption_updated_at')) t.current_assumption_updated_at = null;
     t.life_area = OAD.normalizeLifeArea(t.life_area);
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();

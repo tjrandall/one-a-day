@@ -1323,6 +1323,35 @@ OAD.test('updateThread: merges patch', function () {
   OAD._assertEqual(OAD.getThread(t.id).title, 'Before', 'Title should be unchanged');
 });
 
+OAD.test('updateThread: stamps next_action_updated_at / current_assumption_updated_at only when those fields actually change', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Timestamp stamping', next_action: 'Original action', current_assumption: 'Original assumption' }));
+  OAD._assertEqual(t.next_action_updated_at, null, 'a freshly created thread must start with no timestamp');
+
+  OAD.updateThread(t.id, { priority: 'high' });
+  OAD._assertEqual(OAD.getThread(t.id).next_action_updated_at, null, 'changing an unrelated field must not stamp next_action_updated_at');
+
+  OAD.updateThread(t.id, { next_action: 'A new action' });
+  const afterAction = OAD.getThread(t.id);
+  OAD._assert(afterAction.next_action_updated_at !== null, 'changing next_action\'s actual value must stamp next_action_updated_at');
+  OAD._assertEqual(afterAction.current_assumption_updated_at, null, 'changing next_action must not stamp current_assumption_updated_at');
+
+  OAD.updateThread(t.id, { next_action: 'A new action' });
+  OAD._assertEqual(OAD.getThread(t.id).next_action_updated_at, afterAction.next_action_updated_at, 'passing the SAME value again must not re-stamp — this is change detection, not "touched"');
+
+  OAD.updateThread(t.id, { current_assumption: 'A new assumption' });
+  OAD._assert(OAD.getThread(t.id).current_assumption_updated_at !== null, 'changing current_assumption\'s actual value must stamp current_assumption_updated_at');
+});
+
+OAD.test('_threadForm: Next Action renders as a multi-line textarea, matching Closing Condition and Current Assumption, not a single-line input', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Textarea sizing', next_action: 'A next step' }));
+  OAD.openEditModal(t.id);
+  const field = document.getElementById('f-next-action');
+  OAD._assert(field !== null, 'the Next Action field must exist');
+  OAD._assertEqual(field.tagName, 'TEXTAREA', 'Next Action must be a <textarea>, not a single-line <input>, so a long step is actually readable while editing');
+  OAD._assertEqual(field.value, 'A next step', 'existing next_action text must still populate the field');
+  OAD.closeModal();
+});
+
 OAD.test('deleteThread: removes thread', function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'ToDelete' }));
   OAD.deleteThread(t.id);
@@ -1336,12 +1365,28 @@ OAD.test('addEvolution: appends log entry', function () {
   OAD._assertEqual(t.evolution_log[0].note, 'Something happened', 'Note should match');
 });
 
-OAD.test('addInsight: appends to ai_insights and counsel_history', function () {
+OAD.test('addInsight: appends to ai_insights and counsel_history, tagged with who/what triggered it', function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'Insight test' }));
   const before = OAD.DB.persona.counsel_history.length;
-  OAD.addInsight(t.id, { observation: 'Interesting', date: '2026-05-30' });
+  OAD.addInsight(t.id, { observation: 'Interesting', date: '2026-05-30' }, 'manual');
   OAD._assertEqual(t.ai_insights.length, 1, 'Should have 1 insight');
+  OAD._assertEqual(t.ai_insights[0].source, 'manual', 'ai_insights entry must record which path triggered it');
   OAD._assertEqual(OAD.DB.persona.counsel_history.length, before + 1, 'Should add to counsel_history');
+  OAD._assertEqual(OAD.DB.persona.counsel_history[before].source, 'manual', 'counsel_history entry must record which path triggered it');
+
+  OAD.addInsight(t.id, { observation: 'Auto-fired' }, 'auto');
+  OAD._assertEqual(t.ai_insights[1].source, 'auto', 'a silently auto-triggered insight must be distinguishable from a manually requested one');
+});
+
+OAD.test('addInsight: throws on a missing or unrecognized source rather than silently guessing', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Insight source validation' }));
+  let threwForMissing = false;
+  try { OAD.addInsight(t.id, { observation: 'x' }); } catch (e) { threwForMissing = true; }
+  OAD._assert(threwForMissing, 'omitting source must throw, not default to something that looks manual or automatic');
+
+  let threwForBogus = false;
+  try { OAD.addInsight(t.id, { observation: 'x' }, 'somebody'); } catch (e) { threwForBogus = true; }
+  OAD._assert(threwForBogus, 'an unrecognized source string must throw, not be silently accepted');
 });
 
 OAD.test('makeThread: defaults are valid', function () {
@@ -2458,6 +2503,10 @@ OAD._finishBoot = function () {
 
   if (typeof OAD.runCHE === 'function') {
     OAD.runCHE();
+  }
+
+  if (typeof OAD.sweepStalledTendencyEvidence === 'function') {
+    OAD.sweepStalledTendencyEvidence();
   }
 
   OAD._updateCHEBadge();
@@ -4561,6 +4610,58 @@ OAD.test('OAD.runCHE(): CHE-006 fires correctly end-to-end for a real thread mix
   }
 });
 
+// ── Tests: CHE-012/013/014 (Next Action staleness/contradiction detector) ───────────────────
+
+OAD.test('CHE-012: fires when next_action_updated_at predates current_assumption_updated_at', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'che012-stale', status: 'open', next_action_updated_at: '2026-06-01T00:00:00.000Z', current_assumption_updated_at: '2026-07-01T00:00:00.000Z' });
+  var alert = OAD._che012_staleNextActionVsAssumption(t);
+  OAD._assert(!!alert, 'a next_action older than the current_assumption it should reflect must fire CHE-012');
+  OAD._assertEqual(alert.type, 'CHE-012', 'alert type is CHE-012');
+});
+
+OAD.test('CHE-012: does not fire when next_action is the same age or newer', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'che012-fresh', status: 'open', next_action_updated_at: '2026-07-01T00:00:00.000Z', current_assumption_updated_at: '2026-06-01T00:00:00.000Z' });
+  OAD._assert(!OAD._che012_staleNextActionVsAssumption(t), 'a next_action updated after the current_assumption must not fire');
+});
+
+OAD.test('CHE-012: does not fire when either timestamp is unknown (legacy thread) — silence, not a guess', function () {
+  var noAssumptionTs = OAD.makeThread({ id: 1, uuid: 'che012-no-assumption-ts', status: 'open', next_action_updated_at: '2026-06-01T00:00:00.000Z', current_assumption_updated_at: null });
+  var noActionTs = OAD.makeThread({ id: 2, uuid: 'che012-no-action-ts', status: 'open', next_action_updated_at: null, current_assumption_updated_at: '2026-06-01T00:00:00.000Z' });
+  OAD._assert(!OAD._che012_staleNextActionVsAssumption(noAssumptionTs), 'a missing current_assumption_updated_at must not be treated as "always stale"');
+  OAD._assert(!OAD._che012_staleNextActionVsAssumption(noActionTs), 'a missing next_action_updated_at must not be treated as "always stale"');
+});
+
+OAD.test('CHE-013: fires when closing_condition_type is action and next_action is empty or too short', function () {
+  var empty = OAD.makeThread({ id: 1, uuid: 'che013-empty', status: 'open', closing_condition_type: 'action', next_action: '' });
+  var tooShort = OAD.makeThread({ id: 2, uuid: 'che013-short', status: 'open', closing_condition_type: 'action', next_action: 'Call' });
+  OAD._assert(!!OAD._che013_missingActionStep(empty), 'an empty next_action on an action-type closing thread must fire CHE-013');
+  OAD._assert(!!OAD._che013_missingActionStep(tooShort), 'a next_action shorter than the configured floor must fire CHE-013');
+});
+
+OAD.test('CHE-013: does not fire for outcome-type closing threads, or when next_action is long enough', function () {
+  var outcomeType = OAD.makeThread({ id: 1, uuid: 'che013-outcome', status: 'open', closing_condition_type: 'outcome', next_action: '' });
+  var longEnough = OAD.makeThread({ id: 2, uuid: 'che013-long', status: 'open', closing_condition_type: 'action', next_action: 'Call Jake back about the offer' });
+  OAD._assert(!OAD._che013_missingActionStep(outcomeType), 'an outcome-type closing condition does not require next_action to be a specific action, so an empty one is not a CHE-013 case');
+  OAD._assert(!OAD._che013_missingActionStep(longEnough), 'a real, sufficiently long next_action must not fire');
+});
+
+OAD.test('CHE-014: fires when next_action mentions an explicit date far from next_action_date/deadline', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'che014-mismatch', status: 'open', next_action: 'Follow up by 2026-07-01', next_action_date: '2026-08-15', deadline: null });
+  var alert = OAD._che014_urgencyContradiction(t);
+  OAD._assert(!!alert, 'a next_action text mentioning a date weeks before the actual next_action_date must fire CHE-014');
+  OAD._assertEqual(alert.type, 'CHE-014', 'alert type is CHE-014');
+});
+
+OAD.test('CHE-014: does not fire when no explicit date is mentioned in next_action (no keyword matching for vague urgency language)', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'che014-vague', status: 'open', next_action: 'This is urgent, needs to happen ASAP', next_action_date: '2026-08-15', deadline: null });
+  OAD._assert(!OAD._che014_urgencyContradiction(t), 'vague urgency language with no explicit date must not fire — this rule only catches an explicit date-vs-field contradiction, not keyword-detected urgency tone');
+});
+
+OAD.test('CHE-014: does not fire when the mentioned date and the field are close together (under the configured gap)', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'che014-close', status: 'open', next_action: 'Follow up by 2026-08-10', next_action_date: '2026-08-15', deadline: null });
+  OAD._assert(!OAD._che014_urgencyContradiction(t), 'a few days of normal slop between the text and the field must not fire');
+});
+
 // ── Tests: OAD.exportDevDiagnostic (ticket-dev-diagnostic-export.md) ─────────────────────
 
 OAD.test('exportThreads (the real, moat-safe export) is unaffected by the new DEV export — regression lock', function () {
@@ -4588,6 +4689,28 @@ OAD.test('exportDevDiagnostic: labeled clearly as DEV-only, includes fields the 
     const row = parsed.threads.find(x => x.uuid === 'dev-exp-assump');
     OAD._assertEqual(row.current_assumption, 'A real assumption', 'current_assumption must be present here, unlike the real export');
     OAD._assert(Array.isArray(row.evolution_log) && row.evolution_log.length > 0, 'evolution_log must be present here');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('exportDevDiagnostic: contingency_action, contingency_escalation, dormant_trigger, user_action_complete, and stage are present for field-adoption analysis', function () {
+  const orig = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({
+      id: 1, uuid: 'dev-exp-adoption', title: 'Adoption check', status: 'dormant',
+      contingency_action: 'Call the backup contact', contingency_escalation: 'Escalate to manager',
+      dormant_trigger: 'Re-engage when funding approved', user_action_complete: true, stage: 'interviewing'
+    });
+    OAD.DB.threads = [t];
+
+    const parsed = JSON.parse(OAD.exportDevDiagnostic());
+    const row = parsed.threads.find(x => x.uuid === 'dev-exp-adoption');
+    OAD._assertEqual(row.contingency_action, 'Call the backup contact', 'contingency_action must be present here, unlike the real export');
+    OAD._assertEqual(row.contingency_escalation, 'Escalate to manager', 'contingency_escalation must be present here, unlike the real export');
+    OAD._assertEqual(row.dormant_trigger, 'Re-engage when funding approved', 'dormant_trigger must be present');
+    OAD._assertEqual(row.user_action_complete, true, 'user_action_complete must be present');
+    OAD._assertEqual(row.stage, 'interviewing', 'stage must be present');
   } finally {
     OAD.DB.threads = orig;
   }
@@ -5152,6 +5275,364 @@ OAD.test('genDailyIntercept: a future contingency_trigger_date gets no tag at al
   } finally {
     OAD.DB.threads = origThreads;
     OAD._llmCall = origLLMCall;
+  }
+});
+
+// ── Tests: Coach Observation modal (Refute/Accept apostrophe-safety) ───────────────────────
+// Real bug this closes: lesson data (LLM-generated natural language — contractions, possessives)
+// used to round-trip through encodeURIComponent(JSON.stringify(lesson)) embedded directly in a
+// single-quoted onclick attribute. encodeURIComponent doesn't escape apostrophes, so any lesson
+// containing one broke the attribute's JS and both buttons silently did nothing — no dismissal,
+// no logged pushback, no persona update, no visible error. Same failure mode this file already
+// fixed for OAD._pendingPushback/OAD._pendingImport; this modal was missed. Fix moves the pending
+// lesson onto OAD._pendingPersonaLesson instead of the DOM string.
+
+OAD.test('_acceptPersonaUpdate: apostrophe-laden lesson content does not break Accept (regression — previously threw a SyntaxError and did nothing)', function () {
+  const origPersona = OAD.DB.persona;
+  try {
+    OAD.DB.persona = { assumption_tendencies: [], what_is_not_working: [] };
+    const lesson = {
+      warrants_update: true,
+      target_list: 'assumption_tendencies',
+      proposed_addition: "Tendency to assume it's handled once it's out of their hands",
+      coach_message: "You've pushed this back three times."
+    };
+    OAD.openPersonaUpdateModal(lesson);
+    document.querySelector('#modal-overlay .modal-footer button.success').click();
+
+    OAD._assertEqual(OAD.DB.persona.assumption_tendencies.length, 1, 'Accept Update must append the proposed_addition even when it contains apostrophes');
+    OAD._assertEqual(OAD.personaTendencyText(OAD.DB.persona.assumption_tendencies[0]), lesson.proposed_addition, 'the appended text must match exactly, read through personaTendencyText since Accept now stores a structured trait object');
+    OAD._assertEqual(OAD._pendingPersonaLesson, null, 'pending lesson state must clear after Accept');
+  } finally {
+    OAD.DB.persona = origPersona;
+    OAD.closeModal();
+    OAD._pendingPersonaLesson = null;
+  }
+});
+
+OAD.test('openPersonaUpdateModal: Dismiss clears pending lesson state', function () {
+  try {
+    OAD.openPersonaUpdateModal({ warrants_update: true, target_list: 'assumption_tendencies', proposed_addition: "Something", coach_message: "Hi" });
+    document.querySelector('#modal-overlay .modal-footer button.secondary').click();
+    OAD._assertEqual(OAD._pendingPersonaLesson, null, 'Dismiss must clear the pending lesson so a stale one can never be applied by a later, unrelated click');
+  } finally {
+    OAD.closeModal();
+    OAD._pendingPersonaLesson = null;
+  }
+});
+
+OAD.test('_rebutPersonaUpdate: apostrophe-laden lesson content does not break Refute (regression — previously threw a SyntaxError and did nothing)', async function () {
+  const origLLMCall = OAD._llmCall;
+  try {
+    const lesson = {
+      warrants_update: true,
+      target_list: 'assumption_tendencies',
+      proposed_addition: "Tendency to assume it's handled once it's out of their hands",
+      coach_message: "You've pushed this back three times."
+    };
+    OAD.openPersonaUpdateModal(lesson);
+    document.getElementById('coach-rebuttal').value = "Waiting on government bureaucracy, not avoiding it.";
+
+    OAD._llmCall = async function () {
+      return JSON.stringify({ conceded: true, coach_response: "Fair — that's out of your control.", warrants_update: false, proposed_addition: "" });
+    };
+
+    document.getElementById('rebut-btn').click();
+    await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+    OAD._assert(document.getElementById('coach-observation-content').innerHTML.indexOf('Fair') !== -1, 'Refute must actually process and render the coach response, not silently fail');
+    OAD._assertEqual(OAD._pendingPersonaLesson, null, 'a fully-conceded rebuttal leaves nothing to accept, so pending state must clear');
+  } finally {
+    OAD._llmCall = origLLMCall;
+    OAD.closeModal();
+    OAD._pendingPersonaLesson = null;
+  }
+});
+
+OAD.test('_rebutPersonaUpdate: the revised-update screen (after a warrants_update refute response) has its own working Refute button, not just Dismiss/Accept', async function () {
+  const origLLMCall = OAD._llmCall;
+  try {
+    const lesson = {
+      warrants_update: true,
+      target_list: 'assumption_tendencies',
+      proposed_addition: 'Original observation',
+      coach_message: 'Seen a pattern.'
+    };
+    OAD.openPersonaUpdateModal(lesson);
+    document.getElementById('coach-rebuttal').value = 'Partially fair, but consider this context.';
+
+    OAD._llmCall = async function () {
+      return JSON.stringify({ conceded: false, coach_response: 'Noted, revising slightly.', warrants_update: true, proposed_addition: 'Revised observation' });
+    };
+    document.getElementById('rebut-btn').click();
+    await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+    const revisedRebutBtn = document.getElementById('rebut-btn');
+    OAD._assert(revisedRebutBtn !== null, 'the revised-update screen must have its own Refute button, not just Dismiss/Accept');
+    OAD._assert(document.getElementById('coach-rebuttal') !== null, 'the revised-update screen must have its own rebuttal textarea to actually use that button');
+
+    // Refute a second time, on the revised screen, using the same handler pattern.
+    document.getElementById('coach-rebuttal').value = 'Still missing context.';
+    OAD._llmCall = async function () {
+      return JSON.stringify({ conceded: true, coach_response: 'Fair, withdrawing entirely.', warrants_update: false, proposed_addition: '' });
+    };
+    revisedRebutBtn.click();
+    await new Promise(function (resolve) { resolve(); });
+    await new Promise(function (resolve) { setTimeout(resolve, 0); });
+
+    OAD._assert(document.getElementById('coach-observation-content').innerHTML.indexOf('withdrawing entirely') !== -1, 'the second Refute click must actually process, proving the button on the revised screen is wired, not decorative');
+  } finally {
+    OAD._llmCall = origLLMCall;
+    OAD.closeModal();
+    OAD._pendingPersonaLesson = null;
+  }
+});
+
+// ── Tests: Tendency Evidence Ledger + Promotion Job ─────────────────────────────────────────
+// Replaces single-thread "3 pushbacks → propose a permanent persona trait" with a real
+// statistical gate. These tests exist specifically to hold the two things pushed back on before
+// approval: (1) 'stalled' detection must be OAD.TemporalStatus.isStalled, not a reimplementation;
+// (2) evidence_strength must be a real, checkable formula, not a hand-waved number.
+
+OAD.test('logTendencyEvidence: validates eventType and requires a real thread', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Evidence target', life_area: 'Career' }));
+  const row = OAD.logTendencyEvidence(t.uuid, 'pushback', 'Waiting on a callback');
+  OAD._assert(row !== null, 'a valid thread + eventType must produce a row');
+  OAD._assertEqual(row.thread_uuid, t.uuid, 'row must record the thread uuid');
+  OAD._assertEqual(row.life_area, 'Career', 'row must record the thread\'s life_area, for clustering');
+  OAD._assertEqual(row.excuse_text, 'Waiting on a callback', 'row must record the real excuse text');
+  OAD._assertEqual(row.consumed, false, 'a fresh row must start unconsumed');
+
+  OAD._assertEqual(OAD.logTendencyEvidence('not-a-real-uuid', 'pushback', 'x'), null, 'a nonexistent thread must not produce a row');
+
+  let threw = false;
+  try { OAD.logTendencyEvidence(t.uuid, 'something_else', 'x'); } catch (e) { threw = true; }
+  OAD._assert(threw, 'an unrecognized eventType must throw, not silently accept an undefined category');
+});
+
+OAD.test('sweepStalledTendencyEvidence: uses OAD.TemporalStatus.isStalled directly, not a reimplementation', function () {
+  const origThreads = OAD.DB.threads;
+  const origEvidence = OAD.DB.persona.tendency_evidence;
+  try {
+    OAD.DB.persona.tendency_evidence = [];
+    const stalled = OAD.makeThread({ id: 1, uuid: 'sweep-stalled', title: 'Drifted', status: 'open', next_action_date: '2000-01-01', life_area: 'Career' });
+    const notStalled = OAD.makeThread({ id: 2, uuid: 'sweep-fresh', title: 'Fine', status: 'open', next_action_date: OAD.todayStr(), life_area: 'Career' });
+    const ballInCourt = OAD.makeThread({ id: 3, uuid: 'sweep-waiting-done', title: 'Ball in their court', status: 'waiting', user_action_complete: true, next_action_date: '2000-01-01', life_area: 'Career' });
+    OAD.DB.threads = [stalled, notStalled, ballInCourt];
+
+    OAD.sweepStalledTendencyEvidence();
+
+    const uuids = OAD.DB.persona.tendency_evidence.map(function (e) { return e.thread_uuid; });
+    OAD._assertEqual(uuids.indexOf('sweep-stalled') !== -1, true, 'a thread OAD.TemporalStatus.isStalled flags true must get an evidence row');
+    OAD._assertEqual(uuids.indexOf('sweep-fresh'), -1, 'a thread with a current next_action_date must not — matches isStalled exactly, not a looser reimplementation');
+    OAD._assertEqual(uuids.indexOf('sweep-waiting-done'), -1, 'a waiting+user_action_complete thread must not — same ball-in-their-court exclusion isStalled already has, proving no separate check was written here');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.persona.tendency_evidence = origEvidence;
+  }
+});
+
+OAD.test('sweepStalledTendencyEvidence: does not re-log the same ongoing stall within the cooldown window', function () {
+  const origThreads = OAD.DB.threads;
+  const origEvidence = OAD.DB.persona.tendency_evidence;
+  try {
+    OAD.DB.persona.tendency_evidence = [];
+    const t = OAD.makeThread({ id: 1, uuid: 'sweep-cooldown', title: 'Still stalled', status: 'open', next_action_date: '2000-01-01', life_area: 'Career' });
+    OAD.DB.threads = [t];
+
+    OAD.sweepStalledTendencyEvidence();
+    OAD.sweepStalledTendencyEvidence();
+    OAD.sweepStalledTendencyEvidence();
+
+    const rows = OAD.DB.persona.tendency_evidence.filter(function (e) { return e.thread_uuid === 'sweep-cooldown'; });
+    OAD._assertEqual(rows.length, 1, 'three sweeps of the same ongoing stall must produce one row, not three — an ongoing fact isn\'t new evidence each time it\'s checked');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.persona.tendency_evidence = origEvidence;
+  }
+});
+
+OAD.test('tendencyEvidenceStrength: exactly at the gate reads 0.5; at 2x every dimension reads 1.0', function () {
+  const thresholds = { minOccurrences: 3, minDistinctThreads: 2, minSpanDays: 14 };
+  OAD._assertEqual(OAD.tendencyEvidenceStrength(3, 2, 14, thresholds), 0.5, 'exactly at the minimum on all three dimensions must read 0.5 — "just cleared the bar," not falsely precise');
+  OAD._assertEqual(OAD.tendencyEvidenceStrength(6, 4, 28, thresholds), 1.0, 'double every threshold must saturate at 1.0');
+  OAD._assertEqual(OAD.tendencyEvidenceStrength(100, 50, 500, thresholds), 1.0, 'far beyond double must not exceed 1.0 — more doesn\'t mean truer past saturation');
+});
+
+OAD.test('tendencyEvidenceStrength: the weakest dimension caps the score (min, not average)', function () {
+  const thresholds = { minOccurrences: 3, minDistinctThreads: 2, minSpanDays: 14 };
+  // Huge on occurrences and span, but distinct_thread_count sits exactly at the floor — this is
+  // precisely the "one hard thread, not a real tendency" case the redesign exists to catch.
+  const strength = OAD.tendencyEvidenceStrength(50, 2, 200, thresholds);
+  OAD._assertEqual(strength, 0.5, 'a weak distinct-thread-count must cap the whole score at its own ratio (0.5), not get averaged up by the other two strong dimensions');
+});
+
+OAD.test('evaluateTendencyCandidates: gates on ALL three thresholds independently, and groups by life_area', function () {
+  const origThreads = OAD.DB.threads;
+  const origEvidence = OAD.DB.persona.tendency_evidence;
+  try {
+    OAD.DB.threads = [
+      OAD.addThread(OAD.makeThread({ title: 'A', life_area: 'Career' })),
+      OAD.addThread(OAD.makeThread({ title: 'B', life_area: 'Career' }))
+    ];
+    const [a, b] = OAD.DB.threads.slice(-2);
+
+    // Case 1: enough occurrences, but only ONE distinct thread — must not clear the gate.
+    OAD.DB.persona.tendency_evidence = [
+      { id: '1', thread_uuid: a.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-01', excuse_text: 'x', consumed: false },
+      { id: '2', thread_uuid: a.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-15', excuse_text: 'y', consumed: false },
+      { id: '3', thread_uuid: a.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-07-01', excuse_text: 'z', consumed: false }
+    ];
+    OAD._assertEqual(OAD.evaluateTendencyCandidates().length, 0, 'one thread repeating three times must not clear minDistinctThreads — that\'s a thread problem, not a tendency');
+
+    // Case 2: enough distinct threads and occurrences, but all inside one week — must not clear.
+    OAD.DB.persona.tendency_evidence = [
+      { id: '1', thread_uuid: a.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-01', excuse_text: 'x', consumed: false },
+      { id: '2', thread_uuid: b.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-03', excuse_text: 'y', consumed: false },
+      { id: '3', thread_uuid: a.uuid, life_area: 'Career', event_type: 'stalled', date: '2026-06-05', excuse_text: '', consumed: false }
+    ];
+    OAD._assertEqual(OAD.evaluateTendencyCandidates().length, 0, 'three occurrences clustered inside one week must not clear minSpanDays — one hard week, not a standing tendency');
+
+    // Case 3: clears all three — must produce exactly one candidate with correct stats.
+    OAD.DB.persona.tendency_evidence = [
+      { id: '1', thread_uuid: a.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-01', excuse_text: 'Waiting on a callback', consumed: false },
+      { id: '2', thread_uuid: b.uuid, life_area: 'Career', event_type: 'pushback', date: '2026-06-20', excuse_text: 'Forgot to follow up', consumed: false },
+      { id: '3', thread_uuid: a.uuid, life_area: 'Career', event_type: 'stalled', date: '2026-07-01', excuse_text: '', consumed: false }
+    ];
+    const candidates = OAD.evaluateTendencyCandidates();
+    OAD._assertEqual(candidates.length, 1, 'a cluster clearing all three thresholds must produce exactly one candidate');
+    OAD._assertEqual(candidates[0].life_area, 'Career', 'candidate must be grouped by life_area');
+    OAD._assertEqual(candidates[0].occurrence_count, 3, 'occurrence_count must equal the row count');
+    OAD._assertEqual(candidates[0].distinct_thread_count, 2, 'distinct_thread_count must count unique thread_uuids, not rows');
+    OAD._assertEqual(candidates[0].span_days, 30, 'span_days must be first-to-last, in days');
+    OAD._assertEqual(candidates[0].excuse_texts.length, 2, 'excuse_texts must include only non-empty excuses (the mechanical stall row has none)');
+
+    // Case 4: already-consumed evidence must not count toward a new candidate.
+    OAD.DB.persona.tendency_evidence.forEach(function (e) { e.consumed = true; });
+    OAD._assertEqual(OAD.evaluateTendencyCandidates().length, 0, 'consumed evidence must be excluded — an already-surfaced cluster must not re-propose on its own');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.persona.tendency_evidence = origEvidence;
+  }
+});
+
+OAD.test('personaTendencyText: reads .text from a structured entry and returns a plain string entry unchanged', function () {
+  OAD._assertEqual(OAD.personaTendencyText('a plain legacy string'), 'a plain legacy string', 'a plain string entry must pass through unchanged');
+  OAD._assertEqual(OAD.personaTendencyText({ text: 'a structured entry', source: 'auto-promoted' }), 'a structured entry', 'a structured entry must yield its .text');
+  OAD._assertEqual(OAD.personaTendencyText(null), '', 'a null/missing entry must not throw');
+});
+
+OAD.test('reconcilePersonaTendencyList: preserves structured metadata on unchanged entries, adds new manual lines, drops removed ones', function () {
+  const structured = { text: 'Tendency to let external threads drift', source: 'auto-promoted', evidence_strength: 0.75, evidence_thread_uuids: ['a', 'b'] };
+  const existing = [structured, 'a plain legacy string', 'a line about to be deleted'];
+
+  const result = OAD.reconcilePersonaTendencyList(existing, 'Tendency to let external threads drift\na plain legacy string\na brand new manual line');
+
+  OAD._assert(result.indexOf(structured) !== -1, 'the structured entry must be the SAME object (metadata preserved), not flattened to a string, since its text is unchanged');
+  OAD._assert(result.indexOf('a plain legacy string') !== -1, 'an unchanged plain-string entry must be preserved as-is');
+  OAD._assert(!result.some(function (e) { return OAD.personaTendencyText(e) === 'a line about to be deleted'; }), 'a line removed from the textarea must be dropped, not silently kept');
+  const added = result.find(function (e) { return OAD.personaTendencyText(e) === 'a brand new manual line'; });
+  OAD._assert(added && typeof added === 'object' && added.source === 'manual', 'a genuinely new line must become a structured entry tagged source:"manual"');
+});
+
+OAD.test('_savePersona: saving for an unrelated reason (Pressure Level) does not flatten an existing structured trait', function () {
+  const origPersona = OAD.DB.persona;
+  try {
+    const structuredTrait = { text: 'Existing auto-promoted trait', source: 'auto-promoted', evidence_strength: 0.6, evidence_thread_uuids: ['x'] };
+    OAD.DB.persona = Object.assign({}, origPersona, {
+      assumption_tendencies: [structuredTrait],
+      what_is_not_working: [],
+      what_is_working: [],
+      life_context: { pressure_level: 'moderate', hard_deadline: null, hard_deadline_context: '' },
+      tone_calibration: { challenge_tolerance: 'medium', current_mode: 'problem-solving', avoid_patterns: [] }
+    });
+    OAD.openPersonaModal();
+    document.getElementById('f-pressure-level').value = 'high';
+    OAD._savePersona();
+
+    OAD._assertEqual(OAD.DB.persona.assumption_tendencies.length, 1, 'the trait must still be present after an unrelated save');
+    OAD._assertEqual(OAD.DB.persona.assumption_tendencies[0].evidence_strength, 0.6, 'evidence_strength must survive an unrelated Persona Settings save, not get flattened to a bare string');
+  } finally {
+    OAD.closeModal();
+    OAD.DB.persona = origPersona;
+  }
+});
+
+OAD.test('_confirmPushback: logs the "Real Blocking Reason" text as pushback evidence, giving it a real structured home', function () {
+  const origThreads = OAD.DB.threads;
+  const origEvidence = OAD.DB.persona.tendency_evidence;
+  try {
+    OAD.DB.persona.tendency_evidence = [];
+    const t = OAD.addThread(OAD.makeThread({ title: 'Pushback evidence target', status: 'open', life_area: 'Finances', next_action_date: OAD.todayStr() }));
+
+    OAD._pendingPushback = { id: t.id, data: { status: 'open', next_action_date: OAD.todayStr() }, notes: [] };
+    OAD.openModal('<textarea id="f-pushback-reason">Waiting on the bank, not avoiding it.</textarea>');
+
+    OAD._confirmPushback();
+
+    const rows = OAD.DB.persona.tendency_evidence.filter(function (e) { return e.thread_uuid === t.uuid; });
+    OAD._assertEqual(rows.length, 1, 'confirming a pushback must log exactly one evidence row for that thread');
+    OAD._assertEqual(rows[0].event_type, 'pushback', 'the row must be tagged as a pushback event');
+    OAD._assertEqual(rows[0].excuse_text, 'Waiting on the bank, not avoiding it.', 'excuse_text must be the actual Real Blocking Reason text, verbatim');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.persona.tendency_evidence = origEvidence;
+    OAD._pendingPushback = null;
+    OAD.closeModal();
+  }
+});
+
+OAD.test('characterizeTendencyCluster: sends real occurrence/thread/span counts and excuse text, and reads mixed string/object persona lists safely', async function () {
+  const origLLMCall = OAD._llmCall;
+  const origPersona = OAD.DB.persona.assumption_tendencies;
+  try {
+    OAD.DB.persona.assumption_tendencies = ['a legacy string entry', { text: 'a structured entry', source: 'auto-promoted' }];
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ warrants_update: true, target_list: 'assumption_tendencies', proposed_addition: 'x', suggested_adjustment: 'y', coach_message: 'z' });
+    };
+
+    const candidate = {
+      life_area: 'Career', occurrence_count: 4, distinct_thread_count: 3, span_days: 21,
+      first_observed: '2026-06-01', last_observed: '2026-06-22',
+      excuse_texts: ['Waiting on a callback', 'Forgot to follow up']
+    };
+    await OAD.characterizeTendencyCluster(candidate);
+
+    OAD._assert(capturedUserMsg.indexOf('Career') !== -1, 'prompt must include the life_area');
+    OAD._assert(capturedUserMsg.indexOf('4') !== -1, 'prompt must include the real occurrence count');
+    OAD._assert(capturedUserMsg.indexOf('Waiting on a callback') !== -1, 'prompt must include the real excuse text collected across the cluster');
+    OAD._assert(capturedUserMsg.indexOf('a legacy string entry') !== -1 && capturedUserMsg.indexOf('a structured entry') !== -1, 'must render both legacy string and structured object persona entries as clean text, not [object Object]');
+  } finally {
+    OAD._llmCall = origLLMCall;
+    OAD.DB.persona.assumption_tendencies = origPersona;
+  }
+});
+
+OAD.test('_acceptPersonaUpdate: writes the full structured trait, including evidence_strength and suggested_adjustment, not just the bare text', function () {
+  const origPersona = OAD.DB.persona.assumption_tendencies;
+  try {
+    OAD.DB.persona.assumption_tendencies = [];
+    OAD.openPersonaUpdateModal({
+      warrants_update: true, target_list: 'assumption_tendencies',
+      proposed_addition: 'Tendency to let external-dependency threads drift',
+      suggested_adjustment: 'Add a 14-day auto-checkin cadence on waiting threads with no contingency date',
+      coach_message: 'Seen across 3 threads.',
+      evidence_strength: 0.6, occurrence_count: 4, distinct_thread_count: 3, span_days: 21,
+      evidence_thread_uuids: ['a', 'b', 'c'], first_observed: '2026-06-01', last_observed: '2026-06-22'
+    });
+    document.querySelector('#modal-overlay .modal-footer button.success').click();
+
+    const trait = OAD.DB.persona.assumption_tendencies[0];
+    OAD._assertEqual(trait.text, 'Tendency to let external-dependency threads drift', 'text must match proposed_addition');
+    OAD._assertEqual(trait.suggested_adjustment, 'Add a 14-day auto-checkin cadence on waiting threads with no contingency date', 'suggested_adjustment must be stored, not discarded');
+    OAD._assertEqual(trait.evidence_strength, 0.6, 'evidence_strength must be stored as computed, not re-derived or dropped');
+    OAD._assertEqual(trait.source, 'auto-promoted', 'source must be tagged, same auditability principle as addInsight');
+  } finally {
+    OAD.closeModal();
+    OAD._pendingPersonaLesson = null;
+    OAD.DB.persona.assumption_tendencies = origPersona;
   }
 });
 

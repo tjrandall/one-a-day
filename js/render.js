@@ -525,7 +525,7 @@ OAD.generateInsight = async function (id) {
 
   try {
     const insight = await OAD.genInsight(t);
-    OAD.addInsight(id, insight);
+    OAD.addInsight(id, insight, 'manual');
     OAD.renderDetail(id);
   } catch (err) {
     if (body) body.innerHTML = `<div class="insight-loading" style="color:var(--critical)">${OAD.esc(err.message)}</div>`;

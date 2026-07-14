@@ -135,9 +135,9 @@ OAD.genInsight = async function (thread) {
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.insight) || {};
   
   const systemPrompt = (promptTemplate.system || "")
-    .replace('{{assumption_tendencies}}', JSON.stringify(persona.assumption_tendencies || []))
+    .replace('{{assumption_tendencies}}', JSON.stringify((persona.assumption_tendencies || []).map(OAD.personaTendencyText)))
     .replace('{{working}}', JSON.stringify(persona.what_is_working || []))
-    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []))
+    .replace('{{not_working}}', JSON.stringify((persona.what_is_not_working || []).map(OAD.personaTendencyText)))
     .replace('{{pressure_level}}', persona.life_context?.pressure_level || 'moderate')
     .replace('{{hard_deadline}}', persona.life_context?.hard_deadline ? `${persona.life_context.hard_deadline} — ${persona.life_context.hard_deadline_context}` : 'none')
     .replace('{{challenge_tolerance}}', persona.tone_calibration?.challenge_tolerance || 'medium')
@@ -213,9 +213,9 @@ OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.proactiveCounsel) || {};
   
   const systemPrompt = (promptTemplate.system || "")
-    .replace('{{assumption_tendencies}}', JSON.stringify(persona?.assumption_tendencies || []))
+    .replace('{{assumption_tendencies}}', JSON.stringify((persona?.assumption_tendencies || []).map(OAD.personaTendencyText)))
     .replace('{{working}}', JSON.stringify(persona?.what_is_working || []))
-    .replace('{{not_working}}', JSON.stringify(persona?.what_is_not_working || []));
+    .replace('{{not_working}}', JSON.stringify((persona?.what_is_not_working || []).map(OAD.personaTendencyText)));
 
   let userMsg = (promptTemplate.user || "")
     .replace('{{heat}}', JSON.stringify(heat))
@@ -321,17 +321,17 @@ OAD.genDailyIntercept = async function () {
   if (agendaLines.length === 0) {
     agendaLines.push("No tasks due today or overdue.");
   }
-
+  
   // Also pass the absolute highest pressure looming task (if it's not already on today's agenda) to check for blind spots
   const highestLooming = (OAD.DB.threads || [])
     .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && !OAD.TemporalStatus.isDueToday(t, new Date()) && !OAD.isActionOverdue(t))
     .sort((a, b) => OAD.pressure(b) - OAD.pressure(a))[0];
-
+  
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.dailyIntercept) || {};
-
+  
   const systemPrompt = (promptTemplate.system || "")
     .replace('{{working}}', JSON.stringify(persona.what_is_working || []))
-    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []));
+    .replace('{{not_working}}', JSON.stringify((persona.what_is_not_working || []).map(OAD.personaTendencyText)));
 
   const userMsg = (promptTemplate.user || "")
     .replace('{{overdueCount}}', overview.overdue.count)
@@ -353,19 +353,34 @@ OAD.genDailyIntercept = async function () {
   }
 };
 
-OAD.extractPersonaLesson = async function (threadTitle, pushCount, userReason) {
+// Replaces the old OAD.extractPersonaLesson, which judged "does this reveal a pattern" from a
+// single thread's title + push count + one excuse — no cross-thread signal, no time window, so
+// it couldn't distinguish a real tendency from one hard week on one thread. This only ever runs
+// on a candidate that has ALREADY cleared OAD.evaluateTendencyCandidates' statistical gate
+// (js/engine.js) — the model's job here is to characterize what the (already-confirmed-real)
+// pattern actually is, using the real excuse text collected across the cluster, and to propose a
+// concrete structural fix. evidence_strength itself is never sent to or requested from the model
+// — it's computed entirely from the ledger's own counts (see OAD.tendencyEvidenceStrength).
+OAD.characterizeTendencyCluster = async function (candidate) {
   const persona = OAD.DB.persona || {};
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.personaLesson) || {};
-  
+
   const systemPrompt = (promptTemplate.system || "")
-    .replace('{{pushCount}}', pushCount);
+    .replace(/{{occurrenceCount}}/g, candidate.occurrence_count)
+    .replace(/{{distinctThreadCount}}/g, candidate.distinct_thread_count)
+    .replace(/{{spanDays}}/g, candidate.span_days)
+    .replace(/{{lifeArea}}/g, candidate.life_area);
 
   const userMsg = (promptTemplate.user || "")
-    .replace('{{title}}', threadTitle)
-    .replace('{{pushCount}}', pushCount)
-    .replace('{{userReason}}', userReason)
-    .replace('{{assumption_tendencies}}', JSON.stringify(persona.assumption_tendencies || []))
-    .replace('{{not_working}}', JSON.stringify(persona.what_is_not_working || []));
+    .replace('{{lifeArea}}', candidate.life_area)
+    .replace('{{occurrenceCount}}', candidate.occurrence_count)
+    .replace('{{distinctThreadCount}}', candidate.distinct_thread_count)
+    .replace('{{spanDays}}', candidate.span_days)
+    .replace('{{firstObserved}}', candidate.first_observed)
+    .replace('{{lastObserved}}', candidate.last_observed)
+    .replace('{{excuseTexts}}', candidate.excuse_texts.length ? candidate.excuse_texts.map(function (t) { return '- ' + t; }).join('\n') : '(no excuse text recorded — stalls detected mechanically, not from a pushback)')
+    .replace('{{assumption_tendencies}}', JSON.stringify((persona.assumption_tendencies || []).map(OAD.personaTendencyText)))
+    .replace('{{not_working}}', JSON.stringify((persona.what_is_not_working || []).map(OAD.personaTendencyText)));
 
   const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
   try {
