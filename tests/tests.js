@@ -3395,15 +3395,21 @@ OAD.test('computeSuppressedChildUUIDs: never suppresses a child due within the g
   // Week list entirely, with no compensating detail anywhere (their parents didn't even render
   // in a date bucket to show the child-summary badge). horizonStr fixes this: This Week passes
   // its own 7-day window so anything it exists to show is never suppressed out of it.
+  const todayStr = OAD.todayStr();
+  const in5 = new Date(); in5.setDate(in5.getDate() + 5);
+  const in5Str = in5.toISOString().slice(0, 10);
+  const in7 = new Date(); in7.setDate(in7.getDate() + 7);
+  const in7Str = in7.toISOString().slice(0, 10);
+
   const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' }); // no next_action_date, mirrors the real parents
-  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-08' }); // 5 days out
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: in5Str }); // 5 days out
   const childrenByParentUUID = { p1: [child] };
   const activeByUUID = { p1: parent };
 
-  const withoutHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  const withoutHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
   OAD._assert(withoutHorizon.has('c1'), 'sanity check: without a horizon, a child due 5 days out is still suppressed (old behavior)');
 
-  const withHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03', null, '2026-07-10');
+  const withHorizon = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, null, in7Str);
   OAD._assert(!withHorizon.has('c1'), 'a child due within the given horizon must never be suppressed');
 });
 
@@ -3459,15 +3465,19 @@ OAD.test('computeSuppressedChildUUIDs: Patient life_area parent never suppresses
 });
 
 OAD.test('computeSuppressedChildUUIDs: never suppresses the child matching focusUUID, even if due later this week (regression — "This Week excludes Focus Now" bug)', function () {
+  const todayStr = OAD.todayStr();
+  const in5 = new Date(); in5.setDate(in5.getDate() + 5);
+  const in5Str = in5.toISOString().slice(0, 10);
+
   const parent = OAD.makeThread({ title: 'Parent', uuid: 'p1' });
-  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: '2026-07-08' }); // 5 days out — not today, not overdue
+  const child = OAD.makeThread({ title: 'Child', uuid: 'c1', parent_uuid: 'p1', next_action_date: in5Str }); // 5 days out — not today, not overdue
   const childrenByParentUUID = { p1: [child] };
   const activeByUUID = { p1: parent };
 
-  const withoutFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03');
+  const withoutFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr);
   OAD._assert(withoutFocus.has('c1'), 'sanity check: without a focus exemption this child is suppressed like any other future-dated child');
 
-  const withFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, '2026-07-03', 'c1');
+  const withFocus = OAD.computeSuppressedChildUUIDs(childrenByParentUUID, activeByUUID, todayStr, 'c1');
   OAD._assert(!withFocus.has('c1'), 'a child matching focusUUID must never be suppressed, regardless of its date');
 });
 

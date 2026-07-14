@@ -1737,7 +1737,7 @@ OAD.renderDailyView = function () {
   const salutationKey = hours < 12 ? 'goodMorning' : hours < 18 ? 'goodAfternoon' : 'goodEvening';
   const salutation = OAD.t(salutationKey);
   const persona = OAD.DB.persona;
-  const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD._demoRole) || (persona && persona.name) || 'Chief';
+  const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD.Config.demoMode && OAD._demoRole) || (persona && persona.name) || 'Chief';
   
   // Load Overview replaces the old single "Critical Load" number (pressureDist['80+'] +
   // pressureDist['50-79']) with four distinct counts — see OAD.Due.loadOverview (js/due.js) for
@@ -1749,7 +1749,7 @@ OAD.renderDailyView = function () {
     ? OAD.formatDate(persona.life_context.hard_deadline) 
     : '—';
     
-  if (hardDeadlineStr === '—' && window.OAD && OAD._demoRole) {
+  if (hardDeadlineStr === '—' && window.OAD && OAD.Config.demoMode && OAD._demoRole) {
     const endOfQuarter = new Date();
     endOfQuarter.setHours(0, 0, 0, 0);
     endOfQuarter.setMonth(Math.floor(endOfQuarter.getMonth() / 3) * 3 + 3, 0); // Last day of current quarter
