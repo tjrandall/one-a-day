@@ -333,123 +333,132 @@ OAD.test('exportThreads: includes full thread data, excludes ai_insights and per
   OAD._assert(Array.isArray(parsed.edges),           'top-level edges is array');
 });
 
-OAD.test('exportThreads: includes cadences array with full fields', function () {
-  const saved = OAD.DB.cadences.slice();
+// Per ARCHITECTURE_RULES.md Rule 1 (ticket-flowqueue-data-model-migration.md Step 4), cadences
+// are Threads with thread_kind:'cadence' — there is no separate cadence export/import/diff
+// pipeline anymore. A cadence-shaped row flows through the exact same threads/create/update
+// path as any other thread, matched by uuid; deletion goes through the same deleted_uuids →
+// results.close mechanism (js/data.js OAD.applyImport branches to a real delete for
+// thread_kind:'cadence' specifically, preserving the original "no reopen" semantic).
+
+OAD.test('exportThreads: a cadence-thread\'s recurrence fields are present on its row, no separate top-level cadences array', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    OAD.DB.cadences = [{
-      id: 5001, title: 'Export cadence test', life_area: 'finances', recurrence: 'monthly-1st',
-      days_of_week: [], last_completed: '2026-06-01', next_due: '2026-07-01',
-      notes: 'note text', consequences: 'consequence text'
-    }];
+    OAD.DB.threads = [];
+    const c = OAD.addCadence(OAD.makeCadence({ title: 'Export cadence test', recurrence: 'monthly-1st', last_completed: '2026-06-01', next_due: '2026-07-01', notes: 'note text', consequences: 'consequence text' }));
     const parsed = JSON.parse(OAD.exportThreads());
-    OAD._assert('cadences' in parsed, 'export has top-level cadences array');
-    OAD._assert(Array.isArray(parsed.cadences), 'cadences is an array');
-    OAD._assert('cadence_count' in parsed, 'export has cadence_count');
-    const row = parsed.cadences.find(function (c) { return c.id === 5001; });
-    OAD._assert(!!row, 'seeded cadence present in export');
-    OAD._assertEqual(row.title, 'Export cadence test', 'title round-trips');
+    OAD._assert(!('cadences' in parsed), 'export must not have a separate top-level cadences array anymore');
+    const row = parsed.threads.find(function (t) { return t.uuid === c.uuid; });
+    OAD._assert(!!row, 'the cadence thread must be present in the main threads export');
+    OAD._assertEqual(row.thread_kind, 'cadence', 'exported row must carry the cadence discriminator');
     OAD._assertEqual(row.recurrence, 'monthly-1st', 'recurrence round-trips');
     OAD._assertEqual(row.next_due, '2026-07-01', 'next_due round-trips');
     OAD._assertEqual(row.notes, 'note text', 'notes round-trips');
     OAD._assertEqual(row.consequences, 'consequence text', 'consequences round-trips');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('parseImportFile: cadence row with no id goes to create list', function () {
-  const json = JSON.stringify({ threads: [], cadences: [{ title: 'New cadence via import', recurrence: 'weekly' }] });
+OAD.test('parseImportFile: a cadence-shaped thread row with no uuid goes to the same create list as any other thread', function () {
+  const json = JSON.stringify({ threads: [{ title: 'New cadence via import', thread_kind: 'cadence', recurrence: 'weekly' }] });
   const results = OAD.parseImportFile(json);
-  OAD._assertEqual(results.cadences.create.length, 1, 'one cadence queued for create');
-  OAD._assertEqual(results.cadences.update.length, 0, 'none queued for update');
+  OAD._assertEqual(results.create.length, 1, 'one thread queued for create');
+  OAD._assertEqual(results.create[0].thread_kind, 'cadence', 'the queued row carries the cadence discriminator');
 });
 
-OAD.test('parseImportFile: cadence row matching an existing id goes to update list', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('parseImportFile: a cadence-shaped thread row matching an existing uuid goes to the same update list as any other thread', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    OAD.DB.cadences = [{ id: 5002, title: 'Existing cadence', recurrence: 'weekly', next_due: '2026-07-01' }];
-    const json = JSON.stringify({ threads: [], cadences: [{ id: 5002, title: 'Existing cadence', next_due: '2026-07-15' }] });
+    const existing = OAD.addCadence(OAD.makeCadence({ uuid: 'cad-uuid-5002', title: 'Existing cadence', recurrence: 'weekly', next_due: '2026-07-01' }));
+    const json = JSON.stringify({ threads: [{ uuid: 'cad-uuid-5002', title: 'Existing cadence', thread_kind: 'cadence', next_due: '2026-07-15' }] });
     const results = OAD.parseImportFile(json);
-    OAD._assertEqual(results.cadences.update.length, 1, 'one cadence queued for update');
-    OAD._assertEqual(results.cadences.create.length, 0, 'none queued for create');
-    OAD._assertEqual(results.cadences.update[0].existing.id, 5002, 'correct cadence matched by id');
+    OAD._assertEqual(results.update.length, 1, 'one thread queued for update');
+    OAD._assertEqual(results.create.length, 0, 'none queued for create');
+    OAD._assertEqual(results.update[0].existing.uuid, 'cad-uuid-5002', 'correct cadence matched by uuid');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('applyImport: creates a new cadence from import', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('applyImport: creates a new cadence-thread from import', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    OAD.DB.cadences = [];
-    const results = { create: [], update: [], cadences: { create: [{ title: 'Imported cadence', recurrence: 'monthly-1st', next_due: '2026-08-01' }], update: [] } };
-    const result = OAD.applyImport(results, [], []);
-    OAD._assertEqual(result.cadences_created, 1, 'one cadence created');
-    OAD._assertEqual(OAD.DB.cadences.length, 1, 'cadence added to DB');
-    OAD._assertEqual(OAD.DB.cadences[0].title, 'Imported cadence', 'title set correctly');
-    OAD._assertEqual(OAD.DB.cadences[0].next_due, '2026-08-01', 'next_due set correctly');
-    OAD._assert(OAD.DB.cadences[0].id != null, 'new cadence gets a real assigned id, not a fabricated one from the import row');
+    OAD.DB.threads = [];
+    const results = { create: [{ title: 'Imported cadence', thread_kind: 'cadence', recurrence: 'monthly-1st', next_due: '2026-08-01' }], update: [], close: [] };
+    const result = OAD.applyImport(results, []);
+    OAD._assertEqual(result.created, 1, 'one thread created');
+    const cadences = OAD.getCadenceThreads();
+    OAD._assertEqual(cadences.length, 1, 'cadence added to DB');
+    OAD._assertEqual(cadences[0].title, 'Imported cadence', 'title set correctly');
+    OAD._assertEqual(cadences[0].next_due, '2026-08-01', 'next_due set correctly');
+    OAD._assert(cadences[0].id != null, 'new cadence gets a real assigned id, not a fabricated one from the import row');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('applyImport: updates an existing cadence\'s next_due via import (Cadence Export/Import spec)', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('applyImport: updates an existing cadence-thread\'s next_due via import (Cadence Export/Import spec)', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    const existing = { id: 5003, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-01', notes: '', consequences: '' };
-    OAD.DB.cadences = [existing];
-    const incoming = { id: 5003, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-22', notes: '', consequences: '' };
-    const results = { create: [], update: [], cadences: { create: [], update: [{ incoming: incoming, existing: existing }] } };
-    const result = OAD.applyImport(results, [], [{ incoming: incoming, existing: existing }]);
-    OAD._assertEqual(result.cadences_updated, 1, 'one cadence updated');
-    OAD._assertEqual(OAD.getCadence(5003).next_due, '2026-07-22', 'next_due patched via import');
+    const existing = OAD.addCadence(OAD.makeCadence({ title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-01' }));
+    const incoming = { uuid: existing.uuid, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-22' };
+    const result = OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
+    OAD._assertEqual(result.updated, 1, 'one thread updated');
+    OAD._assertEqual(OAD.getCadence(existing.id).next_due, '2026-07-22', 'next_due patched via import');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('applyImport: cadence update only patches actually-changed fields', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('applyImport: cadence-thread update only patches actually-changed fields', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    const existing = { id: 5004, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: '' };
-    OAD.DB.cadences = [existing];
-    const incoming = { id: 5004, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: 'now set' };
-    const results = { create: [], update: [], cadences: { create: [], update: [] } };
-    OAD.applyImport(results, [], [{ incoming: incoming, existing: existing }]);
-    OAD._assertEqual(OAD.getCadence(5004).consequences, 'now set', 'changed field patched');
-    OAD._assertEqual(OAD.getCadence(5004).notes, 'keep me', 'unchanged field left alone');
+    const existing = OAD.addCadence(OAD.makeCadence({ title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: '' }));
+    const incoming = { uuid: existing.uuid, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: 'now set' };
+    OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
+    OAD._assertEqual(OAD.getCadence(existing.id).consequences, 'now set', 'changed field patched');
+    OAD._assertEqual(OAD.getCadence(existing.id).notes, 'keep me', 'unchanged field left alone');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('parseImportFile: deleted_cadence_ids queues matching cadences for delete, ignores unknown ids', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('parseImportFile: deleted_uuids queues a matching cadence-thread for close (results.close), ignores unknown uuids', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    OAD.DB.cadences = [{ id: 5005, title: 'Duplicate cadence to remove', recurrence: 'monthly-15th' }];
-    const json = JSON.stringify({ threads: [], cadences: [], deleted_cadence_ids: [5005, 999999] });
+    const c = OAD.addCadence(OAD.makeCadence({ title: 'Duplicate cadence to remove', recurrence: 'monthly-15th' }));
+    const json = JSON.stringify({ threads: [], deleted_uuids: [c.uuid, 'not-a-real-uuid'] });
     const results = OAD.parseImportFile(json);
-    OAD._assertEqual(results.cadences.delete.length, 1, 'only the matching cadence is queued for delete');
-    OAD._assertEqual(results.cadences.delete[0].id, 5005, 'queued delete is the correct cadence');
+    OAD._assertEqual(results.close.length, 1, 'only the matching thread is queued for close');
+    OAD._assertEqual(results.close[0].uuid, c.uuid, 'queued close is the correct cadence');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
   }
 });
 
-OAD.test('applyImport: deletes confirmed cadences, leaves unconfirmed ones alone', function () {
-  const saved = OAD.DB.cadences.slice();
+OAD.test('applyImport: hard-deletes confirmed cadence-thread deletes, leaves unconfirmed ones alone (destructive, requires explicit confirmation)', function () {
+  const origThreads = OAD.DB.threads;
   try {
-    const toDelete = { id: 5006, title: 'Duplicate to delete', recurrence: 'monthly-15th' };
-    const toKeep   = { id: 5007, title: 'Not confirmed, should survive', recurrence: 'monthly-15th' };
-    OAD.DB.cadences = [toDelete, toKeep];
-    const results = { create: [], update: [], cadences: { create: [], update: [], delete: [toDelete, toKeep] } };
-    const result = OAD.applyImport(results, [], [], [toDelete]);
-    OAD._assertEqual(result.cadences_deleted, 1, 'one cadence deleted');
-    OAD._assert(!OAD.getCadence(5006), 'confirmed cadence is actually removed from DB.cadences');
-    OAD._assert(!!OAD.getCadence(5007), 'unconfirmed cadence is left untouched');
+    const toDelete = OAD.addCadence(OAD.makeCadence({ title: 'Duplicate to delete', recurrence: 'monthly-15th' }));
+    const toKeep   = OAD.addCadence(OAD.makeCadence({ title: 'Not confirmed, should survive', recurrence: 'monthly-15th' }));
+    const result = OAD.applyImport({ create: [], update: [], close: [toDelete, toKeep] }, [], [toDelete.id]);
+    OAD._assertEqual(result.deleted, 1, 'one cadence deleted');
+    OAD._assert(!OAD.getCadence(toDelete.id), 'confirmed cadence is actually removed');
+    OAD._assert(!!OAD.getCadence(toKeep.id), 'unconfirmed cadence is left untouched — deletion is destructive, so it requires explicit confirmation unlike a regular thread close');
   } finally {
-    OAD.DB.cadences = saved;
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('applyImport: a non-cadence thread flagged in results.close always auto-applies (soft close), matching its original no-confirmation-needed behavior', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const t = OAD.addThread(OAD.makeThread({ title: 'Regular thread to close', status: 'open' }));
+    const result = OAD.applyImport({ create: [], update: [], close: [t] }, [], []); // no confirmedDeleteIds — must still close
+    OAD._assertEqual(result.closed, 1, 'one thread closed');
+    OAD._assertEqual(OAD.getThread(t.id).status, 'closed', 'a regular thread close needs no confirmation, unlike a cadence delete');
+  } finally {
+    OAD.DB.threads = origThreads;
   }
 });
 
@@ -639,11 +648,16 @@ OAD.test('updateCadence: merges patch fields', function () {
 });
 
 OAD.test('deleteCadence: removes from DB', function () {
-  const c = OAD.addCadence(OAD.makeCadence({ title: 'Delete me cadence' }));
-  const before = OAD.DB.cadences.length;
-  OAD.deleteCadence(c.id);
-  OAD._assertEqual(OAD.DB.cadences.length, before - 1, 'count decreased');
-  OAD._assertEqual(OAD.getCadence(c.id), null, 'not findable after delete');
+  const origThreads = OAD.DB.threads;
+  try {
+    const c = OAD.addCadence(OAD.makeCadence({ title: 'Delete me cadence' }));
+    const before = OAD.getCadenceThreads().length;
+    OAD.deleteCadence(c.id);
+    OAD._assertEqual(OAD.getCadenceThreads().length, before - 1, 'count decreased');
+    OAD._assertEqual(OAD.getCadence(c.id), null, 'not findable after delete');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
 });
 
 // ── Tests: Saved Views (Graph Views) ─────────────────────────────────
@@ -790,19 +804,20 @@ OAD.test('makeIdea: defaults are valid', function () {
   OAD._assertEqual(i.last_surfaced,    null,      'last_surfaced null');
 });
 
-OAD.test('addIdea: assigns id and appends to DB', function () {
-  const before = OAD.DB.ideas.length;
+OAD.test('addIdea: assigns id and appends to DB as a Thread (thread_kind:\'idea\')', function () {
+  const before = OAD.getIdeaThreads().length;
   const idea = OAD.addIdea(OAD.makeIdea({ title: 'Test idea' }));
   OAD._assert(idea.id > 0, 'id should be positive');
-  OAD._assertEqual(OAD.DB.ideas.length, before + 1, 'ideas count should increase');
+  OAD._assertEqual(idea.thread_kind, 'idea', 'must carry the idea discriminator');
+  OAD._assertEqual(OAD.getIdeaThreads().length, before + 1, 'ideas count should increase');
   OAD._assertEqual(OAD.getIdea(idea.id).title, 'Test idea', 'should retrieve by id');
 });
 
 OAD.test('deleteIdea: removes from DB', function () {
   const idea = OAD.addIdea(OAD.makeIdea({ title: 'Delete me' }));
-  const before = OAD.DB.ideas.length;
+  const before = OAD.getIdeaThreads().length;
   OAD.deleteIdea(idea.id);
-  OAD._assertEqual(OAD.DB.ideas.length, before - 1, 'count should decrease');
+  OAD._assertEqual(OAD.getIdeaThreads().length, before - 1, 'count should decrease');
   OAD._assertEqual(OAD.getIdea(idea.id), null, 'should not be findable after delete');
 });
 
@@ -810,14 +825,17 @@ OAD.test('ideaOfTheWeek: returns an idea when ideas exist', function () {
   const idea = OAD.addIdea(OAD.makeIdea({ title: 'Week idea' }));
   const result = OAD.ideaOfTheWeek();
   OAD._assert(result !== null, 'should return an idea');
-  OAD._assert(OAD.DB.ideas.includes(result), 'returned idea should be in DB');
+  OAD._assert(OAD.getIdeaThreads().includes(result), 'returned idea should be in DB');
 });
 
 OAD.test('ideaOfTheWeek: returns null when no ideas', function () {
-  const saved = OAD.DB.ideas.slice();
-  OAD.DB.ideas = [];
-  OAD._assertEqual(OAD.ideaOfTheWeek(), null, 'null when no ideas');
-  OAD.DB.ideas = saved;
+  const origThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = OAD.DB.threads.filter(function (t) { return t.thread_kind !== 'idea'; });
+    OAD._assertEqual(OAD.ideaOfTheWeek(), null, 'null when no ideas');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
 });
 
 // ── Tests: Habit data model ───────────────────────────────────────────
@@ -832,11 +850,12 @@ OAD.test('makeHabit: defaults are valid', function () {
   OAD._assertEqual(h.phase,            'active',   'default phase active');
 });
 
-OAD.test('addHabit: assigns id and appends to DB', function () {
-  const before = OAD.DB.habits.length;
+OAD.test('addHabit: assigns id and appends to DB as a Thread (thread_kind:\'habit\')', function () {
+  const before = OAD.getHabitThreads().length;
   const h = OAD.addHabit(OAD.makeHabit({ title: 'Test habit' }));
   OAD._assert(h.id > 0, 'id should be positive');
-  OAD._assertEqual(OAD.DB.habits.length, before + 1, 'habit count should increase');
+  OAD._assertEqual(h.thread_kind, 'habit', 'must carry the habit discriminator');
+  OAD._assertEqual(OAD.getHabitThreads().length, before + 1, 'habit count should increase');
   OAD._assertEqual(OAD.getHabit(h.id).title, 'Test habit', 'should retrieve by id');
 });
 
@@ -1340,6 +1359,206 @@ OAD.test('updateThread: stamps next_action_updated_at / current_assumption_updat
 
   OAD.updateThread(t.id, { current_assumption: 'A new assumption' });
   OAD._assert(OAD.getThread(t.id).current_assumption_updated_at !== null, 'changing current_assumption\'s actual value must stamp current_assumption_updated_at');
+});
+
+OAD.test('updateThread: setting parent_uuid on an inbox thread auto-promotes status to open (attaching a parent is itself an act of triage)', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Attach me', status: 'inbox' }));
+  OAD.updateThread(t.id, { parent_uuid: 'some-parent-uuid' });
+  OAD._assertEqual(OAD.getThread(t.id).status, 'open', 'status must auto-promote to open when a parent is attached');
+});
+
+OAD.test('updateThread: an explicit status in the same patch is never silently overridden by the parent_uuid auto-promotion', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Attach and close', status: 'inbox' }));
+  OAD.updateThread(t.id, { parent_uuid: 'some-parent-uuid', status: 'closed' });
+  OAD._assertEqual(OAD.getThread(t.id).status, 'closed', 'an explicit status in the patch must win over the auto-promotion');
+});
+
+OAD.test('updateThread: does not touch status when parent_uuid changes on a non-inbox thread', function () {
+  const t = OAD.addThread(OAD.makeThread({ title: 'Already open', status: 'waiting' }));
+  OAD.updateThread(t.id, { parent_uuid: 'some-parent-uuid' });
+  OAD._assertEqual(OAD.getThread(t.id).status, 'waiting', 'a non-inbox status must be left alone');
+});
+
+OAD.test('_normalizeDB: self-heals a legacy thread that has a parent_uuid but is still status:inbox (real case: Abigail-Nelnet / Abby-Mainstay docs)', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const broken = { id: 1, uuid: 'nz-broken-parent-inbox', title: 'Abigail - Nelnet', status: 'inbox', parent_uuid: 'abigail-life-area-2026-06-15', evolution_log: [] };
+    OAD.DB.threads = [broken];
+    OAD._normalizeDB();
+    const fixed = OAD.getThread(1);
+    OAD._assertEqual(fixed.status, 'open', 'a thread with a parent must never remain status:inbox after normalizeDB runs');
+    OAD._assert(fixed.evolution_log.some(function (e) { return e.note.indexOf('auto-corrected') !== -1; }), 'the correction must be logged, not silent');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('_normalizeDB: leaves a status:inbox thread with no parent_uuid untouched', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const t = { id: 1, uuid: 'nz-real-inbox', title: 'Mid July - check in on Limpies', status: 'inbox', parent_uuid: null, evolution_log: [] };
+    OAD.DB.threads = [t];
+    OAD._normalizeDB();
+    OAD._assertEqual(OAD.getThread(1).status, 'inbox', 'a genuinely unattached inbox thread must not be touched');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+// ── Tests: Habits/Ideas migration into Thread+thread_kind (ARCHITECTURE_RULES.md Rule 1, ticket-flowqueue-data-model-migration.md Step 2) ──
+
+OAD.test('_normalizeDB: converts legacy OAD.DB.habits/ideas array entries into real Threads with thread_kind, then empties the old arrays', function () {
+  const origThreads = OAD.DB.threads;
+  const origHabits = OAD.DB.habits;
+  const origIdeas = OAD.DB.ideas;
+  try {
+    OAD.DB.threads = [OAD.makeThread({ id: 1, uuid: 'nz-mig-existing', title: 'Existing thread' })];
+    OAD.DB.habits = [{ id: 1, title: 'Legacy habit', frequency: 'daily', phase: 'active', current_streak: 3 }];
+    OAD.DB.ideas = [{ id: 1, title: 'Legacy idea', type: 'book' }];
+
+    OAD._normalizeDB();
+
+    OAD._assertEqual(OAD.DB.habits.length, 0, 'the old habits array must be empty after migration');
+    OAD._assertEqual(OAD.DB.ideas.length, 0, 'the old ideas array must be empty after migration');
+
+    const migratedHabit = OAD.DB.threads.find(function (t) { return t.title === 'Legacy habit'; });
+    const migratedIdea = OAD.DB.threads.find(function (t) { return t.title === 'Legacy idea'; });
+    OAD._assert(!!migratedHabit, 'the legacy habit must now exist as a real thread');
+    OAD._assertEqual(migratedHabit.thread_kind, 'habit', 'migrated habit must carry the habit discriminator');
+    OAD._assertEqual(migratedHabit.current_streak, 3, 'habit-specific field values must survive the migration');
+    OAD._assertEqual(migratedHabit.uuid && typeof migratedHabit.uuid, 'string', 'migrated habit must have a real uuid, not none (it never had one before)');
+
+    OAD._assert(!!migratedIdea, 'the legacy idea must now exist as a real thread');
+    OAD._assertEqual(migratedIdea.thread_kind, 'idea', 'migrated idea must carry the idea discriminator');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.habits = origHabits;
+    OAD.DB.ideas = origIdeas;
+  }
+});
+
+OAD.test('_normalizeDB: migrated habit/idea ids never collide with existing thread ids (habits/ideas used to have their own independent id sequences)', function () {
+  const origThreads = OAD.DB.threads;
+  const origHabits = OAD.DB.habits;
+  try {
+    // Real collision case: a thread already has id 1 (from the thread id sequence), and a
+    // legacy habit ALSO has id 1 (from its own independent nextHabitId() sequence) — before
+    // this migration these lived in separate arrays so the collision was invisible.
+    OAD.DB.threads = [OAD.makeThread({ id: 1, uuid: 'nz-collide-thread', title: 'Thread with id 1' })];
+    OAD.DB.habits = [{ id: 1, title: 'Habit with id 1' }];
+
+    OAD._normalizeDB();
+
+    const ids = OAD.DB.threads.map(function (t) { return t.id; });
+    OAD._assertEqual(new Set(ids).size, ids.length, 'no two threads may end up with the same id after migration');
+    const migratedHabit = OAD.DB.threads.find(function (t) { return t.title === 'Habit with id 1'; });
+    OAD._assert(migratedHabit.id !== 1 || OAD.DB.threads.filter(function (t) { return t.id === 1; }).length === 1, 'the migrated habit must not silently collide with the existing thread id 1');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.habits = origHabits;
+  }
+});
+
+OAD.test('_normalizeDB: running twice does not re-migrate or duplicate (self-terminating, no separate done-flag needed)', function () {
+  const origThreads = OAD.DB.threads;
+  const origHabits = OAD.DB.habits;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.habits = [{ id: 1, title: 'Once-only habit' }];
+
+    OAD._normalizeDB();
+    OAD._normalizeDB();
+    OAD._normalizeDB();
+
+    const matches = OAD.DB.threads.filter(function (t) { return t.title === 'Once-only habit'; });
+    OAD._assertEqual(matches.length, 1, 'running _normalizeDB multiple times must not duplicate the migrated thread');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.habits = origHabits;
+  }
+});
+
+OAD.test('exportThreads / applyImport: thread_kind and Habit/Idea fields round-trip (ARCHITECTURE_RULES.md Rule 4)', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const h = OAD.addHabit(OAD.makeHabit({ title: 'Export round-trip habit', frequency: 'weekly', current_streak: 5, phase: 'active' }));
+    const exported = JSON.parse(OAD.exportThreads());
+    const row = exported.threads.find(function (t) { return t.uuid === h.uuid; });
+
+    OAD._assert(!!row, 'the habit thread must be present in the export — it is just a thread now');
+    OAD._assertEqual(row.thread_kind, 'habit', 'exported row must carry thread_kind');
+    OAD._assertEqual(row.frequency, 'weekly', 'exported row must carry habit-specific fields');
+    OAD._assertEqual(row.current_streak, 5, 'exported row must carry habit-specific fields');
+
+    // Simulate re-importing that same row as an update to a DIFFERENT existing thread, proving
+    // OAD._IMPORT_FIELDS actually syncs these fields, not just the export step.
+    const target = OAD.addThread(OAD.makeThread({ title: 'Target for re-import' }));
+    const patch = {};
+    OAD._IMPORT_FIELDS.forEach(function (field) {
+      if (row[field] !== undefined) patch[field] = row[field];
+    });
+    OAD.updateThread(target.id, patch);
+    const updated = OAD.getThread(target.id);
+    OAD._assertEqual(updated.thread_kind, 'habit', 'OAD._IMPORT_FIELDS must include thread_kind so re-import actually syncs it');
+    OAD._assertEqual(updated.current_streak, 5, 'OAD._IMPORT_FIELDS must include habit fields so re-import actually syncs them');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+// ── Tests: Proposals migration into status:'proposed' Threads (ARCHITECTURE_RULES.md Rule 1, ticket-flowqueue-data-model-migration.md Step 3) ──
+
+OAD.test('_normalizeDB: converts legacy OAD.DB.proposals array entries into status:\'proposed\' Threads, preserving their existing uuid', function () {
+  const origThreads = OAD.DB.threads;
+  const origProposals = OAD.DB.proposals;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.proposals = [{ uuid: 'legacy-proposal-uuid', title: 'Legacy proposal', life_area: 'Career', closing_condition: 'Job offer accepted', rationale: 'Blind spot: no active job search thread' }];
+
+    OAD._normalizeDB();
+
+    OAD._assertEqual(OAD.DB.proposals.length, 0, 'the old proposals array must be empty after migration');
+    const migrated = OAD.DB.threads.find(function (t) { return t.uuid === 'legacy-proposal-uuid'; });
+    OAD._assert(!!migrated, 'the legacy proposal must now exist as a real thread, uuid preserved');
+    OAD._assertEqual(migrated.status, 'proposed', 'migrated proposal must carry status:proposed, not a thread_kind discriminator');
+    OAD._assertEqual(migrated.rationale, 'Blind spot: no active job search thread', 'proposal-specific field values must survive the migration');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.proposals = origProposals;
+  }
+});
+
+OAD.test('status:\'proposed\' threads are invisible to pressure/Due/Active-count machinery, same treatment as inbox/dormant — an unreviewed AI suggestion is not real work yet', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [];
+    const proposal = OAD.addThread(OAD.makeThread({ status: 'proposed', title: 'Unreviewed suggestion', priority: 'critical', life_area: 'Career', next_action_date: OAD.todayStr() }));
+
+    OAD._assertEqual(OAD.pressure(proposal), 0, 'a proposed thread must read pressure 0, regardless of priority/dates — it is not accepted yet');
+    OAD._assert(!OAD.Due.activeThreadsRaw().some(function (t) { return t.uuid === proposal.uuid; }), 'a proposed thread must never appear in the active-thread pipeline (Due Today/Overdue/Focus Now all build on this)');
+    OAD._assertEqual(OAD.getLifeAreaHeat().find(function (a) { return a.name === 'Career'; }), undefined, 'a proposed thread must not contribute to any life-area heat aggregate');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('getEisenhowerQuadrant: a proposed thread has no quadrant (falls through the open-only branch)', function () {
+  const t = OAD.makeThread({ status: 'proposed', title: 'Proposal', priority: 'critical' });
+  OAD._assertEqual(OAD.getEisenhowerQuadrant(t), null, 'a proposed thread must not appear in any Matrix quadrant');
+});
+
+OAD.test('exportThreads / applyImport: rationale round-trips (ARCHITECTURE_RULES.md Rule 4)', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const p = OAD.addThread(OAD.makeThread({ status: 'proposed', title: 'Export round-trip proposal', rationale: 'Because the graph heat says so' }));
+    const exported = JSON.parse(OAD.exportThreads());
+    const row = exported.threads.find(function (t) { return t.uuid === p.uuid; });
+    OAD._assert(!!row, 'the proposal thread must be present in the export — it is just a thread now');
+    OAD._assertEqual(row.rationale, 'Because the graph heat says so', 'exported row must carry rationale');
+    OAD._assert(OAD._IMPORT_FIELDS.indexOf('rationale') !== -1, 'OAD._IMPORT_FIELDS must include rationale so re-import actually syncs it');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
 });
 
 OAD.test('_threadForm: Next Action renders as a multi-line textarea, matching Closing Condition and Current Assumption, not a single-line input', function () {
@@ -1897,7 +2116,6 @@ OAD.test('getDayLoadLabel: falls back to documented defaults (50/150) when confi
 
 OAD.test('calculateDayLoadScore: sums pressure, adds edge-weighted connections and per-cadence weight', function () {
   const originalThreads = OAD.DB.threads;
-  const originalCadences = OAD.DB.cadences;
   const originalWeights = OAD.Config.weekLoadWeights;
   try {
     OAD.Config.weekLoadWeights = { edgeMultiplier: 2, cadenceWeight: 20, busyThreshold: 50, heavyThreshold: 150 };
@@ -1910,8 +2128,10 @@ OAD.test('calculateDayLoadScore: sums pressure, adds edge-weighted connections a
       ]
     };
     const t2 = { id: 9002, uuid: 'wl-t2', title: 'Unrelated', status: 'open', priority: 'low', connections: [] };
-    OAD.DB.threads = [t, t2];
-    OAD.DB.cadences = [{ id: 9101, title: 'Cadence due same day', next_due: date, recurrence: 'monthly-1st', days_of_week: [] }];
+    // Cadences are thread_kind:'cadence' Threads now (ARCHITECTURE_RULES.md Rule 1) —
+    // OAD.getVisibleCadences reads OAD.DB.threads, not a separate array.
+    const cadenceThread = { id: 9101, uuid: 'wl-cad-1', title: 'Cadence due same day', thread_kind: 'cadence', next_due: date, recurrence: 'monthly-1st', days_of_week: [] };
+    OAD.DB.threads = [t, t2, cadenceThread];
 
     const ownPressure = OAD.pressure(t, true); // matches how getDayLoad computes it internally
     const expectedEdgeContribution = 2 * 2; // 2 connections (blocks + relates) * edgeMultiplier 2
@@ -1921,7 +2141,6 @@ OAD.test('calculateDayLoadScore: sums pressure, adds edge-weighted connections a
       'score should be pressure-sum + edge-weight + cadence-weight, using configured multipliers');
   } finally {
     OAD.DB.threads = originalThreads;
-    OAD.DB.cadences = originalCadences;
     OAD.Config.weekLoadWeights = originalWeights;
   }
 });
@@ -2013,14 +2232,18 @@ OAD.test('_autoRefreshActiveView: does not refresh while a thread detail is open
 // ── Tests: _seedCadences ──────────────────────────────────────────────
 
 OAD.test('_seedCadences: creates at least 3 cadences including Monthly Bills Review', function () {
-  const saved = OAD.DB.cadences.slice();
-  OAD.DB.cadences = [];
-  OAD._seedCadences();
-  OAD._assert(OAD.DB.cadences.length >= 3, 'at least 3 cadences should be seeded');
-  const mbr = OAD.DB.cadences.find(function (c) { return c.title === 'Monthly Bills Review'; });
-  OAD._assert(!!mbr,                          'Monthly Bills Review cadence should exist');
-  OAD._assertEqual(mbr.recurrence, 'monthly-15th', 'Monthly Bills Review recurrence should be monthly-15th');
-  OAD.DB.cadences = saved;
+  const origThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [];
+    OAD._seedCadences();
+    const cadences = OAD.getCadenceThreads();
+    OAD._assert(cadences.length >= 3, 'at least 3 cadences should be seeded');
+    const mbr = cadences.find(function (c) { return c.title === 'Monthly Bills Review'; });
+    OAD._assert(!!mbr,                          'Monthly Bills Review cadence should exist');
+    OAD._assertEqual(mbr.recurrence, 'monthly-15th', 'Monthly Bills Review recurrence should be monthly-15th');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
 });
 
 // ── Tests: weekly-days recurrence ─────────────────────────────────────
@@ -2082,24 +2305,67 @@ OAD.test('markCadenceDone: passes cadence.days_of_week through to nextCadenceDue
   OAD.deleteCadence(c.id);
 });
 
+OAD.test('_normalizeDB: converts legacy OAD.DB.cadences array entries into real Threads with thread_kind and a real uuid (ARCHITECTURE_RULES.md Rule 3 — cadences never had one before)', function () {
+  const origThreads = OAD.DB.threads;
+  const origCadences = OAD.DB.cadences;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.cadences = [{ id: 1, title: 'Legacy migration cadence', recurrence: 'weekly', next_due: '2026-08-01', last_completed: '2026-07-01' }];
+
+    OAD._normalizeDB();
+
+    OAD._assertEqual(OAD.DB.cadences.length, 0, 'the old cadences array must be empty after migration');
+    const migrated = OAD.DB.threads.find(function (t) { return t.title === 'Legacy migration cadence'; });
+    OAD._assert(!!migrated, 'the legacy cadence must now exist as a real thread');
+    OAD._assertEqual(migrated.thread_kind, 'cadence', 'migrated cadence must carry the cadence discriminator');
+    OAD._assertEqual(migrated.next_due, '2026-08-01', 'cadence-specific field values must survive the migration');
+    OAD._assert(!!migrated.uuid && typeof migrated.uuid === 'string', 'migrated cadence must have a real uuid — cadences never had one before this migration (Rule 3)');
+    OAD._assertEqual(typeof migrated.owner_id, 'string', 'migrated cadence must have an owner_id too (Rule 3)');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.cadences = origCadences;
+  }
+});
+
 OAD.test('_normalizeDB: backfills days_of_week on cadences that predate the field', function () {
-  const saved = OAD.DB.cadences.slice();
-  OAD.DB.cadences = [{ id: 999999, title: 'Legacy cadence', recurrence: 'weekly' }];
-  OAD._normalizeDB();
-  OAD._assert(Array.isArray(OAD.DB.cadences[0].days_of_week), 'legacy cadence should get a days_of_week array backfilled');
-  OAD.DB.cadences = saved;
+  // Legacy-array-shaped input (no thread_kind, no uuid) exercises the same self-terminating
+  // migration path as the dedicated "_normalizeDB: converts legacy OAD.DB.cadences" test below —
+  // this one specifically locks in the days_of_week backfill survives the migration. id is not
+  // preserved (collision-avoidance, same as Habits/Ideas), so the migrated thread is found by
+  // title, not its old legacy id.
+  const origThreads = OAD.DB.threads;
+  const origCadences = OAD.DB.cadences;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.cadences = [{ id: 999999, title: 'Legacy cadence', recurrence: 'weekly' }];
+    OAD._normalizeDB();
+    const migrated = OAD.getCadenceThreads().find(function (c) { return c.title === 'Legacy cadence'; });
+    OAD._assert(!!migrated, 'legacy cadence must be migrated to a real thread');
+    OAD._assert(Array.isArray(migrated.days_of_week), 'legacy cadence should get a days_of_week array backfilled');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.cadences = origCadences;
+  }
 });
 
 OAD.test('_normalizeDB: normalizes cadence life_area the same way threads already do', function () {
-  const saved = OAD.DB.cadences.slice();
-  OAD.DB.cadences = [
-    { id: 999998, title: 'Bad casing cadence', recurrence: 'weekly', life_area: 'Finance' },
-    { id: 999997, title: 'Lowercase cadence',  recurrence: 'weekly', life_area: 'finances' }
-  ];
-  OAD._normalizeDB();
-  OAD._assertEqual(OAD.getCadence(999998).life_area, 'Finances', "'Finance' normalizes to canonical 'Finances'");
-  OAD._assertEqual(OAD.getCadence(999997).life_area, 'Finances', "'finances' normalizes to canonical 'Finances'");
-  OAD.DB.cadences = saved;
+  const origThreads = OAD.DB.threads;
+  const origCadences = OAD.DB.cadences;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.cadences = [
+      { id: 999998, title: 'Bad casing cadence', recurrence: 'weekly', life_area: 'Finance' },
+      { id: 999997, title: 'Lowercase cadence',  recurrence: 'weekly', life_area: 'finances' }
+    ];
+    OAD._normalizeDB();
+    const badCasing = OAD.getCadenceThreads().find(function (c) { return c.title === 'Bad casing cadence'; });
+    const lowercase = OAD.getCadenceThreads().find(function (c) { return c.title === 'Lowercase cadence'; });
+    OAD._assertEqual(badCasing.life_area, 'Finances', "'Finance' normalizes to canonical 'Finances'");
+    OAD._assertEqual(lowercase.life_area, 'Finances', "'finances' normalizes to canonical 'Finances'");
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.cadences = origCadences;
+  }
 });
 
 OAD.test('addCadence: normalizes life_area on create', function () {
@@ -2276,26 +2542,34 @@ OAD.test('renderInboxAlertBanner: does not affect Focus Now, pressure, or DueEng
   }
 });
 
-OAD.test('proposals: accepting a proposal creates an active thread', function () {
-  const savedProposals = (OAD.DB.proposals || []).slice();
-  const savedThreads = (OAD.DB.threads || []).slice();
-  OAD.DB.proposals = [{ uuid: 'test-uuid', title: 'Prop A', life_area: 'Other', closing_condition: 'Done', rationale: 'Testing' }];
-  OAD.DB.threads = [];
-  const t = OAD.acceptProposal('test-uuid');
-  OAD._assert(t, 'should return thread');
-  OAD._assertEqual(OAD.DB.proposals.length, 0, 'proposal should be removed');
-  OAD._assertEqual(OAD.DB.threads.length, 1, 'thread should be added');
-  OAD._assertEqual(t.title, 'Prop A', 'title matches');
-  OAD.DB.proposals = savedProposals;
-  OAD.DB.threads = savedThreads;
+OAD.test('proposals: accepting a proposal creates an active thread (proposals are status:\'proposed\' Threads, ARCHITECTURE_RULES.md Rule 1)', function () {
+  const savedThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [];
+    const proposal = OAD.addThread(OAD.makeThread({ uuid: 'test-uuid', status: 'proposed', title: 'Prop A', life_area: 'Other', closing_condition: 'Done', rationale: 'Testing' }));
+    const t = OAD.acceptProposal('test-uuid');
+    OAD._assert(t, 'should return thread');
+    OAD._assertEqual(t.id, proposal.id, 'accepting must update the SAME thread in place, not create a new one');
+    OAD._assertEqual(t.status, 'open', 'accepted proposal must become a real open thread');
+    OAD._assertEqual(OAD.getProposalThreads().length, 0, 'no longer a pending proposal once accepted');
+    OAD._assertEqual(OAD.DB.threads.length, 1, 'still exactly one thread — accept updates in place, it does not add a second');
+    OAD._assertEqual(t.title, 'Prop A', 'title matches');
+  } finally {
+    OAD.DB.threads = savedThreads;
+  }
 });
 
 OAD.test('proposals: rejecting a proposal removes it from the queue', function () {
-  const savedProposals = (OAD.DB.proposals || []).slice();
-  OAD.DB.proposals = [{ uuid: 'test-uuid2', title: 'Prop B' }];
-  OAD.rejectProposal('test-uuid2');
-  OAD._assertEqual(OAD.DB.proposals.length, 0, 'proposal should be removed');
-  OAD.DB.proposals = savedProposals;
+  const savedThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [];
+    OAD.addThread(OAD.makeThread({ uuid: 'test-uuid2', status: 'proposed', title: 'Prop B' }));
+    OAD.rejectProposal('test-uuid2');
+    OAD._assertEqual(OAD.getProposalThreads().length, 0, 'proposal should be removed');
+    OAD._assertEqual(OAD.DB.threads.length, 0, 'rejecting deletes the thread outright, matching the original reject behavior (no audit trail)');
+  } finally {
+    OAD.DB.threads = savedThreads;
+  }
 });
 
 // ── Test Overlay ──────────────────────────────────────────────────────
@@ -2463,10 +2737,14 @@ OAD._bootAfterAuth = async function () {
     // Cloud data loaded — migrate any arrays added after the user's initial seed.
     // This handles the case where habits/ideas were added to the app after the user
     // already had data in Supabase, so _seedData() was never run for those arrays.
+    // Per ticket-flowqueue-data-model-migration.md Steps 2 & 4: Habits/Ideas/Cadences are
+    // Threads now (thread_kind discriminator) — OAD.DB.habits/ideas/cadences are always empty
+    // after migration, so checking their .length here would spuriously re-seed on every single
+    // cloud load, even for a user who already has real habit/idea/cadence threads.
     var needsSave = false;
-    if (!OAD.DB.habits.length)   { OAD._seedHabits();   needsSave = true; }
-    if (!OAD.DB.ideas.length)    { OAD._seedIdeas();    needsSave = true; }
-    if (!OAD.DB.cadences.length) { OAD._seedCadences(); needsSave = true; }
+    if (!OAD.getHabitThreads().length)   { OAD._seedHabits();   needsSave = true; }
+    if (!OAD.getIdeaThreads().length)    { OAD._seedIdeas();    needsSave = true; }
+    if (!OAD.getCadenceThreads().length) { OAD._seedCadences(); needsSave = true; }
     if (OAD._migrateActionDeadlines() > 0) needsSave = true;
     OAD._runJune16DedupV2();   // calls saveDB() internally; always persists its guard flag
     OAD._runJune16PatchV1();  // targeted title/status fixes; calls saveDB() internally
@@ -2507,6 +2785,10 @@ OAD._finishBoot = function () {
 
   if (typeof OAD.sweepStalledTendencyEvidence === 'function') {
     OAD.sweepStalledTendencyEvidence();
+  }
+
+  if (typeof OAD.sweepInboxSentinel === 'function') {
+    OAD.sweepInboxSentinel();
   }
 
   OAD._updateCHEBadge();
@@ -3892,15 +4174,12 @@ OAD.test('makeThread: created_at defaults to a valid ISO timestamp', function ()
   OAD._assert(!isNaN(new Date(t.created_at).getTime()), 'created_at should parse as a valid date');
 });
 
-OAD.test('_normalizeDB: hydrates plain-object threads/cadences into real domain-model instances, in place', function () {
+OAD.test('_normalizeDB: hydrates plain-object threads into real domain-model instances, in place', function () {
   const origThreads = OAD.DB.threads;
-  const origCadences = OAD.DB.cadences;
   try {
     const plainThread = { id: 9001, uuid: OAD._generateUUID(), title: 'Plain object thread', status: 'open',
       next_action_date: '2020-01-01', connections: [] }; // deliberately overdue, to prove isOverdue() actually works
-    const plainCadence = { id: 9002, title: 'Plain object cadence', recurrence: 'weekly', next_due: '2020-01-01' };
     OAD.DB.threads = [plainThread];
-    OAD.DB.cadences = [plainCadence];
 
     OAD._assert(!(plainThread instanceof OAD.Models.Thread), 'sanity check: starts as a plain object, not a Thread');
     OAD._normalizeDB();
@@ -3909,13 +4188,19 @@ OAD.test('_normalizeDB: hydrates plain-object threads/cadences into real domain-
     OAD._assert(typeof plainThread.isOverdue === 'function', 'hydrated thread must have its class methods available');
     OAD._assert(plainThread.isOverdue(), 'hydrated thread method must actually work, not just exist (this one really is overdue)');
     OAD._assertEqual(OAD.DB.threads[0], plainThread, 'hydration must upgrade the object in place — same reference, not a replacement — so any code already holding this reference keeps working');
-
-    OAD._assert(plainCadence instanceof OAD.Models.Cadence, 'cadence must be a real Cadence instance after normalize');
-    OAD._assert(typeof plainCadence.isOverdue === 'function', 'hydrated cadence must have its class methods available');
-    OAD._assert(plainCadence.isOverdue(), 'hydrated cadence method must actually work (this one really is overdue)');
   } finally {
     OAD.DB.threads = origThreads;
-    OAD.DB.cadences = origCadences;
+  }
+});
+
+OAD.test('cadenceOverdue: a plain-object cadence-thread (not universally hydrated — RecurringThread is applied lazily, same as Track) still gets real isOverdue() behavior', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const c = OAD.addCadence(OAD.makeCadence({ title: 'Plain object cadence', recurrence: 'weekly', next_due: '2020-01-01' }));
+    OAD._assert(!(c instanceof OAD.Models.RecurringThread), 'sanity check: a cadence-thread is not universally hydrated to RecurringThread — only wrapped on demand');
+    OAD._assert(OAD.cadenceOverdue(c), 'OAD.cadenceOverdue must still correctly detect this as overdue via its lazy RecurringThread wrap');
+  } finally {
+    OAD.DB.threads = origThreads;
   }
 });
 
@@ -5510,6 +5795,166 @@ OAD.test('sweepStalledTendencyEvidence: does not re-log the same ongoing stall w
   }
 });
 
+// ── Tests: OAD.sweepInboxSentinel (ticket-flowqueue-inbox-triage.md Ticket 1) ──────────────
+
+OAD.test('getInboxThreads: is the single source both the alert banner and the sentinel sweep key off', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'gi-1', title: 'A', status: 'inbox' }),
+      OAD.makeThread({ id: 2, uuid: 'gi-2', title: 'B', status: 'inbox' }),
+      OAD.makeThread({ id: 3, uuid: 'gi-3', title: 'C', status: 'open' })
+    ];
+    OAD._assertEqual(OAD.getInboxThreads().length, 2, 'must return exactly the status:inbox threads');
+    const uuids = OAD.getInboxThreads().map(function (t) { return t.uuid; });
+    OAD._assert(uuids.indexOf('gi-1') !== -1 && uuids.indexOf('gi-2') !== -1 && uuids.indexOf('gi-3') === -1, 'must include only inbox threads');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: creates a sentinel with medium priority for a fresh (0-1 day old) inbox', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'sis-fresh', title: 'Fresh', status: 'inbox' });
+    t.created_at = new Date().toISOString();
+    OAD.DB.threads = [t];
+
+    OAD.sweepInboxSentinel();
+    const sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
+    OAD._assert(!!sentinel, 'a sentinel thread must be created when the inbox is non-empty');
+    OAD._assertEqual(sentinel.priority, 'medium', 'a fresh inbox (0-1 days) must read medium priority');
+    OAD._assertEqual(sentinel.life_area, 'System', 'sentinel must use the System life_area');
+    OAD._assertEqual(sentinel.parent_uuid, null, 'sentinel must be top-level so it is never suppressed by the bollard rule');
+    OAD._assertEqual(sentinel.title, 'Inbox needs triage (1 item)', 'title must reflect the live count');
+    OAD._assertEqual(sentinel.next_action_date, OAD.todayStr(), 'next_action_date must be today');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: escalates priority as the OLDEST item ages past each threshold, using the age of the item, not the sentinel', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'sis-age', title: 'Aging item', status: 'inbox' });
+    t.created_at = new Date().toISOString();
+    OAD.DB.threads = [t];
+
+    OAD.sweepInboxSentinel();
+    OAD._assertEqual(OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID).priority, 'medium', 'fresh must read medium');
+
+    const threeDaysAgo = new Date(); threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    t.created_at = threeDaysAgo.toISOString();
+    OAD.sweepInboxSentinel();
+    OAD._assertEqual(OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID).priority, 'high', '3 days old (past overdueMinDays=2) must escalate to high');
+
+    const fiveDaysAgo = new Date(); fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+    t.created_at = fiveDaysAgo.toISOString();
+    OAD.sweepInboxSentinel();
+    OAD._assertEqual(OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID).priority, 'critical', '5 days old (past criticalMinDays=4) must escalate to critical');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: oldest-age falls back from created_at to evolution_log[0].date when created_at is null (real legacy-data shape)', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const fiveDaysAgo = new Date(); fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+    const dateStr = fiveDaysAgo.toISOString().slice(0, 10);
+    const t = OAD.makeThread({ id: 1, uuid: 'sis-legacy', title: 'Legacy item', status: 'inbox' });
+    t.created_at = null; // confirmed real shape: every current live inbox thread has this
+    t.evolution_log = [{ date: dateStr, note: 'Captured via Quick Add.' }];
+    OAD.DB.threads = [t];
+
+    OAD.sweepInboxSentinel();
+    OAD._assertEqual(OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID).priority, 'critical', 'must use evolution_log[0].date when created_at is null, not treat the item as age 0');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: T.J.\'s specific scenario — triaging the oldest item and capturing a new one same-day resets escalation entirely, no carry-forward', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const fiveDaysAgo = new Date(); fiveDaysAgo.setDate(fiveDaysAgo.getDate() - 5);
+    const old = OAD.makeThread({ id: 1, uuid: 'sis-old', title: 'Old', status: 'inbox' });
+    old.created_at = fiveDaysAgo.toISOString();
+    OAD.DB.threads = [old];
+    OAD.sweepInboxSentinel();
+    OAD._assertEqual(OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID).priority, 'critical', 'sanity check: old item alone reads critical');
+
+    OAD.updateThread(old.id, { status: 'closed', closing_condition_met: true });
+    const fresh = OAD.addThread(OAD.makeThread({ id: 2, uuid: 'sis-fresh2', title: 'Fresh replacement', status: 'inbox' }));
+    fresh.created_at = new Date().toISOString();
+
+    OAD.sweepInboxSentinel();
+    const sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
+    OAD._assertEqual(sentinel.priority, 'medium', 'triaging the old item and replacing it same-day must read exactly like a fresh Day-1 state, not carry forward the prior escalation');
+    OAD._assertEqual(sentinel.title, 'Inbox needs triage (1 item)', 'title must reflect only the current inbox, not historical items');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: closes the sentinel when the inbox empties, and reopens fresh (not re-escalated) if items land again', function () {
+  const origThreads = OAD.DB.threads;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'sis-close', title: 'Only item', status: 'inbox' });
+    t.created_at = new Date().toISOString();
+    OAD.DB.threads = [t];
+    OAD.sweepInboxSentinel();
+    OAD._assert(!!OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID), 'sanity check: sentinel exists while inbox is non-empty');
+
+    OAD.updateThread(t.id, { status: 'closed', closing_condition_met: true });
+    OAD.sweepInboxSentinel();
+    let sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
+    OAD._assertEqual(sentinel.status, 'closed', 'sentinel must close when the inbox is empty');
+    OAD._assertEqual(sentinel.closing_condition_met, true, 'closing_condition_met must be set');
+    OAD._assertEqual(sentinel.evolution_log[sentinel.evolution_log.length - 1].note, 'Inbox cleared, sentinel auto-closed.', 'must log the auto-close note');
+
+    const t2 = OAD.addThread(OAD.makeThread({ id: 2, uuid: 'sis-reopen', title: 'New item', status: 'inbox' }));
+    t2.created_at = new Date().toISOString();
+    OAD.sweepInboxSentinel();
+    sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
+    OAD._assertEqual(sentinel.status, 'open', 'sentinel must reopen once the inbox has items again');
+    OAD._assertEqual(sentinel.priority, 'medium', 'reopened sentinel must read fresh (medium), not resume any prior escalation');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('sweepInboxSentinel: updating an existing sentinel never routes through updateThread/addThread (reentrancy guard)', function () {
+  // The real risk: updateThread/addThread call OAD._runAfterSave, which is what the debounced
+  // sweepInboxSentinel registration (js/data.js) hooks into — so if the sentinel's own update
+  // path used updateThread, every sweep would schedule another sweep of itself. Spy on both to
+  // prove the "existing sentinel" branch mutates directly + saveDB() instead.
+  const origThreads = OAD.DB.threads;
+  const origUpdateThread = OAD.updateThread;
+  const origAddThread = OAD.addThread;
+  try {
+    const t = OAD.makeThread({ id: 1, uuid: 'sis-reentrant', title: 'Item', status: 'inbox' });
+    t.created_at = new Date().toISOString();
+    OAD.DB.threads = [t];
+    OAD.sweepInboxSentinel(); // create path — legitimately uses addThread once
+    OAD._assert(!!OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID), 'sanity check: sentinel created');
+
+    let updateThreadCalls = 0, addThreadCalls = 0;
+    OAD.updateThread = function () { updateThreadCalls++; return origUpdateThread.apply(this, arguments); };
+    OAD.addThread = function () { addThreadCalls++; return origAddThread.apply(this, arguments); };
+    try {
+      OAD.sweepInboxSentinel(); // update path
+      OAD._assertEqual(updateThreadCalls, 0, 'updating an existing sentinel must never call OAD.updateThread — that would re-trigger the debounced sweep on itself');
+      OAD._assertEqual(addThreadCalls, 0, 'updating an existing sentinel must never call OAD.addThread — creation only happens once');
+    } finally {
+      OAD.updateThread = origUpdateThread;
+      OAD.addThread = origAddThread;
+    }
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
 OAD.test('tendencyEvidenceStrength: exactly at the gate reads 0.5; at 2x every dimension reads 1.0', function () {
   const thresholds = { minOccurrences: 3, minDistinctThreads: 2, minSpanDays: 14 };
   OAD._assertEqual(OAD.tendencyEvidenceStrength(3, 2, 14, thresholds), 0.5, 'exactly at the minimum on all three dimensions must read 0.5 — "just cleared the bar," not falsely precise');
@@ -5668,6 +6113,157 @@ OAD.test('characterizeTendencyCluster: sends real occurrence/thread/span counts 
   }
 });
 
+// ── Tests: OAD.classifyQuickCaptureDeadline / Quick Add deadline prompt (ticket-flowqueue-inbox-triage.md Ticket 2) ──
+
+OAD.test('classifyQuickCaptureDeadline: sends the real title and returns true when the model says has_deadline', async function () {
+  const origLLMCall = OAD._llmCall;
+  try {
+    let capturedUserMsg = null;
+    OAD._llmCall = async function (messages) {
+      capturedUserMsg = messages[0].content;
+      return JSON.stringify({ has_deadline: true, reasoning: 'implies an RSVP' });
+    };
+    const result = await OAD.classifyQuickCaptureDeadline('Ameer birthday');
+    OAD._assertEqual(result, true, 'must resolve true when the model says has_deadline: true');
+    OAD._assert(capturedUserMsg.indexOf('Ameer birthday') !== -1, 'prompt must include the real captured title');
+  } finally {
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('classifyQuickCaptureDeadline: returns false when the model says no', async function () {
+  const origLLMCall = OAD._llmCall;
+  try {
+    OAD._llmCall = async function () { return JSON.stringify({ has_deadline: false, reasoning: 'a routine errand, no real date pressure' }); };
+    const result = await OAD.classifyQuickCaptureDeadline('Mid July - check in on Limpies');
+    OAD._assertEqual(result, false, 'must resolve false when the model says has_deadline: false');
+  } finally {
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('classifyQuickCaptureDeadline: fails closed (false) on a malformed response or a thrown error, never surfaces an error to the caller', async function () {
+  const origLLMCall = OAD._llmCall;
+  try {
+    OAD._llmCall = async function () { return 'not valid json at all'; };
+    OAD._assertEqual(await OAD.classifyQuickCaptureDeadline('Something'), false, 'malformed JSON must resolve false, not throw');
+
+    OAD._llmCall = async function () { throw new Error('network down'); };
+    OAD._assertEqual(await OAD.classifyQuickCaptureDeadline('Something else'), false, 'a thrown error must resolve false, not propagate — a classifier hiccup must never surface as a visible error mid-capture');
+  } finally {
+    OAD._llmCall = origLLMCall;
+  }
+});
+
+OAD.test('submitQuickAdd: capture stays synchronous and instant — thread is saved and input cleared before the deadline classifier ever resolves', function () {
+  // OAD.submitQuickAdd calls the real OAD.refreshActiveView(), which re-renders #main from
+  // whatever OAD.DB.threads/OAD._lastView happen to be at that moment — save/restore the whole
+  // container, same principle as the renderPersonaBar/renderListView/renderDailyView Load
+  // Overview test above, so this test's fixture data never leaks into the real rendered page.
+  const main = document.getElementById('main');
+  const originalMainHTML = main ? main.innerHTML : '';
+  const input = document.getElementById('quick-add-input');
+  const origDisabled = input.disabled;
+  const origThreads = OAD.DB.threads;
+  const origClassify = OAD.classifyQuickCaptureDeadline;
+  const origApiKey = OAD.API_KEY;
+  try {
+    input.disabled = false;
+    input.value = 'Sync test capture';
+    OAD.DB.threads = [];
+    OAD.API_KEY = 'test-key';
+    let classifyCalled = false;
+    OAD.classifyQuickCaptureDeadline = function () { classifyCalled = true; return new Promise(function () {}); }; // never resolves
+
+    OAD.submitQuickAdd();
+
+    OAD._assertEqual(OAD.DB.threads.length, 1, 'the thread must already be saved synchronously');
+    OAD._assertEqual(input.value, '', 'the input must already be cleared synchronously, not waiting on the classifier');
+    OAD._assert(classifyCalled, 'the classifier must have been invoked (fire-and-forget), just not awaited');
+  } finally {
+    input.disabled = origDisabled;
+    input.value = '';
+    OAD.DB.threads = origThreads;
+    OAD.classifyQuickCaptureDeadline = origClassify;
+    OAD.API_KEY = origApiKey;
+    if (main) main.innerHTML = originalMainHTML;
+  }
+});
+
+OAD.test('submitQuickAdd: when the classifier resolves true, the inline deadline prompt appears near the Quick Add input', async function () {
+  const main = document.getElementById('main');
+  const originalMainHTML = main ? main.innerHTML : '';
+  const input = document.getElementById('quick-add-input');
+  const origDisabled = input.disabled;
+  const origThreads = OAD.DB.threads;
+  const origClassify = OAD.classifyQuickCaptureDeadline;
+  const origApiKey = OAD.API_KEY;
+  try {
+    input.disabled = false;
+    input.value = 'Ameer birthday';
+    OAD.DB.threads = [];
+    OAD.API_KEY = 'test-key';
+    OAD.classifyQuickCaptureDeadline = async function () { return true; };
+
+    OAD.submitQuickAdd();
+    await new Promise(function (r) { setTimeout(r, 0); }); // let the fire-and-forget promise settle
+
+    const prompt = document.getElementById('quick-add-deadline-prompt');
+    OAD._assert(!!prompt, 'the inline "Does this have a deadline?" prompt must appear when the classifier says yes');
+  } finally {
+    const p = document.getElementById('quick-add-deadline-prompt');
+    if (p) p.remove();
+    input.disabled = origDisabled;
+    input.value = '';
+    OAD.DB.threads = origThreads;
+    OAD.classifyQuickCaptureDeadline = origClassify;
+    OAD.API_KEY = origApiKey;
+    if (main) main.innerHTML = originalMainHTML;
+  }
+});
+
+OAD.test('_saveQuickCaptureDeadline: writes deadline and a next_action_date with real lead time, never equal to the deadline (CHE-002)', function () {
+  const origThreads = OAD.DB.threads;
+  document.body.insertAdjacentHTML('beforeend', '<input type="date" id="quick-add-deadline-date" value="2026-08-01">');
+  try {
+    const t = OAD.addThread(OAD.makeThread({ title: 'Deadline entry test', status: 'inbox' }));
+    OAD._saveQuickCaptureDeadline(t.id);
+    const updated = OAD.getThread(t.id);
+    OAD._assertEqual(updated.deadline, '2026-08-01', 'deadline must be written as entered');
+    OAD._assert(!!updated.next_action_date, 'a next_action_date must be set, not left blank');
+    OAD._assert(updated.next_action_date < updated.deadline, 'next_action_date must have real lead time before the deadline, never equal to it');
+  } finally {
+    document.getElementById('quick-add-deadline-date')?.remove();
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('_skipQuickCaptureDeadline: flags the thread without writing any date, so the signal is not silently dropped', function () {
+  const origThreads = OAD.DB.threads;
+  const t = OAD.addThread(OAD.makeThread({ title: 'Skip test', status: 'inbox' }));
+  try {
+    OAD._skipQuickCaptureDeadline(t.id);
+    const updated = OAD.getThread(t.id);
+    OAD._assertEqual(updated.deadline_check_skipped, true, 'deadline_check_skipped must be set');
+    OAD._assertEqual(updated.next_action_date, '', 'skipping must not write any date');
+    OAD._assertEqual(updated.deadline, null, 'skipping must not write any date');
+  } finally {
+    OAD.DB.threads = origThreads;
+  }
+});
+
+OAD.test('dataHygieneWarnings: quick_capture_deadline_skipped fires for a skipped, still-dateless inbox thread — reads differently from a plain no_dates_set item', function () {
+  const skipped = OAD.makeThread({ id: 1, uuid: 'dhw-skipped', title: 'Skipped', status: 'inbox', deadline_check_skipped: true });
+  const warnings = OAD.TemporalStatus.dataHygieneWarnings(skipped, new Date(), OAD.DEFAULT_OWNER_ID);
+  OAD._assert(warnings.some(function (w) { return w.rule === 'quick_capture_deadline_skipped'; }), 'a skipped, still-dateless thread must carry the quick_capture_deadline_skipped warning');
+});
+
+OAD.test('dataHygieneWarnings: quick_capture_deadline_skipped does not fire once a real date has been entered', function () {
+  const resolved = OAD.makeThread({ id: 1, uuid: 'dhw-resolved', title: 'Resolved', status: 'open', deadline_check_skipped: true, deadline: '2026-08-01', next_action_date: '2026-07-29' });
+  const warnings = OAD.TemporalStatus.dataHygieneWarnings(resolved, new Date(), OAD.DEFAULT_OWNER_ID);
+  OAD._assert(!warnings.some(function (w) { return w.rule === 'quick_capture_deadline_skipped'; }), 'once real dates exist, the skipped flag must stop firing — it is stale signal at that point');
+});
+
 OAD.test('_acceptPersonaUpdate: writes the full structured trait, including evidence_strength and suggested_adjustment, not just the bare text', function () {
   const origPersona = OAD.DB.persona.assumption_tendencies;
   try {
@@ -5705,13 +6301,23 @@ OAD.boot = async function () {
   await OAD.loadLanguage();
 
   if (location.search.includes('tests=true')) {
-    const savedThreads  = OAD.DB.threads.slice();
     const savedPersona  = JSON.parse(JSON.stringify(OAD.DB.persona));
+    const mainEl = document.getElementById('main');
+    const originalMainHTML = mainEl ? mainEl.innerHTML : null;
 
     const summary = await OAD._runTests();
 
+    // Tests mutate real OAD.DB entity arrays and, in some cases, render onto the real DOM to
+    // assert against it. threads and habits are reset the same way (both accumulate leftover
+    // fixture rows across the suite with no per-test cleanup, e.g. a stray 'Test habit' with no
+    // check-in history); #main's pre-test HTML is restored too, since some tests render the real
+    // dashboard directly to assert against it. cadences/ideas/etc are deliberately NOT reset
+    // here — at least one UI test (test_cadence_recurrence_edit_round_trip) depends on a
+    // leftover cadence fixture surviving the unit-test run as the row it edits.
     OAD.DB.threads = [];
+    OAD.DB.habits = [];
     OAD.DB.persona = savedPersona;
+    if (mainEl && originalMainHTML !== null) mainEl.innerHTML = originalMainHTML;
 
     const showOverlay = summary.failed > 0 || location.search.includes('tests=true');
     if (showOverlay) {

@@ -619,20 +619,27 @@ OAD.getDayLoadLabel = function (score) {
   return 'clear';
 };
 
+// Cadence-threads are hydrated as plain Thread instances (js/data.js _normalizeDB's uniform
+// _hydrate pass, and OAD.makeThread's own constructor), which already HAVE an isOverdue() —
+// the base Thread one, checking next_action_date, not next_due. Unlike the old standalone
+// Cadence class (nothing else ever had an isOverdue to collide with), a naive "does it already
+// have the method" guard would silently call the wrong one on every real cadence-thread. Only
+// skip the fresh wrap when it's already specifically a RecurringThread — same lazy-wrap-on-demand
+// pattern as Track, just guarded correctly against a same-named method from a shared base class.
 OAD.cadenceOverdue = function (cadence) {
   if (!cadence) return false;
-  if (typeof cadence.isOverdue === 'function') {
+  if (cadence instanceof window.OAD.Models.RecurringThread) {
     return cadence.isOverdue();
   }
-  return new window.OAD.Models.Cadence(cadence).isOverdue();
+  return new window.OAD.Models.RecurringThread(cadence).isOverdue();
 };
 
 OAD.cadenceDoneThisPeriod = function (c) {
   if (!c) return false;
-  if (typeof c.isDoneThisPeriod === 'function') {
+  if (c instanceof window.OAD.Models.RecurringThread) {
     return c.isDoneThisPeriod();
   }
-  return new window.OAD.Models.Cadence(c).isDoneThisPeriod();
+  return new window.OAD.Models.RecurringThread(c).isDoneThisPeriod();
 };
 
 OAD._cyclesCache = null;

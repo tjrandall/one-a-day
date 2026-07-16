@@ -1246,9 +1246,10 @@ OAD.openImportModal = function () {
   OAD.openModal(`
     <h2>Import Threads</h2>
     <p class="text-muted text-sm" style="margin-bottom:14px">
-      Accepts the One-A-Day export JSON format. New threads and cadences are created immediately.
-      Threads matched by title, and cadences matched by id, will show a diff — you confirm before anything changes.
-      Evolution logs are always appended, never overwritten.
+      Accepts the One-A-Day export JSON format. New threads (including cadences, habits, ideas —
+      all just threads now) are created immediately. Existing threads, matched by uuid, will show
+      a diff — you confirm before anything changes. Evolution logs are always appended, never
+      overwritten.
     </p>
     <div class="field">
       <label>Select export file (.json)</label>
@@ -1315,50 +1316,22 @@ OAD._previewImport = function (jsonString) {
     html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Skipped (' + invalid.length + ') — missing title</div>';
   }
 
-  const cadenceResults = results.cadences || { create: [], update: [], invalid: [], delete: [] };
-  const cadenceCreate  = cadenceResults.create || [];
-  const cadenceUpdate  = cadenceResults.update || [];
-  const cadenceDelete  = cadenceResults.delete || [];
-
-  if (cadenceCreate.length) {
-    html += '<div class="import-section-label" style="margin-top:12px">New cadences (' + cadenceCreate.length + ') — will be created</div>';
-    html += cadenceCreate.map(function (r) {
-      return '<div class="import-row import-new">+ ' + OAD.esc(r.title) + '</div>';
-    }).join('');
-  }
-
-  if (cadenceUpdate.length) {
-    html += '<div class="import-section-label" style="margin-top:12px">Existing cadences (' + cadenceUpdate.length + ') — review changes</div>';
-    html += cadenceUpdate.map(function (item, idx) {
-      const diffs = OAD._diffCadenceImportItem(item);
-      const diffHtml = diffs.length
-        ? diffs.map(function (d) {
-            return '<div class="import-diff-line">' +
-              '<span class="import-diff-field">' + OAD.esc(d.field) + '</span> ' +
-              '<span class="import-diff-old">' + OAD.esc(d.old || '—') + '</span>' +
-              ' → <span class="import-diff-new">' + OAD.esc(d.new_ || '—') + '</span>' +
-            '</div>';
-          }).join('')
-        : '<div class="text-muted text-sm">No field changes</div>';
-      return '<div class="import-row import-update">' +
-        '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-          '<input type="checkbox" class="import-confirm-cb" data-type="cadence" data-idx="' + idx + '" ' +
-            'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
-          '<div>' +
-            '<div style="font-weight:600;font-size:13px;margin-bottom:4px">' + OAD.esc(item.incoming.title) + '</div>' +
-            diffHtml +
-          '</div>' +
-        '</label>' +
-      '</div>';
-    }).join('');
-  }
-
-  if (cadenceDelete.length) {
-    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Cadences to delete (' + cadenceDelete.length + ') — cannot be undone</div>';
-    html += cadenceDelete.map(function (c, idx) {
+  // Cadences (thread_kind:'cadence') no longer have a separate create/update/delete pipeline —
+  // per ticket-flowqueue-data-model-migration.md Step 4 they're just threads, matched by uuid,
+  // so a new or changed cadence already appears in the New/Existing threads sections above.
+  // Deleting a cadence is still a genuine hard delete though (no "reopen a deleted cadence"
+  // concept, unlike closing a regular thread) — that destructive step keeps its own explicit
+  // "cannot be undone" confirmation here, same rigor the old cadence-delete flow had. Regular
+  // thread closes (results.close) intentionally get NO preview section and auto-apply, matching
+  // their original (pre-migration) silent behavior — only the newly-unified cadence-delete case
+  // needs a confirmation UI, since that's the one destructive path that used to have one.
+  const cadenceDeletes = (results.close || []).filter(function (t) { return t.thread_kind === 'cadence'; });
+  if (cadenceDeletes.length) {
+    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Cadences to delete (' + cadenceDeletes.length + ') — cannot be undone</div>';
+    html += cadenceDeletes.map(function (c) {
       return '<div class="import-row import-delete">' +
         '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-          '<input type="checkbox" class="import-confirm-cb" data-type="cadence-delete" data-idx="' + idx + '" ' +
+          '<input type="checkbox" class="import-confirm-cb" data-type="cadence-delete" data-id="' + c.id + '" ' +
             'style="margin-top:3px;width:auto;flex-shrink:0" checked>' +
           '<span>' + OAD.esc(c.title) + '</span>' +
         '</label>' +
@@ -1366,11 +1339,7 @@ OAD._previewImport = function (jsonString) {
     }).join('');
   }
 
-  if (cadenceResults.invalid && cadenceResults.invalid.length) {
-    html += '<div class="import-section-label" style="margin-top:12px;color:var(--critical)">Cadences skipped (' + cadenceResults.invalid.length + ') — missing title</div>';
-  }
-
-  if (!create.length && !update.length && !cadenceCreate.length && !cadenceUpdate.length && !cadenceDelete.length) {
+  if (!create.length && !update.length && !cadenceDeletes.length) {
     html = '<p class="text-muted text-sm">Nothing to import.</p>';
   }
 
@@ -1396,37 +1365,20 @@ OAD._diffImportItem = function (item) {
   return diffs;
 };
 
-OAD._diffCadenceImportItem = function (item) {
-  const fields = ['title', 'recurrence', 'next_due', 'last_completed', 'notes', 'consequences'];
-  const diffs = [];
-  fields.forEach(function (f) {
-    const incoming = item.incoming[f] != null ? String(item.incoming[f]) : '';
-    const existing = item.existing[f]  != null ? String(item.existing[f])  : '';
-    if (incoming && incoming !== existing) {
-      diffs.push({ field: f, old: existing, new_: incoming });
-    }
-  });
-  return diffs;
-};
-
 OAD._confirmImport = function () {
   if (!OAD._pendingImport) return;
   const checkboxes = document.querySelectorAll('.import-confirm-cb');
   const confirmedUpdates = [];
-  const confirmedCadenceUpdates = [];
-  const confirmedCadenceDeletes = [];
+  const confirmedDeleteIds = [];
   checkboxes.forEach(function (cb) {
     if (!cb.checked) return;
-    const idx = parseInt(cb.dataset.idx, 10);
-    if (cb.dataset.type === 'cadence') {
-      confirmedCadenceUpdates.push(OAD._pendingImport.cadences.update[idx]);
-    } else if (cb.dataset.type === 'cadence-delete') {
-      confirmedCadenceDeletes.push(OAD._pendingImport.cadences.delete[idx]);
+    if (cb.dataset.type === 'cadence-delete') {
+      confirmedDeleteIds.push(parseInt(cb.dataset.id, 10));
     } else {
-      confirmedUpdates.push(OAD._pendingImport.update[idx]);
+      confirmedUpdates.push(OAD._pendingImport.update[parseInt(cb.dataset.idx, 10)]);
     }
   });
-  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates, confirmedCadenceUpdates, confirmedCadenceDeletes);
+  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates, confirmedDeleteIds);
   OAD._pendingImport = null;
   const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
   const cheCount = typeof OAD.runCHE === 'function' ? OAD.runCHE() : 0;
@@ -1434,13 +1386,8 @@ OAD._confirmImport = function () {
   OAD.closeModal();
   OAD.refreshActiveView();
   var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
-  if (result.cadences_created > 0 || result.cadences_updated > 0 || result.cadences_deleted > 0) {
-    msg += ', ' + result.cadences_created + ' cadence' + (result.cadences_created === 1 ? '' : 's') + ' created, ' +
-      result.cadences_updated + ' cadence' + (result.cadences_updated === 1 ? '' : 's') + ' updated';
-    if (result.cadences_deleted > 0) {
-      msg += ', ' + result.cadences_deleted + ' cadence' + (result.cadences_deleted === 1 ? '' : 's') + ' deleted';
-    }
-  }
+  if (result.closed > 0) msg += ', ' + result.closed + ' closed';
+  if (result.deleted > 0) msg += ', ' + result.deleted + ' deleted';
   if (result.edges_merged > 0) msg += ', ' + result.edges_merged + ' edges restored';
   if (adeCount > 0) msg += ', ' + adeCount + ' AI edges inferred';
   if (cheCount > 0) msg += '. ⚠ ' + cheCount + ' configuration issue' + (cheCount === 1 ? '' : 's') + ' found — review in Health Panel';

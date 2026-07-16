@@ -15,7 +15,7 @@ OAD.Due = {};
 // so it can't recurse.
 OAD.Due.activeThreadsRaw = function () {
   return (OAD.getVisibleThreads() || [])
-    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox'; });
+    .filter(function (t) { return t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox' && t.status !== 'proposed'; });
 };
 
 // Pressure-scored + sorted convenience wrapper for surfaces that display/rank threads.

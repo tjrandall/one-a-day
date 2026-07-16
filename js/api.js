@@ -179,6 +179,26 @@ OAD.genInsight = async function (thread) {
   return parsed;
 };
 
+// Fires once, silently, right after a Quick Add capture (js/render.js OAD.submitQuickAdd) —
+// reuses the same OAD._llmCall pipeline every other prompt here already goes through, not a
+// second API layer. Fails closed (false) on any error: a classifier hiccup must never surface
+// as a visible error to someone who's mid-capture and didn't ask for one.
+OAD.classifyQuickCaptureDeadline = async function (title) {
+  const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.quickCaptureDeadlineCheck) || {};
+  const systemPrompt = promptTemplate.system || '';
+  const userMsg = (promptTemplate.user || '').replace('{{title}}', title || '');
+
+  try {
+    const raw = await OAD._llmCall([{ role: 'user', content: userMsg }], systemPrompt);
+    const match = raw.match(/\{[\s\S]*\}/);
+    const parsed = JSON.parse(match ? match[0] : raw);
+    return parsed.has_deadline === true;
+  } catch (e) {
+    console.warn('[OAD] classifyQuickCaptureDeadline failed:', e);
+    return false;
+  }
+};
+
 OAD.draftEmail = async function (tid) {
   const thread = OAD.getThread(tid);
   if (!thread) throw new Error(OAD.t('err_thread_not_found'));
@@ -221,10 +241,11 @@ OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
     .replace('{{heat}}', JSON.stringify(heat))
     .replace('{{stalledThreads}}', JSON.stringify(stalledThreads));
 
+  let existing = null;
   if (feedbackStr && replaceUuid) {
-    const existing = (OAD.DB.proposals || []).find(p => p.uuid === replaceUuid);
+    existing = OAD.getProposal(replaceUuid);
     if (existing) {
-      userMsg += `\n\nPREVIOUS PROPOSAL: ${JSON.stringify(existing)}`;
+      userMsg += `\n\nPREVIOUS PROPOSAL: ${JSON.stringify({ title: existing.title, life_area: existing.life_area, closing_condition: existing.closing_condition, rationale: existing.rationale })}`;
       userMsg += `\nUSER FEEDBACK: ${feedbackStr}`;
       userMsg += `\nGenerate a NEW proposal that directly addresses the feedback.`;
     }
@@ -239,22 +260,19 @@ OAD.genProactiveCounsel = async function (feedbackStr, replaceUuid) {
   } catch (_) {
     throw new Error(OAD.t('err_parse_counsel') + " " + raw);
   }
-  
+
   persona.last_proactive_scan = OAD.todayStr();
-  parsed.uuid = replaceUuid || OAD._generateUUID();
-  parsed.date = persona.last_proactive_scan;
-  
-  OAD.DB.proposals = OAD.DB.proposals || [];
-  if (replaceUuid) {
-    const idx = OAD.DB.proposals.findIndex(p => p.uuid === replaceUuid);
-    if (idx !== -1) OAD.DB.proposals[idx] = parsed;
-    else OAD.DB.proposals.push(parsed);
-  } else {
-    OAD.DB.proposals.push(parsed);
-  }
+
+  // Proposals are Threads with status:'proposed' (ARCHITECTURE_RULES.md Rule 1, migrated per
+  // ticket-flowqueue-data-model-migration.md Step 3). Refining an existing proposal updates that
+  // same thread in place (uuid preserved) rather than replacing an array element.
+  const fields = { title: parsed.title, life_area: parsed.life_area, closing_condition: parsed.closing_condition, rationale: parsed.rationale };
+  const proposalThread = existing
+    ? OAD.updateThread(existing.id, fields)
+    : OAD.addThread(OAD.makeThread(Object.assign({ status: 'proposed' }, fields)));
+
   OAD.saveDB();
-  
-  return parsed;
+  return proposalThread;
 };
 
 OAD.genDailyIntercept = async function () {
@@ -265,7 +283,7 @@ OAD.genDailyIntercept = async function () {
   // the same Load Overview counts shown on the dashboard, so the model can only reference real,
   // already-trustworthy numbers — never compute a new one.
   const overview = OAD.Due.loadOverview();
-  const overdueCadences = (OAD.DB.cadences || []).filter(c => OAD.cadenceOverdue(c)).map(c => c.title);
+  const overdueCadences = OAD.getCadenceThreads().filter(c => OAD.cadenceOverdue(c)).map(c => c.title);
   // Was filtering on the dead status === 'stalled' — see the identical fix note in
   // OAD.genProactiveCounsel above.
   const stalledThreads = OAD.Due.stalledThreads().map(t => t.title);
@@ -324,7 +342,7 @@ OAD.genDailyIntercept = async function () {
   
   // Also pass the absolute highest pressure looming task (if it's not already on today's agenda) to check for blind spots
   const highestLooming = (OAD.DB.threads || [])
-    .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && !OAD.TemporalStatus.isDueToday(t, new Date()) && !OAD.isActionOverdue(t))
+    .filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'waiting' && t.status !== 'proposed' && !OAD.TemporalStatus.isDueToday(t, new Date()) && !OAD.isActionOverdue(t))
     .sort((a, b) => OAD.pressure(b) - OAD.pressure(a))[0];
   
   const promptTemplate = (window.OAD && OAD.Config && OAD.Config.prompts && OAD.Config.prompts.dailyIntercept) || {};

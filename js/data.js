@@ -143,8 +143,37 @@ OAD.getVisibleThreads = function() {
   return threads;
 };
 
+// Single source of truth for "what's in the inbox" — every surface that needs this count or
+// list (the inbox alert banner, the sentinel thread sweep) must call this, not write its own
+// filter, so the two can never independently disagree the way This Week's Load once did (two
+// separately-written date calculations silently drifting apart).
+OAD.getInboxThreads = function() {
+  return (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'inbox'; });
+};
+
+// Single source of truth for Habit/Idea threads (thread_kind discriminator, ARCHITECTURE_RULES.md
+// Rule 1) — every panel/listing must call these, not filter OAD.DB.threads independently, same
+// rationale as OAD.getInboxThreads above.
+OAD.getHabitThreads = function() {
+  return (OAD.getVisibleThreads() || []).filter(function (t) { return t.thread_kind === 'habit'; });
+};
+
+OAD.getIdeaThreads = function() {
+  return (OAD.getVisibleThreads() || []).filter(function (t) { return t.thread_kind === 'idea'; });
+};
+
+// Proposals use status:'proposed' as the discriminator (not thread_kind — see OAD.getProposal's
+// comment, above OAD.acceptProposal in this file, for why).
+OAD.getProposalThreads = function() {
+  return (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'proposed'; });
+};
+
+OAD.getCadenceThreads = function() {
+  return (OAD.getVisibleThreads() || []).filter(function (t) { return t.thread_kind === 'cadence'; });
+};
+
 OAD.getVisibleCadences = function() {
-  let cadences = OAD.DB.cadences || [];
+  let cadences = OAD.getCadenceThreads();
   if (OAD.Config && OAD.Config.demoMode && OAD._demoRole) {
     OAD._cadenceVisibilityFilters.forEach(function (fn) {
       cadences = fn(cadences, OAD._demoRole);
@@ -197,6 +226,13 @@ OAD.updateThread = function (id, patch) {
   }
   if (patch.current_assumption !== undefined && patch.current_assumption !== t.current_assumption) {
     patch.current_assumption_updated_at = now;
+  }
+  // A thread can't stay status:inbox once it gets a parent — attaching a parent is itself an
+  // act of triage. Only forces this when the patch doesn't already say what status should be,
+  // so an explicit status in the same patch is never silently overridden. Mirrors the same
+  // correction in OAD._normalizeDB, which self-heals legacy data that predates this rule.
+  if (patch.parent_uuid && patch.status === undefined && t.status === 'inbox') {
+    patch.status = 'open';
   }
   Object.assign(t, patch);
   OAD.saveDB();
@@ -335,6 +371,94 @@ OAD.sweepStalledTendencyEvidence = function () {
   });
 };
 
+// Fixed, well-known uuid (matching the existing life-area-bollard convention, e.g.
+// 'abigail-life-area-2026-06-15') rather than title-text matching — the title changes with the
+// live count every sweep, so matching on it would be fragile.
+OAD._INBOX_SENTINEL_UUID = 'system-inbox-sentinel';
+
+// Makes "the inbox has unsorted items" impossible to miss by keeping one always-on, real Thread
+// (unlike OAD.renderInboxAlertBanner, js/render.js, which is display-only) whose priority
+// escalates with how long the OLDEST item has actually sat untriaged — not the sentinel's own
+// age, which would let clearing-and-immediately-refilling the inbox look identical to genuinely
+// ignoring it for days. oldest_unresolved_age is therefore always recomputed fresh from the
+// live inbox set on every call, never carried forward as state on the sentinel thread itself —
+// same principle as the Eisenhower quadrant view: compute at sweep time from current fields,
+// don't let a persistent object accumulate drifting history that can desync from reality.
+//
+// Per-item capture date falls back created_at -> evolution_log[0].date -> "just captured" (no
+// signal at all). created_at (js/data.js OAD.makeThread) is null for any thread that predates
+// the field being added — confirmed against real live data (see ticket-flowqueue-inbox-triage.md)
+// that every current real inbox item has a null created_at, so evolution_log is the load-bearing
+// signal today, not just a defensive fallback.
+//
+// Reentrancy: an existing sentinel's fields are mutated directly + OAD.saveDB() called
+// directly, NEVER through OAD.updateThread — routing through updateThread would re-fire
+// OAD._runAfterSave, which re-triggers this same sweep (registered below), looping. Only the
+// one-time creation path uses OAD.addThread, matching the same direct-mutation pattern already
+// used by the CHE auto-fix code (OAD.applyHealthAlertFix, js/engine.js).
+OAD.sweepInboxSentinel = function () {
+  var inbox = OAD.getInboxThreads();
+  var sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
+
+  if (inbox.length === 0) {
+    if (sentinel && sentinel.status !== 'closed') {
+      sentinel.status = 'closed';
+      sentinel.closing_condition_met = true;
+      sentinel.evolution_log.push({ date: OAD.todayStr(), note: 'Inbox cleared, sentinel auto-closed.' });
+      OAD.saveDB();
+    }
+    return;
+  }
+
+  var today = new Date();
+  var oldestAge = 0;
+  inbox.forEach(function (t) {
+    var capturedStr = t.created_at ? t.created_at.slice(0, 10) :
+      ((t.evolution_log && t.evolution_log[0] && t.evolution_log[0].date) || null);
+    if (!capturedStr) return;
+    var ageDays = Math.floor((today - new Date(capturedStr + 'T00:00:00')) / 86400000);
+    if (ageDays > oldestAge) oldestAge = ageDays;
+  });
+
+  var th = OAD.Config.inboxSentinelThresholds;
+  var priority = oldestAge >= th.criticalMinDays ? 'critical' : oldestAge >= th.overdueMinDays ? 'high' : 'medium';
+  var title = 'Inbox needs triage (' + inbox.length + ' item' + (inbox.length === 1 ? '' : 's') + ')';
+  var nextActionDate = OAD.todayStr();
+  var nextAction = 'Open Inbox and sort each item into a real thread with a closing condition and a next action date, or archive it.';
+
+  if (!sentinel) {
+    OAD.addThread(OAD.makeThread({
+      uuid: OAD._INBOX_SENTINEL_UUID,
+      title: title,
+      life_area: 'System',
+      status: 'open',
+      priority: priority,
+      parent_uuid: null,
+      next_action: nextAction,
+      next_action_date: nextActionDate
+    }));
+    return;
+  }
+
+  if (sentinel.status === 'closed') {
+    sentinel.status = 'open';
+    sentinel.closing_condition_met = false;
+  }
+  sentinel.title = title;
+  sentinel.priority = priority;
+  sentinel.next_action_date = nextActionDate;
+  OAD.saveDB();
+};
+
+// "Picks up count changes mid-day" (Quick Add, edits, import), not just on the next boot's
+// sweep — same debounced _afterSaveCallbacks pattern already used for CHE (js/engine.js), so a
+// bulk import doesn't thrash this on every row.
+OAD._afterSaveCallbacks.push(function () {
+  if (typeof OAD.sweepInboxSentinel !== 'function') return;
+  clearTimeout(OAD._inboxSentinelDebounce);
+  OAD._inboxSentinelDebounce = setTimeout(function () { OAD.sweepInboxSentinel(); }, 50);
+});
+
 // source: 'manual' (the thread-detail Insight button, js/render.js OAD.generateInsight) or
 // 'auto' (silently fired after a non-closing edit-modal save, js/modals.js). Before this, both
 // paths called this function identically with no way to tell them apart afterward — every
@@ -401,58 +525,89 @@ OAD.makeThread = function (overrides) {
     dormant_trigger: '',
     user_action_complete: false,
     stage: null, // job-application pipeline stage; null unless this is a leaf application thread
-    runway_ack_until: null // Runway Risk snooze — ISO date; suppressed from banner/card until this date passes
+    runway_ack_until: null, // Runway Risk snooze — ISO date; suppressed from banner/card until this date passes
+    deadline_check_skipped: false, // Quick Add's deadline classifier fired and T.J. skipped answering — see OAD.TemporalStatus.dataHygieneWarnings' 'quick_capture_deadline_skipped' rule
+    // thread_kind: null (an ordinary thread) | 'habit' | 'idea' — discriminator per
+    // ARCHITECTURE_RULES.md Rule 1, same pattern as `stage` for job-application threads
+    // (see Track extends Thread, js/models.js). Habits and Ideas used to be separate top-level
+    // OAD.DB arrays with their own empty model classes (zero computed behavior — nothing a
+    // discriminator + fields couldn't carry); migrated here per
+    // ticket-flowqueue-data-model-migration.md Step 2. The fields below are only meaningful
+    // when thread_kind is set to the matching kind; every other thread just carries them at
+    // their neutral default, same as `stage`/`dormant_trigger` already do for threads that
+    // aren't job applications.
+    thread_kind: null,
+    // Habit fields (thread_kind === 'habit') — field names preserved exactly from the old
+    // OAD.makeHabit() schema so existing UI reads (js/render.js) needed only a source repoint,
+    // not a field rename.
+    frequency: null,            // daily | weekly | every-other-day | custom
+    time_of_day: null,          // morning | evening | flexible
+    current_streak: 0,
+    longest_streak: 0,
+    last_checked_in: null,      // ISO date string
+    last_check_in_done: null,   // boolean — true=yes, false=no
+    last_check_in_note: '',
+    phase: null,                // active | check-in | dormant
+    why: '',
+    // Idea fields (thread_kind === 'idea') — same preserved-field-names rationale as Habit above.
+    notes: '',
+    source: '',
+    added_date: null,
+    last_surfaced: null,
+    type: null,                 // book | article | creative | project-seed | other
+    energy_required: null,      // low | medium | high
+    tags: [],
+    // Proposal field (status === 'proposed') — why the AI is suggesting this / what blind spot
+    // it covers. Migrated per ticket-flowqueue-data-model-migration.md Step 3: proposals used to
+    // be a separate top-level array with no factory function at all (whatever JSON shape the LLM
+    // happened to return, pushed raw) — now status:'proposed' Threads, same pattern as Habit/Idea.
+    rationale: '',
+    // Cadence fields (thread_kind === 'cadence') — migrated per
+    // ticket-flowqueue-data-model-migration.md Step 4. Real computed behavior to preserve here
+    // (unlike Habit/Idea): isOverdue()/isDoneThisPeriod(), now on RecurringThread extends Thread
+    // (js/models.js), mirroring the existing Track extends Thread precedent for job-application
+    // threads. `notes` is shared with Idea above — same generic meaning, no collision.
+    recurrence: null,      // monthly-1st | monthly-15th | monthly-last | weekly | weekly-days | custom
+    days_of_week: [],
+    last_completed: null,
+    next_due: null,
+    consequences: ''
   }, overrides);
   return (window.OAD.Models && window.OAD.Models.Thread) ? new window.OAD.Models.Thread(data) : data;
 };
 
-OAD.nextCadenceId = function () {
-  const ids = OAD.DB.cadences.map(function (c) { return c.id; });
-  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
-};
-
+// Cadences are Threads with thread_kind:'cadence' (ARCHITECTURE_RULES.md Rule 1, migrated per
+// ticket-flowqueue-data-model-migration.md Step 4). Function names/signatures preserved so
+// existing call sites needed only a source-of-truth repoint. life_area normalization is done
+// explicitly here (not left to the next _normalizeDB() pass) to preserve the original
+// immediate-consistency guarantee — OAD.addThread/updateThread don't normalize life_area
+// themselves, only _normalizeDB's backfill loop does.
 OAD.makeCadence = function (overrides) {
-  var data = Object.assign({
-    id: null,
-    title: '',
+  return OAD.makeThread(Object.assign({
+    thread_kind: 'cadence',
     life_area: 'finances',
-    recurrence: 'monthly-1st',
-    days_of_week: [],
-    last_completed: null,
-    next_due: null,
-    notes: '',
-    consequences: ''
-  }, overrides);
-  return (window.OAD.Models && window.OAD.Models.Cadence) ? new window.OAD.Models.Cadence(data) : data;
+    recurrence: 'monthly-1st'
+  }, overrides));
 };
 
 OAD.addCadence = function (cadence) {
-  cadence.id = OAD.nextCadenceId();
   cadence.life_area = OAD.normalizeLifeArea(cadence.life_area);
-  OAD.DB.cadences.push(cadence);
-  OAD.saveDB();
-  return cadence;
+  return OAD.addThread(cadence);
 };
 
 OAD.getCadence = function (id) {
-  return OAD.DB.cadences.find(function (c) { return c.id === id; }) || null;
+  var t = OAD.getThread(id);
+  return (t && t.thread_kind === 'cadence') ? t : null;
 };
 
 OAD.updateCadence = function (id, patch) {
-  const c = OAD.getCadence(id);
-  if (!c) return null;
-  Object.assign(c, patch);
-  c.life_area = OAD.normalizeLifeArea(c.life_area);
-  OAD.saveDB();
-  return c;
+  if (!OAD.getCadence(id)) return null;
+  if (patch.life_area !== undefined) patch.life_area = OAD.normalizeLifeArea(patch.life_area);
+  return OAD.updateThread(id, patch);
 };
 
 OAD.deleteCadence = function (id) {
-  const idx = OAD.DB.cadences.findIndex(function (c) { return c.id === id; });
-  if (idx === -1) return false;
-  OAD.DB.cadences.splice(idx, 1);
-  OAD.saveDB();
-  return true;
+  return OAD.getCadence(id) ? OAD.deleteThread(id) : false;
 };
 
 // Saved Views — named, persisted filter+sort predicates over the thread list.
@@ -535,46 +690,32 @@ OAD.bulkImport = function (arr) {
 
 // ── Habit data model ─────────────────────────────────────────────────
 
+// Habits are Threads with thread_kind:'habit' (ARCHITECTURE_RULES.md Rule 1 — migrated per
+// ticket-flowqueue-data-model-migration.md Step 2; OAD.Models.Habit used to be a fully empty
+// class, zero computed behavior to preserve). These functions keep their original names and
+// signatures so every existing call site (js/render.js) needed only a source-of-truth repoint,
+// not a rename.
 OAD.makeHabit = function (overrides) {
-  var data = Object.assign({
-    id: null,
-    title: '',
+  return OAD.makeThread(Object.assign({
+    thread_kind: 'habit',
     life_area: 'Personal Growth',
     frequency: 'daily',       // daily | weekly | every-other-day | custom
     time_of_day: 'morning',   // morning | evening | flexible
-    current_streak: 0,
-    longest_streak: 0,
-    last_checked_in: null,    // ISO date string
-    last_check_in_done: null, // boolean — true=yes, false=no
-    last_check_in_note: '',
-    phase: 'active',          // active | check-in | dormant
-    why: ''
-  }, overrides);
-  return (window.OAD.Models && window.OAD.Models.Habit) ? new window.OAD.Models.Habit(data) : data;
-};
-
-OAD.nextHabitId = function () {
-  const ids = OAD.DB.habits.map(function (h) { return h.id; });
-  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+    phase: 'active'           // active | check-in | dormant
+  }, overrides));
 };
 
 OAD.addHabit = function (habit) {
-  habit.id = OAD.nextHabitId();
-  OAD.DB.habits.push(habit);
-  OAD.saveDB();
-  return habit;
+  return OAD.addThread(habit);
 };
 
 OAD.getHabit = function (id) {
-  return OAD.DB.habits.find(function (h) { return h.id === id; }) || null;
+  var t = OAD.getThread(id);
+  return (t && t.thread_kind === 'habit') ? t : null;
 };
 
 OAD.updateHabit = function (id, patch) {
-  const h = OAD.getHabit(id);
-  if (!h) return null;
-  Object.assign(h, patch);
-  OAD.saveDB();
-  return h;
+  return OAD.getHabit(id) ? OAD.updateThread(id, patch) : null;
 };
 
 OAD.checkInHabit = function (id, done, note) {
@@ -585,34 +726,39 @@ OAD.checkInHabit = function (id, done, note) {
   const yesterday = yesterdayDt.toISOString().slice(0, 10);
   const alreadyToday = h.last_checked_in === today;
 
+  var currentStreak = h.current_streak || 0;
+  var longestStreak = h.longest_streak || 0;
+
   if (done) {
     if (!alreadyToday) {
       if (h.last_checked_in === yesterday && h.last_check_in_done) {
-        h.current_streak = (h.current_streak || 0) + 1;
+        currentStreak = currentStreak + 1;
       } else {
-        h.current_streak = 1;
+        currentStreak = 1;
       }
     } else if (!h.last_check_in_done) {
       // Was no today, flipping to yes — restart from 1
-      h.current_streak = 1;
+      currentStreak = 1;
     }
     // Already yes today → streak unchanged
-    h.longest_streak = Math.max(h.longest_streak || 0, h.current_streak);
+    longestStreak = Math.max(longestStreak, currentStreak);
   } else {
     if (alreadyToday && h.last_check_in_done) {
       // Flipping yes→no today — undo the increment
-      h.current_streak = Math.max(0, (h.current_streak || 0) - 1);
+      currentStreak = Math.max(0, currentStreak - 1);
     } else if (!alreadyToday) {
-      h.current_streak = 0;
+      currentStreak = 0;
     }
     // Already no today → no change
   }
 
-  h.last_checked_in    = today;
-  h.last_check_in_done = done;
-  h.last_check_in_note = note != null ? note : '';
-  OAD.saveDB();
-  return h;
+  return OAD.updateThread(id, {
+    current_streak: currentStreak,
+    longest_streak: longestStreak,
+    last_checked_in: today,
+    last_check_in_done: done,
+    last_check_in_note: note != null ? note : ''
+  });
 };
 
 // ── Export ────────────────────────────────────────────────────────────
@@ -642,35 +788,16 @@ OAD.parseImportFile = function (jsonString) {
     const deletedUuids       = Array.isArray(parsed.deleted_uuids)         ? parsed.deleted_uuids         : [];
     const deletedEdgeUuids   = Array.isArray(parsed.deleted_edge_uuids)    ? parsed.deleted_edge_uuids    : [];
     const importEdges        = Array.isArray(parsed.edges)                 ? parsed.edges                 : [];
-    const cadenceRows        = Array.isArray(parsed.cadences)              ? parsed.cadences              : [];
-    const deletedCadenceIds  = Array.isArray(parsed.deleted_cadence_ids)   ? parsed.deleted_cadence_ids   : [];
     const results = { create: [], update: [], close: [], invalid: [], edges: importEdges, deletedEdgeUuids: deletedEdgeUuids };
 
-    // Cadences match on `id` — their real, stable identifier (cadences have no uuid field,
-    // unlike threads). A row with no id (or an id not found locally) is a new cadence, same
-    // rule as threads: never fabricate an identity that isn't already real.
-    const cadences = { create: [], update: [], invalid: [], delete: [] };
-    cadenceRows.forEach(function (row) {
-      if (!row.title || typeof row.title !== 'string') {
-        cadences.invalid.push(row);
-        return;
-      }
-      var existingCadence = (row.id != null) ? OAD.getCadence(row.id) : null;
-      if (existingCadence) {
-        cadences.update.push({ incoming: row, existing: existingCadence });
-      } else {
-        cadences.create.push(row);
-      }
-    });
-    // Cadences are permanently removed (spliced), unlike threads which are closed —
-    // there's no "reopen a deleted cadence" concept — so this is a real deletion,
-    // and the preview step requires explicit per-row confirmation same as updates.
-    deletedCadenceIds.forEach(function (id) {
-      const existing = OAD.getCadence(id);
-      if (existing) cadences.delete.push(existing);
-    });
-    results.cadences = cadences;
-    // Collect threads to close from deleted_uuids
+    // Cadences used to match on `id` via a separate parsed.cadences array (cadences had no uuid
+    // field). Per ARCHITECTURE_RULES.md Rule 1 (ticket-flowqueue-data-model-migration.md Step 4)
+    // they're just Threads now — a cadence-shaped row in `rows` below is matched by uuid exactly
+    // like any other thread, no separate diffing path. Cadences are deletion-flagged the same
+    // way as any other thread via deleted_uuids — OAD.applyImport branches to a real delete
+    // rather than a close for thread_kind:'cadence' specifically, preserving the original "no
+    // reopen a deleted cadence" semantic without needing a second deletion mechanism.
+    // Collect threads to close (or, for cadences, hard-delete) from deleted_uuids
     deletedUuids.forEach(function (uuid) {
       const existing = OAD.getThreadByUUID(uuid);
       if (existing && existing.status !== 'closed') results.close.push(existing);
@@ -711,23 +838,41 @@ OAD._IMPORT_FIELDS = [
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
   'deadline', 'deadline_time', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
   'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata',
-  'dormant_trigger', 'user_action_complete'
+  'dormant_trigger', 'user_action_complete',
+  // thread_kind + Habit/Idea fields — ARCHITECTURE_RULES.md Rule 4.
+  'thread_kind', 'frequency', 'time_of_day', 'current_streak', 'longest_streak',
+  'last_checked_in', 'last_check_in_done', 'last_check_in_note', 'phase', 'why',
+  'notes', 'source', 'added_date', 'last_surfaced', 'type', 'energy_required', 'tags',
+  // Proposal field — ARCHITECTURE_RULES.md Rule 4.
+  'rationale',
+  // Cadence fields — ARCHITECTURE_RULES.md Rule 4. Per ticket-flowqueue-data-model-migration.md
+  // Step 4, a cadence-shaped row is now just a thread row matched by uuid like any other — no
+  // more separate OAD._CADENCE_IMPORT_FIELDS/id-matched diffing path.
+  'recurrence', 'days_of_week', 'last_completed', 'next_due', 'consequences'
 ];
 
-// Fields synced on cadence import — mirrors makeCadence's full shape (data.js:280-292)
-OAD._CADENCE_IMPORT_FIELDS = [
-  'title', 'life_area', 'recurrence', 'days_of_week', 'last_completed', 'next_due', 'notes', 'consequences'
-];
+OAD.applyImport = function (results, confirmedUpdates, confirmedDeleteIds) {
+  var created = 0, updated = 0, closed = 0, deleted = 0;
 
-OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, confirmedCadenceDeletes) {
-  var created = 0, updated = 0, closed = 0;
-  var cadencesCreated = 0, cadencesUpdated = 0, cadencesDeleted = 0;
-
-  // Close threads flagged in deleted_uuids
+  // Close threads flagged in deleted_uuids — cadences (thread_kind:'cadence') hard-delete
+  // instead of closing, preserving the original cadence-specific semantic (no "reopen a deleted
+  // cadence" concept, unlike a real thread which can always be reopened from closed) now that
+  // both flow through the same deleted_uuids mechanism per
+  // ticket-flowqueue-data-model-migration.md Step 4. Deletion is destructive, so — same rigor
+  // the old cadence-delete-only flow had — it only happens for ids the caller explicitly
+  // confirmed (js/modals.js's "cannot be undone" checkboxes); a regular thread close is
+  // reversible (can be reopened later) and always auto-applies, matching its original behavior
+  // of having no confirmation step at all.
   (results.close || []).forEach(function (existing) {
-    OAD.updateThread(existing.id, { status: 'closed', closing_condition_met: true });
-    OAD.addEvolution(existing.id, 'Closed via import sync.');
-    closed++;
+    if (existing.thread_kind === 'cadence') {
+      if ((confirmedDeleteIds || []).indexOf(existing.id) === -1) return;
+      OAD.deleteThread(existing.id);
+      deleted++;
+    } else {
+      OAD.updateThread(existing.id, { status: 'closed', closing_condition_met: true });
+      OAD.addEvolution(existing.id, 'Closed via import sync.');
+      closed++;
+    }
   });
 
   (results.create || []).forEach(function (row) {
@@ -761,7 +906,32 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
       metadata:                 row.metadata                 || {},
       connections:              row.connections              || [],
       dormant_trigger:          row.dormant_trigger          || '',
-      user_action_complete:     row.user_action_complete     || false
+      user_action_complete:     row.user_action_complete     || false,
+      // thread_kind + Habit/Idea fields — ARCHITECTURE_RULES.md Rule 4.
+      thread_kind:              row.thread_kind              || null,
+      frequency:                row.frequency                || null,
+      time_of_day:              row.time_of_day              || null,
+      current_streak:           row.current_streak           || 0,
+      longest_streak:           row.longest_streak           || 0,
+      last_checked_in:          row.last_checked_in          || null,
+      last_check_in_done:       row.last_check_in_done       != null ? row.last_check_in_done : null,
+      last_check_in_note:       row.last_check_in_note       || '',
+      phase:                    row.phase                    || null,
+      why:                      row.why                      || '',
+      notes:                    row.notes                    || '',
+      source:                   row.source                   || '',
+      added_date:               row.added_date               || null,
+      last_surfaced:            row.last_surfaced            || null,
+      type:                     row.type                     || null,
+      energy_required:          row.energy_required          || null,
+      tags:                     row.tags                     || [],
+      rationale:                row.rationale                || '',
+      // Cadence fields — ARCHITECTURE_RULES.md Rule 4.
+      recurrence:               row.recurrence               || null,
+      days_of_week:             row.days_of_week             || [],
+      last_completed:           row.last_completed           || null,
+      next_due:                 row.next_due                 || null,
+      consequences:             row.consequences              || ''
     });
     const added = OAD.addThread(t);
     (row.evolution_log || []).forEach(function (e) {
@@ -841,44 +1011,15 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedCadenceUpdates, 
     }
   });
 
-  ((results.cadences && results.cadences.create) || []).forEach(function (row) {
-    OAD.addCadence(OAD.makeCadence({
-      title:          row.title,
-      life_area:      row.life_area      || 'finances',
-      recurrence:     row.recurrence     || 'monthly-1st',
-      days_of_week:   row.days_of_week   || [],
-      last_completed: row.last_completed || null,
-      next_due:       row.next_due       || null,
-      notes:          row.notes          || '',
-      consequences:   row.consequences   || ''
-    }));
-    cadencesCreated++;
-  });
-
-  (confirmedCadenceUpdates || []).forEach(function (item) {
-    const existing = OAD.getCadence(item.incoming.id) || item.existing;
-    const row      = item.incoming;
-    const patch    = {};
-    OAD._CADENCE_IMPORT_FIELDS.forEach(function (field) {
-      if (row[field] !== undefined && JSON.stringify(row[field]) !== JSON.stringify(existing[field])) {
-        patch[field] = row[field];
-      }
-    });
-    if (Object.keys(patch).length) OAD.updateCadence(existing.id, patch);
-    cadencesUpdated++;
-  });
-
-  (confirmedCadenceDeletes || []).forEach(function (existing) {
-    if (OAD.getCadence(existing.id)) {
-      OAD.deleteCadence(existing.id);
-      cadencesDeleted++;
-    }
-  });
+  // No separate cadence create/update/delete block anymore — per
+  // ticket-flowqueue-data-model-migration.md Step 4, a cadence-shaped row already flowed through
+  // results.create/confirmedUpdates above (matched by uuid like any other thread), and deletion
+  // is handled in the results.close loop above (branches to a real delete for thread_kind:
+  // 'cadence').
 
   OAD.saveDB();
   return {
-    created: created, updated: updated, closed: closed, edges_merged: edgesMerged,
-    cadences_created: cadencesCreated, cadences_updated: cadencesUpdated, cadences_deleted: cadencesDeleted
+    created: created, updated: updated, closed: closed, deleted: deleted, edges_merged: edgesMerged
   };
 };
 
@@ -985,6 +1126,33 @@ OAD.exportThreads = function () {
       effortLogged:             t.effortLogged             || 0,
       date_push_count:          t.date_push_count          || 0,
       metadata:                 t.metadata                 || {},
+      // thread_kind + Habit/Idea fields — ARCHITECTURE_RULES.md Rule 4: a migrated model must
+      // be included in export/import in the same change that introduces it. Only meaningful
+      // when thread_kind is set; every other thread just carries its neutral default.
+      thread_kind:              t.thread_kind              || null,
+      frequency:                t.frequency                || null,
+      time_of_day:              t.time_of_day              || null,
+      current_streak:           t.current_streak           || 0,
+      longest_streak:           t.longest_streak           || 0,
+      last_checked_in:          t.last_checked_in          || null,
+      last_check_in_done:       t.last_check_in_done       != null ? t.last_check_in_done : null,
+      last_check_in_note:       t.last_check_in_note       || '',
+      phase:                    t.phase                    || null,
+      why:                      t.why                      || '',
+      notes:                    t.notes                    || '',
+      source:                   t.source                   || '',
+      added_date:               t.added_date               || null,
+      last_surfaced:            t.last_surfaced            || null,
+      type:                     t.type                     || null,
+      energy_required:          t.energy_required          || null,
+      tags:                     t.tags                     || [],
+      rationale:                t.rationale                || '',
+      // Cadence fields — ARCHITECTURE_RULES.md Rule 4. notes (above) is shared with Idea.
+      recurrence:               t.recurrence               || null,
+      days_of_week:             t.days_of_week             || [],
+      last_completed:           t.last_completed           || null,
+      next_due:                 t.next_due                 || null,
+      consequences:             t.consequences             || '',
       connections:              (t.connections || []).map(function (c) {
         return {
           uuid:              c.uuid,
@@ -1021,32 +1189,19 @@ OAD.exportThreads = function () {
     });
   });
 
-  // Cadences are a function of threads, not a parallel system — Export/Import's "ground
-  // truth for all threads, no exceptions" promise has to actually cover them too.
-  const cadences = (OAD.DB.cadences || []).map(function (c) {
-    return {
-      id:             c.id,
-      title:          c.title,
-      life_area:      c.life_area,
-      recurrence:     c.recurrence,
-      days_of_week:   c.days_of_week   || [],
-      last_completed: c.last_completed || null,
-      next_due:       c.next_due       || null,
-      notes:          c.notes          || '',
-      consequences:   c.consequences   || ''
-    };
-  });
+  // Cadences used to be a separate array exported here — per ARCHITECTURE_RULES.md Rule 1
+  // (ticket-flowqueue-data-model-migration.md Step 4) they're just Threads now (thread_kind:
+  // 'cadence'), already present in `threads` above with their recurrence/days_of_week/etc.
+  // fields, so there is no separate cadence export section to build anymore.
 
   return JSON.stringify({
     exported_at:        new Date().toISOString(),
     exported_by:        OAD._userId || 'local',
     thread_count:       threads.length,
     edge_count:         edges.length,
-    cadence_count:      cadences.length,
-    note:               'Export includes thread data, graph edges, and cadences. Evolution history, AI insights, and persona data are omitted.',
+    note:               'Export includes thread data and graph edges. Evolution history, AI insights, and persona data are omitted.',
     threads:            threads,
     edges:              edges,
-    cadences:           cadences,
     deleted_edge_uuids: []
   }, null, 2);
 };
@@ -1225,82 +1380,67 @@ OAD.exportDevDiagnostic = function () {
 };
 
 // ── Idea data model ───────────────────────────────────────────────────
+// Ideas are Threads with thread_kind:'idea' (ARCHITECTURE_RULES.md Rule 1 — migrated per
+// ticket-flowqueue-data-model-migration.md Step 2; OAD.Models.Idea used to be a fully empty
+// class, zero computed behavior to preserve). Function names/signatures preserved so existing
+// call sites (js/render.js) needed only a source-of-truth repoint.
 
 OAD.makeIdea = function (overrides) {
-  var data = Object.assign({
-    id:             null,
-    title:          '',
-    notes:          '',
-    source:         '',
-    added_date:     OAD.todayStr(),
-    last_surfaced:  null,
-    type:           'other',   // book | article | creative | project-seed | other
-    energy_required: 'medium', // low | medium | high
-    tags:           []
-  }, overrides);
-  return (window.OAD.Models && window.OAD.Models.Idea) ? new window.OAD.Models.Idea(data) : data;
-};
-
-OAD.nextIdeaId = function () {
-  const ids = OAD.DB.ideas.map(function (i) { return i.id; });
-  return ids.length ? Math.max.apply(null, ids) + 1 : 1;
+  return OAD.makeThread(Object.assign({
+    thread_kind: 'idea',
+    added_date: OAD.todayStr(),
+    type: 'other',            // book | article | creative | project-seed | other
+    energy_required: 'medium' // low | medium | high
+  }, overrides));
 };
 
 OAD.addIdea = function (idea) {
-  idea.id = OAD.nextIdeaId();
-  OAD.DB.ideas.push(idea);
-  OAD.saveDB();
-  return idea;
+  return OAD.addThread(idea);
 };
 
 OAD.getIdea = function (id) {
-  return OAD.DB.ideas.find(function (i) { return i.id === id; }) || null;
+  var t = OAD.getThread(id);
+  return (t && t.thread_kind === 'idea') ? t : null;
 };
 
 OAD.updateIdea = function (id, patch) {
-  const idea = OAD.getIdea(id);
-  if (!idea) return null;
-  Object.assign(idea, patch);
-  OAD.saveDB();
-  return idea;
+  return OAD.getIdea(id) ? OAD.updateThread(id, patch) : null;
 };
 
 OAD.deleteIdea = function (id) {
-  const idx = OAD.DB.ideas.findIndex(function (i) { return i.id === id; });
-  if (idx === -1) return false;
-  OAD.DB.ideas.splice(idx, 1);
-  OAD.saveDB();
-  return true;
+  return OAD.getIdea(id) ? OAD.deleteThread(id) : false;
 };
+// Proposals are Threads with status:'proposed' (ARCHITECTURE_RULES.md Rule 1, migrated per
+// ticket-flowqueue-data-model-migration.md Step 3). A proposal is a Thread in a specific
+// lifecycle stage, not a permanently different kind of thing — status is the right discriminator
+// here (matching inbox/waiting/dormant/closed), not thread_kind, which is reserved for Habit/Idea.
+// 'proposed' is deliberately excluded everywhere pressure/Due/Active-count treat inbox/dormant as
+// "not real work yet" (js/models.js getPressure/getLifeAreaHeat/getDayLoad, js/due.js
+// activeThreadsRaw, js/api.js genDailyIntercept's highestLooming, js/render.js Active counts) —
+// see those call sites for the specific exclusions.
 OAD.getProposal = function (uuid) {
-  return OAD.DB.proposals.find(function (p) { return p.uuid === uuid; }) || null;
+  var t = OAD.getThreadByUUID(uuid);
+  return (t && t.status === 'proposed') ? t : null;
 };
 
 OAD.acceptProposal = function (uuid) {
   const p = OAD.getProposal(uuid);
   if (!p) return null;
-  OAD.DB.proposals = OAD.DB.proposals.filter(function (x) { return x.uuid !== uuid; });
-  const thread = OAD.addThread(OAD.makeThread({
-    title: p.title,
-    life_area: p.life_area,
-    closing_condition: p.closing_condition,
-    priority: 'medium',
-    status: 'open'
-  }));
-  OAD.addEvolution(thread.id, 'Created from AI Proposal: ' + p.rationale);
-  OAD.saveDB();
+  const thread = OAD.updateThread(p.id, { status: 'open', priority: 'medium' });
+  OAD.addEvolution(p.id, 'Accepted from AI Proposal: ' + p.rationale);
   return thread;
 };
 
 OAD.rejectProposal = function (uuid) {
-  OAD.DB.proposals = OAD.DB.proposals.filter(function (x) { return x.uuid !== uuid; });
-  OAD.saveDB();
+  const p = OAD.getProposal(uuid);
+  if (!p) return;
+  OAD.deleteThread(p.id);
 };
 
 
 // Returns the same idea all week, cycling through the list week-over-week.
 OAD.ideaOfTheWeek = function () {
-  const ideas = OAD.DB.ideas || [];
+  const ideas = OAD.getIdeaThreads();
   if (!ideas.length) return null;
   const weekIndex = Math.floor(Date.now() / (7 * 86400000));
   return ideas[weekIndex % ideas.length];
@@ -1346,10 +1486,53 @@ OAD._normalizeDB = function () {
   };
   if (OAD.Models) {
     OAD._hydrate(OAD.DB.threads,  OAD.Models.Thread);
-    OAD._hydrate(OAD.DB.cadences, OAD.Models.Cadence);
-    OAD._hydrate(OAD.DB.habits,   OAD.Models.Habit);
-    OAD._hydrate(OAD.DB.ideas,    OAD.Models.Idea);
+    // No hydrate for Habit/Idea/Cadence — all migrated to Threads below (ARCHITECTURE_RULES.md
+    // Rule 1, ticket-flowqueue-data-model-migration.md Steps 2 & 4); OAD.DB.habits/ideas/cadences
+    // are always empty after this runs once, so there's never anything left in them to hydrate.
+    // A cadence-shaped thread gets wrapped into RecurringThread on demand where its
+    // isOverdue()/isDoneThisPeriod() are actually needed (OAD.cadenceOverdue/
+    // cadenceDoneThisPeriod, js/engine.js) — same lazy-wrap pattern Track already uses, not a
+    // second global hydration pass.
   }
+
+  // Habits and Ideas migration: both used to be separate top-level arrays with fully empty
+  // model classes (OAD.Models.Habit/Idea — zero computed behavior to lose). Converts anything
+  // still sitting in the old arrays into a real Thread with the matching thread_kind
+  // discriminator, then empties the old arrays. id is forced to null so the "Backfill UUIDs"
+  // loop just below assigns each one a fresh id in the shared Thread id space — habits/ideas
+  // used their own independent nextHabitId()/nextIdeaId() sequences before, so reusing their
+  // old numeric id here could silently collide with an existing thread id. Self-terminating: once
+  // migrated, the old arrays stay empty forever, so this is a no-op on every subsequent load —
+  // no separate "done" flag needed, unlike OAD._runJune16DedupV2 below.
+  (OAD.DB.habits || []).forEach(function (h) {
+    OAD.DB.threads.push(OAD.makeThread(Object.assign({}, h, { id: null, thread_kind: 'habit' })));
+  });
+  OAD.DB.habits = [];
+  (OAD.DB.ideas || []).forEach(function (i) {
+    OAD.DB.threads.push(OAD.makeThread(Object.assign({}, i, { id: null, thread_kind: 'idea' })));
+  });
+  OAD.DB.ideas = [];
+
+  // Cadences migration (Step 4): same self-terminating pattern, thread_kind:'cadence' as the
+  // discriminator (real computed behavior — isOverdue()/isDoneThisPeriod() — now lives on
+  // RecurringThread extends Thread, js/models.js, mirroring Track). Cadences never had a uuid
+  // (Rule 3 violation being fixed here), so like Habits/Ideas, none is carried forward — a
+  // fresh one comes from OAD.makeThread's own default.
+  (OAD.DB.cadences || []).forEach(function (c) {
+    OAD.DB.threads.push(OAD.makeThread(Object.assign({}, c, { id: null, thread_kind: 'cadence' })));
+  });
+  OAD.DB.cadences = [];
+
+  // Proposals migration (Step 3): same self-terminating pattern as Habits/Ideas above, but
+  // status:'proposed' is the discriminator here, not thread_kind — a proposal is a Thread in a
+  // specific lifecycle stage (matching inbox/waiting/dormant/closed), not a permanently
+  // different kind of thing. Proposals already had a real uuid (stamped in the old
+  // genProactiveCounsel), so it's preserved rather than regenerated — id is still forced to null,
+  // same collision-avoidance reasoning as Habits/Ideas.
+  (OAD.DB.proposals || []).forEach(function (p) {
+    OAD.DB.threads.push(OAD.makeThread(Object.assign({}, p, { id: null, status: 'proposed' })));
+  });
+  OAD.DB.proposals = [];
 
   let _maxId = 0;
   OAD.DB.threads.forEach(function(t) { if (t.id && t.id > _maxId) _maxId = t.id; });
@@ -1370,23 +1553,32 @@ OAD._normalizeDB = function () {
     if (!Object.prototype.hasOwnProperty.call(t, 'created_at')) t.created_at = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'stage')) t.stage = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'runway_ack_until')) t.runway_ack_until = null;
+    if (!Object.prototype.hasOwnProperty.call(t, 'deadline_check_skipped')) t.deadline_check_skipped = false;
     if (!Object.prototype.hasOwnProperty.call(t, 'next_action_time')) t.next_action_time = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'deadline_time')) t.deadline_time = null;
     // Legacy threads predate this tracking — backfill to null (unknown), not a fabricated "just
     // now." CHE-012 (js/engine.js) treats null as "can't tell, don't flag" rather than guessing.
     if (!Object.prototype.hasOwnProperty.call(t, 'next_action_updated_at')) t.next_action_updated_at = null;
     if (!Object.prototype.hasOwnProperty.call(t, 'current_assumption_updated_at')) t.current_assumption_updated_at = null;
+    // A thread with a parent can't still be status:inbox — attaching a parent is itself an act
+    // of triage. Self-heals legacy data every load (real case: Abigail-Nelnet and Abby-Mainstay
+    // docs both got attached to the Abigail bollard on 7/14 without their status ever updating),
+    // not just a one-time migration — see the matching enforcement in OAD.updateThread for the
+    // moment-of-attachment case going forward.
+    if (t.parent_uuid && t.status === 'inbox') {
+      t.status = 'open';
+      t.evolution_log.push({ date: OAD.todayStr(), note: 'Status auto-corrected from inbox to open: thread has a parent, attaching is itself an act of triage.' });
+    }
     t.life_area = OAD.normalizeLifeArea(t.life_area);
+    // Backfill days_of_week for cadences created before weekly-days support existed. Harmless
+    // for non-cadence threads — same neutral empty-array default OAD.makeThread already gives
+    // every thread. life_area normalization above already covers cadences too now that they're
+    // just threads (used to be a second, easy-to-miss normalizeLifeArea call here specifically
+    // for OAD.DB.cadences, which let 'Finance'/'finances' diverge into apparent duplicates).
+    if (!Array.isArray(t.days_of_week)) t.days_of_week = [];
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();
     });
-  });
-  // Backfill days_of_week for cadences created before weekly-days support existed,
-  // and normalize life_area the same way threads already do (cadences were missed
-  // originally, which let 'Finance'/'finances' diverge into apparent duplicates).
-  OAD.DB.cadences.forEach(function (c) {
-    if (!Array.isArray(c.days_of_week)) c.days_of_week = [];
-    c.life_area = OAD.normalizeLifeArea(c.life_area);
   });
 };
 

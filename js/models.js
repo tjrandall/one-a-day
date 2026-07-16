@@ -16,7 +16,7 @@ function _maxPropagatedBlockerPressure(blockers, visited) {
   (blockers || []).forEach(function (blocker) {
     if (visited[blocker.uuid]) return;
     visited[blocker.uuid] = true;
-    if (blocker.status === 'dormant' || blocker.status === 'inbox') {
+    if (blocker.status === 'dormant' || blocker.status === 'inbox' || blocker.status === 'proposed') {
       var innerCtx = typeof blocker.getGraphContext === 'function' ? blocker.getGraphContext() : OAD.getGraphContext(blocker.id);
       var innerMax = _maxPropagatedBlockerPressure(innerCtx.blockedBy, visited);
       if (innerMax > max) max = innerMax;
@@ -121,6 +121,11 @@ class Thread {
   getPressure(_suppressSideEffects, _visited) {
     if (this.status === 'dormant') return 0;
     if (this.status === 'inbox') return 0;
+    // 'proposed' (ARCHITECTURE_RULES.md Rule 1 — AI proposals migrated to status:'proposed'
+    // Threads per ticket-flowqueue-data-model-migration.md Step 3) isn't real work yet — same
+    // "doesn't exist for pressure purposes" treatment as dormant/inbox above, so an unreviewed
+    // suggestion can never show up as urgent anywhere pressure is read.
+    if (this.status === 'proposed') return 0;
 
     var score = 0;
 
@@ -373,9 +378,14 @@ class Track extends Thread {
   }
 }
 
-class Cadence {
+// Cadences are Threads with thread_kind:'cadence' (ARCHITECTURE_RULES.md Rule 1, migrated per
+// ticket-flowqueue-data-model-migration.md Step 4). Real computed behavior to preserve, unlike
+// Habit/Idea's empty classes — isOverdue()/isDoneThisPeriod() moved here unchanged from the old
+// standalone OAD.Models.Cadence, mirroring Track extends Thread (above) as the precedent for
+// "real behavior lives on a Thread subclass, not a separate model."
+class RecurringThread extends Thread {
   constructor(data) {
-    Object.assign(this, data);
+    super(data);
   }
 
   isOverdue() {
@@ -390,7 +400,7 @@ class Cadence {
     const today = OAD.todayStr();
     const overdue = this.isOverdue();
     if (overdue) return false;
-    
+
     const dueToday = this.next_due === today;
     if (dueToday && this.last_completed === today) return true;
 
@@ -419,7 +429,7 @@ class ThreadCollection {
   getLifeAreaHeat() {
     var map = {};
     (this.threads || []).forEach(function (t) {
-      if (t.status === 'closed' || t.status === 'dormant' || t.status === 'inbox') return;
+      if (t.status === 'closed' || t.status === 'dormant' || t.status === 'inbox' || t.status === 'proposed') return;
       var a = t.life_area || 'Other';
       if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
       map[a].count++;
@@ -441,7 +451,7 @@ class ThreadCollection {
     var refDay = new Date(dateStr + 'T12:00:00');
     return this.threads
       .filter(function (t) {
-        return t.status !== 'inbox' && OAD.TemporalStatus.isDueToday(t, refDay);
+        return t.status !== 'inbox' && t.status !== 'proposed' && OAD.TemporalStatus.isDueToday(t, refDay);
       })
       .reduce(function (sum, t) { 
         return sum + (typeof t.getPressure === 'function' ? t.getPressure(true) : OAD.pressure(t, true)); 
@@ -572,7 +582,7 @@ class Graph {
 }
 
 OAD.Models.Thread = Thread;
-OAD.Models.Cadence = Cadence;
+OAD.Models.RecurringThread = RecurringThread;
 OAD.Models.Habit = Habit;
 OAD.Models.Idea = Idea;
 OAD.Models.ThreadCollection = ThreadCollection;

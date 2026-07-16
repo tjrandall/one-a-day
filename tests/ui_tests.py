@@ -85,10 +85,17 @@ def test_cadence_recurrence_edit_round_trip(page):
     """
     print("\ntest_cadence_recurrence_edit_round_trip")
     result = page.evaluate("""() => {
-        const cadences = OAD.DB.cadences;
-        if (!cadences.length) return { error: 'no cadences in DB' };
-
-        const c = cadences[0];
+        // Self-sufficient (creates its own cadence), matching the sibling
+        // test_mark_cadence_done_advances_next_due — cadences are Threads now
+        // (ARCHITECTURE_RULES.md Rule 1), and OAD.DB.threads is intentionally reset after the
+        // unit-test suite runs (so unit-test debris can't leak into the real rendered page), so
+        // this can no longer rely on a leftover cadence fixture surviving that reset the way the
+        // old, separate OAD.DB.cadences array incidentally let it.
+        const c = OAD.addCadence(OAD.makeCadence({
+            title: '__ui_test_recurrence_edit__',
+            recurrence: 'monthly-1st',
+            days_of_week: []
+        }));
         const before = { recurrence: c.recurrence, days_of_week: (c.days_of_week || []).slice() };
 
         OAD.openEditCadenceModal(c.id);
@@ -109,13 +116,13 @@ def test_cadence_recurrence_edit_round_trip(page):
         OAD.closeModal();
 
         const after = OAD.getCadence(c.id);
-        // Snapshot primitives before restore — getCadence returns a live reference.
+        // Snapshot primitives before cleanup — getCadence returns a live reference.
         const afterRecurrence = after.recurrence;
         const afterDays = after.days_of_week.slice();
         const displayLabel = OAD.formatRecurrence(after);
 
-        // Restore to original so test is non-destructive
-        OAD.updateCadence(c.id, { recurrence: before.recurrence, days_of_week: before.days_of_week });
+        // Delete the temporary cadence so the test is non-destructive (own fixture, own cleanup).
+        OAD.deleteCadence(c.id);
 
         return { afterRecurrence, afterDays, displayLabel };
     }""")

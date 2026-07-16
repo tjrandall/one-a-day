@@ -61,7 +61,9 @@ OAD._enableQuickAdd = function () {
 };
 
 // Quick Add — instant capture from the header input, available regardless of active view.
-// No LLM call, no modal, no blocking work: just save and clear.
+// No LLM call, no modal, no blocking work: just save and clear. The deadline classifier below
+// fires AFTER this returns, strictly async, so it can never add latency or a blocking prompt to
+// the capture itself — only what happens next (if anything) is different.
 OAD.submitQuickAdd = function () {
   const input = document.getElementById('quick-add-input');
   if (!input || input.disabled) return; // boot/auth not finished — OAD.DB isn't the real object yet
@@ -71,6 +73,67 @@ OAD.submitQuickAdd = function () {
   input.classList.add('quick-add-saved');
   setTimeout(function () { input.classList.remove('quick-add-saved'); }, 600);
   if (typeof OAD.refreshActiveView === 'function') OAD.refreshActiveView();
+
+  // Fire-and-forget, per ticket-flowqueue-inbox-triage.md Ticket 2: does this title plausibly
+  // imply a real external deadline (RSVP, bill, document due, appointment)? Only ever surfaces
+  // something if it fires — a "no" is silent, no added friction for a genuinely low-stakes
+  // capture like "check Limpies."
+  if (typeof OAD.classifyQuickCaptureDeadline === 'function' && (OAD.API_KEY || OAD.GEMINI_API_KEY)) {
+    OAD.classifyQuickCaptureDeadline(thread.title).then(function (hasDeadline) {
+      if (hasDeadline) OAD._promptQuickCaptureDeadline(thread.id);
+    }).catch(console.error);
+  }
+};
+
+// Small inline prompt anchored under the Quick Add input — deliberately not a modal, so it
+// doesn't block or interrupt someone mid-capture; Skip is always one tap away.
+OAD._promptQuickCaptureDeadline = function (threadId) {
+  const bar = document.querySelector('.quick-add-bar');
+  if (!bar) return;
+  const existing = document.getElementById('quick-add-deadline-prompt');
+  if (existing) existing.remove();
+
+  bar.style.position = 'relative';
+  const row = document.createElement('div');
+  row.id = 'quick-add-deadline-prompt';
+  row.style.cssText = 'position:absolute;top:100%;left:0;right:0;margin-top:4px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;display:flex;align-items:center;gap:8px;font-size:13px;z-index:20;box-shadow:0 4px 12px rgba(0,0,0,0.15)';
+  row.innerHTML =
+    '<span>Does this have a deadline?</span>' +
+    '<input type="date" id="quick-add-deadline-date" style="font-size:13px;padding:2px 4px">' +
+    '<button class="ghost" style="font-size:12px;padding:4px 10px" onclick="OAD._saveQuickCaptureDeadline(' + threadId + ')">Save</button>' +
+    '<button class="ghost" style="font-size:12px;padding:4px 10px;margin-left:auto" onclick="OAD._skipQuickCaptureDeadline(' + threadId + ')">Skip</button>';
+  bar.appendChild(row);
+};
+
+OAD._saveQuickCaptureDeadline = function (threadId) {
+  const dateInput = document.getElementById('quick-add-deadline-date');
+  const deadline = dateInput ? dateInput.value : '';
+  if (deadline) {
+    // Backward-planning per the app's own standing rule: next_action_date must have real lead
+    // time before the deadline, never equal to it (CHE-002) — default 3 days ahead, clamped to
+    // not land in the past; adjustable afterward in the edit modal like any other thread.
+    const lead = new Date(deadline + 'T00:00:00');
+    lead.setDate(lead.getDate() - 3);
+    const leadStr = lead.toISOString().slice(0, 10);
+    const todayStr = OAD.todayStr();
+    OAD.updateThread(threadId, {
+      deadline: deadline,
+      next_action_date: leadStr > todayStr ? leadStr : todayStr
+    });
+  }
+  const row = document.getElementById('quick-add-deadline-prompt');
+  if (row) row.remove();
+  if (typeof OAD.refreshActiveView === 'function') OAD.refreshActiveView();
+};
+
+OAD._skipQuickCaptureDeadline = function (threadId) {
+  // Never silently drop the signal just because the moment passed — deadline_check_skipped
+  // makes this thread show up differently (OAD.TemporalStatus.dataHygieneWarnings'
+  // 'quick_capture_deadline_skipped' rule, js/threadTemporalStatus.js) than a genuine no-deadline
+  // capture that was never flagged at all.
+  OAD.updateThread(threadId, { deadline_check_skipped: true });
+  const row = document.getElementById('quick-add-deadline-prompt');
+  if (row) row.remove();
 };
 
 OAD.renderHeaderActions = function () {
@@ -200,7 +263,7 @@ OAD.renderPersonaBar = function () {
   if (!bar) return;
 
   const threads = OAD.getVisibleThreads();
-  const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
+  const open    = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox' && t.status !== 'proposed').length;
   const dormant = threads.filter(t => t.status === 'dormant').length;
   // Load Overview replaces the old single "Critical Load" number (pressureDist['80+'] +
   // pressureDist['50-79']) with the same four distinct counts shown everywhere else this metric
@@ -617,12 +680,13 @@ OAD.renderRunwayRiskBanner = function () {
 // button or the Matrix's Inbox quadrant, unprocessed captures are easy to never see again.
 // Deliberately NOT snoozable/acknowledgeable like the Runway Risk banner above: the whole
 // point is it must not be dismissible into oblivion the way the inbox items themselves
-// currently are. It only goes away when the inbox is actually emptied. Real data only — no
-// synthetic thread, no injection into activeThreadsRaw()/the pressure pipeline; this reads
-// OAD.getVisibleThreads() directly and renders its own banner, so it can't affect Focus Now,
-// This Week's Load, or the Matrix view's own quadrant counts.
+// currently are. It only goes away when the inbox is actually emptied. This banner itself
+// injects nothing into activeThreadsRaw()/the pressure pipeline, so it can't affect Focus Now,
+// This Week's Load, or the Matrix view's own quadrant counts — OAD.sweepInboxSentinel (js/engine.js)
+// is the one place that deliberately does the opposite (a real Thread, for Due Today/Overdue
+// visibility). Both read OAD.getInboxThreads() (js/data.js) so the two counts can never disagree.
 OAD.renderInboxAlertBanner = function () {
-  var inboxCount = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'inbox'; }).length;
+  var inboxCount = OAD.getInboxThreads().length;
 
   var banner = document.getElementById('inbox-alert-banner');
   if (!inboxCount) {
@@ -742,7 +806,7 @@ OAD.renderIdeaPanel = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  const ideas = OAD.DB.ideas || [];
+  const ideas = OAD.getIdeaThreads();
   if (!ideas.length) {
     panel.innerHTML = '<div class="detail-empty">No ideas yet.</div>';
     return;
@@ -836,7 +900,7 @@ OAD.renderProposalsPanel = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  const proposals = OAD.DB.proposals || [];
+  const proposals = OAD.getProposalThreads();
   
   const generateBtnHtml = `<button class="primary" onclick="OAD.generateProposal(this)" style="margin-left:auto; font-size:13px;">✨ Generate Counsel</button>`;
 
@@ -881,7 +945,7 @@ OAD.renderProposalsPanel = function () {
 };
 
 OAD.openRefineProposalModal = function(uuid) {
-  const proposals = OAD.DB.proposals || [];
+  const proposals = OAD.getProposalThreads();
   const p = proposals.find(function(x) { return x.uuid === uuid; });
   if (!p) return;
 
@@ -947,7 +1011,7 @@ OAD.renderHabitPanel = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  const habits = OAD.DB.habits || [];
+  const habits = OAD.getHabitThreads();
   if (!habits.length) {
     panel.innerHTML = '<div class="detail-empty">No habits configured.</div>';
     return;
@@ -1098,7 +1162,7 @@ OAD.renderTodayView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
+  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
   function daysSince(h) {
     if (!h.last_checked_in) return 999;
     return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
@@ -1398,7 +1462,7 @@ OAD.renderDailyView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
+  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
   function daysSince(h) {
     if (!h.last_checked_in) return 999;
     return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
@@ -1905,7 +1969,7 @@ OAD.renderMatrixView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = (OAD.DB.habits || []).filter(function (h) { return h.phase !== 'dormant'; });
+  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
   function daysSince(h) {
     if (!h.last_checked_in) return 999;
     return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
@@ -2741,7 +2805,7 @@ OAD.renderListView = function () {
   if (OAD._activeSavedViewId === undefined) OAD._activeSavedViewId = null;
 
   const threads = OAD.getVisibleThreads();
-  const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox').length;
+  const openCount = threads.filter(t => t.status !== 'closed' && t.status !== 'dormant' && t.status !== 'inbox' && t.status !== 'proposed').length;
   const dormantCount = threads.filter(t => t.status === 'dormant').length;
   // Load Overview replaces the old single "Critical Load" number — see OAD.Due.loadOverview
   // (js/due.js) and renderPersonaBar above for why. Per ticket-enterprise-mode-and-load-overview.md

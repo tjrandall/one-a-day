@@ -9,7 +9,8 @@ OAD.Config = {
   defaultPriority: 'medium',
   lifeAreas: JSON.parse(localStorage.getItem('oad_life_areas')) || [
     'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
-    'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other'
+    'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other',
+    'System' // system-managed threads only (e.g. the Inbox Sentinel, OAD.sweepInboxSentinel in js/engine.js) — never user-assigned
   ],
   aiConfig: JSON.parse(localStorage.getItem('oad_ai_config')) || {
     defaultProvider: 'anthropic',
@@ -155,6 +156,20 @@ Excuses given, in the order they were recorded:
 
 Current Assumption Tendencies: {{assumption_tendencies}}
 Current What's Not Working: {{not_working}}`
+    },
+    quickCaptureDeadlineCheck: {
+      system: `You are a fast, silent classifier that runs on every Quick Add capture in One-A-Day.
+Given only a raw, often terse title, decide: does this plausibly imply a real external deadline —
+a party or RSVP, a bill or payment due, a document due, an appointment, anything with a real date
+attached in the world, even if that date isn't stated? A vague reminder, a errand, a "someday"
+note, or anything with no real external date pressure is NOT a deadline.
+This is a yes/no classification, not a conversation. Do not ask questions, do not explain unless
+justifying the classification briefly. Output valid JSON only:
+{
+  "has_deadline": true,
+  "reasoning": "One short clause naming what real-world date pressure this title implies, or why it doesn't."
+}`,
+      user: `Title: "{{title}}"`
     }
   },
   // Runway Risk benchmark time-to-outcome (applied -> hire) per broad job-search category, in weeks.
@@ -191,6 +206,15 @@ Current What's Not Working: {{not_working}}`
     minOccurrences: 3,
     minDistinctThreads: 2,
     minSpanDays: 14
+  },
+  // Escalation ladder for the Inbox Sentinel (OAD.sweepInboxSentinel, js/engine.js), keyed by
+  // the oldest unresolved inbox item's age in days (golden rule: no magic numbers in the code).
+  // Starting defaults per ticket-flowqueue-inbox-triage.md — a starting point, not fixed; tune
+  // once TJ has watched it run for a few real cycles.
+  inboxSentinelThresholds: JSON.parse(localStorage.getItem('oad_inbox_sentinel_thresholds')) || {
+    freshMaxDays: 1,    // 0-1 days old → medium
+    overdueMinDays: 2,  // 2+ days old → high
+    criticalMinDays: 4  // 4+ days old → critical
   },
   areaKeywords: JSON.parse(localStorage.getItem('oad_area_keywords')) || {
     'Job Search': ['job board', 'job search', 'job hunt', 'weekly job', 'apply to'],
@@ -244,6 +268,7 @@ Current What's Not Working: {{not_working}}`
     warnNextActionAfterDeadline: 'Next action date is after the deadline — still working the action after the thread is past due',
     warnDriftedMaskedByDeadline: 'Next action has drifted into the past, but a comfortable future deadline may be masking that on cards',
     warnNoDatesSet: 'No next action date or deadline set — this thread can drift forever without appearing anywhere date-based',
+    warnQuickCaptureDeadlineSkipped: 'Flagged as possibly having a real deadline at capture, but the date was skipped',
     maskedBadge: '⚠ next action overdue'
   },
   cheLeadDays: JSON.parse(localStorage.getItem('oad_che_lead_days')) || {
