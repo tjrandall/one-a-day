@@ -2716,21 +2716,22 @@ OAD._saveMailroomIntake = function () {
     const life_area = document.getElementById('m-area')?.value;
     const priority = document.getElementById('m-priority')?.value;
     const next_action_date = document.getElementById('m-date')?.value || null;
-    
-    const newThread = {
-      id: Date.now(),
-      uuid: crypto.randomUUID ? crypto.randomUUID() : 'u-' + Math.random().toString(36).substring(2, 9),
+
+    // ARCHITECTURE_RULES.md Rule 5: no hand-built Thread objects. This used to construct the
+    // record inline (Date.now() for id — inconsistent with OAD.nextId()'s sequential space —
+    // and skipping every default field OAD.makeThread() sets), leaving a malformed thread until
+    // the next _normalizeDB() backfill on reload. description is kept as an override — not part
+    // of the canonical schema, but OAD.Mailroom.getRecommendations (js/mailroom.js) already reads
+    // it for match-scoring, so dropping it here would silently break that.
+    const newThread = OAD.addThread(OAD.makeThread({
       title,
       description,
       life_area,
       status: 'open',
       priority,
-      next_action_date,
-      evolution_log: [{ date: OAD.todayStr(), note: 'Thread created via Mailroom Intake.' }]
-    };
-    
-    OAD.DB.threads = OAD.DB.threads || [];
-    OAD.DB.threads.push(newThread);
+      next_action_date: next_action_date || ''
+    }));
+    OAD.addEvolution(newThread.id, 'Thread created via Mailroom Intake.');
     OAD.saveDB();
     OAD.refreshActiveView();
     OAD.closeModal();

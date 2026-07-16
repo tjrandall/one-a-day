@@ -3009,6 +3009,54 @@ OAD.test('mailroom thread recommendation scoring', function () {
   }
 });
 
+OAD.test('_saveMailroomIntake: creates a real Thread via makeThread/addThread, not a hand-built object (ARCHITECTURE_RULES.md Rule 5)', function () {
+  // _saveMailroomIntake calls the real OAD.refreshActiveView(), which re-renders #main from
+  // live OAD.DB state — save/restore the whole container so this test's fixture never leaks
+  // into the real rendered page (same principle as the submitQuickAdd tests above).
+  const main = document.getElementById('main');
+  const originalMainHTML = main ? main.innerHTML : '';
+  const origThreads = OAD.DB.threads;
+  const before = OAD.DB.threads.length;
+  const scratch = document.createElement('div');
+  scratch.innerHTML = `
+    <input type="radio" name="mailroom-action" id="act-new" checked>
+    <input type="text" id="m-title" value="IRS Notice">
+    <textarea id="m-desc">Extracted text from the notice.</textarea>
+    <select id="m-area"><option value="Finance" selected>Finance</option></select>
+    <select id="m-priority"><option value="high" selected>High</option></select>
+    <input type="date" id="m-date" value="2026-08-01">
+  `;
+  document.body.appendChild(scratch);
+  try {
+    OAD._saveMailroomIntake();
+
+    OAD._assertEqual(OAD.DB.threads.length, before + 1, 'exactly one thread must be created');
+    const t = OAD.DB.threads[OAD.DB.threads.length - 1];
+
+    OAD._assertEqual(t.title, 'IRS Notice', 'title must be taken from the form');
+    OAD._assertEqual(t.life_area, 'Finance', 'life_area must be taken from the form');
+    OAD._assertEqual(t.priority, 'high', 'priority must be taken from the form');
+    OAD._assertEqual(t.next_action_date, '2026-08-01', 'next_action_date must be taken from the form');
+    OAD._assertEqual(t.description, 'Extracted text from the notice.', 'description must be preserved — OAD.Mailroom.getRecommendations reads it for match-scoring');
+
+    // The actual regression: these only exist if OAD.makeThread() was really called, not a
+    // hand-built object with just the fields the old code happened to list.
+    OAD._assertEqual(t.closing_condition_type, 'outcome', 'must carry makeThread defaults not present in the old hand-built object');
+    OAD._assert(Array.isArray(t.connections), 'connections must be a real array from makeThread, not undefined');
+    OAD._assert(Array.isArray(t.ai_insights), 'ai_insights must be a real array from makeThread, not undefined');
+    OAD._assertEqual(t.date_push_count, 0, 'must carry makeThread defaults not present in the old hand-built object');
+    OAD._assert(!!t.uuid, 'must have a uuid');
+    OAD._assert(t.id < 1000000000000, 'id must come from OAD.nextId() (sequential), not Date.now() (a 13-digit millisecond timestamp)');
+
+    OAD._assertEqual(t.evolution_log.length, 1, 'must log exactly one evolution entry');
+    OAD._assertEqual(t.evolution_log[0].note, 'Thread created via Mailroom Intake.', 'evolution note must be preserved');
+  } finally {
+    document.body.removeChild(scratch);
+    OAD.DB.threads = origThreads;
+    if (main) main.innerHTML = originalMainHTML;
+  }
+});
+
 OAD.test('translation and configuration system core verification', async function () {
   const prevLocale = OAD.Config.currentLocale;
   const prevTitle = OAD.Config.userGreetingTitle;
