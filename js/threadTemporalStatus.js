@@ -199,5 +199,22 @@ OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId) {
     });
   }
 
+  // Deliberately not restricted to open/waiting like no_dates_set above — this needs to fire
+  // for status:inbox threads too, since that's exactly where Quick Add's deadline classifier
+  // (js/api.js OAD.classifyQuickCaptureDeadline) fires and T.J. might skip it. The signal isn't
+  // "no dates" alone (that's already true of every genuinely low-stakes inbox capture) — it's
+  // "flagged as plausibly having a real deadline, then the date was never captured," which must
+  // read differently from an item that was never flagged at all.
+  if (thread.deadline_check_skipped && !thread.next_action_date && !thread.deadline) {
+    warnings.push({
+      thread_id: thread.id,
+      thread_uuid: thread.uuid,
+      thread_title: thread.title,
+      rule: 'quick_capture_deadline_skipped',
+      message: strings.warnQuickCaptureDeadlineSkipped || 'Flagged as possibly having a real deadline at capture, but the date was skipped',
+      checked_against: todayStr
+    });
+  }
+
   return warnings;
 };
