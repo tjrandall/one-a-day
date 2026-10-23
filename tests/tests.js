@@ -789,8 +789,8 @@ OAD.test('applySavedView: sort_field "title" sorts alphabetically case-insensiti
   OAD._assertEqual(result[0].title, 'apple task', 'case-insensitive alphabetical sort, apple first');
 });
 
-OAD.test('LIFE_AREAS: includes App Dev', function () {
-  OAD._assert(OAD.LIFE_AREAS.includes('App Dev'), 'App Dev should be in LIFE_AREAS');
+OAD.test('LIFE_AREAS: the six consolidated areas (App Dev merged into Personal Growth, Oct 23 2026)', function () {
+  OAD._assertEqual(OAD.LIFE_AREAS.join(), 'Career,Housing,Personal Growth,Family,Health,Finances');
 });
 
 // ── Tests: Idea data model ────────────────────────────────────────────
@@ -1712,16 +1712,16 @@ OAD.test('suggestArea: detects Health', function () {
   OAD._assertEqual(OAD.suggestArea('doctor appointment'), 'Health');
 });
 
-OAD.test('suggestArea: VR&E → Legal', function () {
-  OAD._assertEqual(OAD.suggestArea('VR&E counselor meeting'), 'Legal');
+OAD.test('suggestArea: VR&E → Personal Growth (VR&E funds the coursework; Legal was retired)', function () {
+  OAD._assertEqual(OAD.suggestArea('VR&E counselor meeting'), 'Personal Growth');
 });
 
-OAD.test('suggestArea: job board → Job Search (not Career)', function () {
-  OAD._assertEqual(OAD.suggestArea('M/W/F job board sweep'), 'Job Search');
+OAD.test('suggestArea: job board → Career (Job Search merged into Career)', function () {
+  OAD._assertEqual(OAD.suggestArea('M/W/F job board sweep'), 'Career');
 });
 
-OAD.test('suggestArea: weekly job application cadence → Job Search', function () {
-  OAD._assertEqual(OAD.suggestArea('Weekly Job Application Cadence'), 'Job Search');
+OAD.test('suggestArea: weekly job application cadence → Career', function () {
+  OAD._assertEqual(OAD.suggestArea('Weekly Job Application Cadence'), 'Career');
 });
 
 OAD.test('suggestArea: family → Family (not Relationships)', function () {
@@ -3271,7 +3271,7 @@ OAD.test('mailroom text extraction of dates, currency, and life areas', function
 
   // Assertions for suggested title & life area
   OAD._assertEqual(parsed.suggestedTitle, 'IRS NOTICE OF TAX LIEN - STATEMENT DATE: 2026-07-1', 'Should extract first line as title');
-  OAD._assertEqual(parsed.suggestedLifeArea, 'Finance', 'Should match Finance keywords (tax, balance, irs, lien)');
+  OAD._assertEqual(parsed.suggestedLifeArea, 'Finances', 'Should match Finances keywords (tax, balance, irs, lien); was the non-existent area "Finance" before Oct 23 2026');
 });
 
 OAD.test('mailroom thread recommendation scoring', function () {
@@ -5824,7 +5824,7 @@ OAD.test('sweepInboxSentinel: creates a sentinel with medium priority for a fres
     const sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
     OAD._assert(!!sentinel, 'a sentinel thread must be created when the inbox is non-empty');
     OAD._assertEqual(sentinel.priority, 'medium', 'a fresh inbox (0-1 days) must read medium priority');
-    OAD._assertEqual(sentinel.life_area, 'System', 'sentinel must use the System life_area');
+    OAD._assertEqual(sentinel.life_area, 'Personal Growth', 'sentinel uses the default life area (System was retired Oct 23 2026)');
     OAD._assertEqual(sentinel.parent_uuid, null, 'sentinel must be top-level so it is never suppressed by the bollard rule');
     OAD._assertEqual(sentinel.title, 'Inbox needs triage (1 item)', 'title must reflect the live count');
     OAD._assertEqual(sentinel.next_action_date, OAD.todayStr(), 'next_action_date must be today');
@@ -6288,6 +6288,228 @@ OAD.test('_acceptPersonaUpdate: writes the full structured trait, including evid
     OAD._pendingPersonaLesson = null;
     OAD.DB.persona.assumption_tendencies = origPersona;
   }
+});
+
+// ── Tests: js/bulk.js (bulk update, Catch Up, Park/Reactivate Bollard) ────────────────────
+function _bd(n) { var dt = new Date(); dt.setDate(dt.getDate() + n); return _localDateStr(dt); }
+
+function _withThreads(threads, fn) {
+  var orig = OAD.DB.threads;
+  var origBatch = OAD.Bulk._lastBatch;
+  OAD.DB.threads = threads;
+  try { fn(); } finally { OAD.DB.threads = orig; OAD.Bulk._lastBatch = origBatch; }
+}
+
+OAD.test('Bulk.apply shift: moves next_action_date, counts a push, logs before and after', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-1', title: 'A', status: 'open', next_action_date: _bd(-5) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['bk-1'], { type: 'shift', days: 7 });
+    OAD._assertEqual(r.changed.length, 1, 'one thread changed');
+    OAD._assertEqual(t.next_action_date, _bd(2), 'shifted 7 days from its own date, not from today');
+    OAD._assertEqual(t.date_push_count, 1, 'a later date is a push');
+    var last = t.evolution_log[t.evolution_log.length - 1].note;
+    OAD._assert(last.indexOf(_bd(-5)) !== -1 && last.indexOf(_bd(2)) !== -1, 'log names both dates: ' + last);
+  });
+});
+
+OAD.test('Bulk.apply: buffer rule skips a date on or after the deadline and leaves the thread untouched', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-buf', title: 'Due soon', status: 'open', next_action_date: _bd(-1), deadline: _bd(3) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['bk-buf'], { type: 'setDate', date: _bd(3) });
+    OAD._assertEqual(r.changed.length, 0, 'nothing changed');
+    OAD._assert(/Buffer rule/.test(r.skipped[0].reason), 'reason names the buffer rule');
+    OAD._assertEqual(t.next_action_date, _bd(-1), 'date unchanged');
+    OAD._assertEqual(OAD.Bulk._lastBatch === null || OAD.Bulk._lastBatch === undefined || OAD.Bulk._lastBatch.entries.every(e => e.uuid !== 'bk-buf'), true, 'no undo entry for a skipped thread');
+  });
+});
+
+OAD.test('Bulk.apply: bollard rule skips setting a next action date on a parent with open children', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bk-par', title: 'Parent', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'bk-chi', title: 'Child', status: 'open', parent_uuid: 'bk-par' });
+  _withThreads([p, c], function () {
+    var r = OAD.Bulk.apply(['bk-par', 'bk-chi'], { type: 'setDate', date: _bd(4) });
+    OAD._assertEqual(r.changed.join(), 'bk-chi', 'only the child gets the date');
+    OAD._assert(/Bollard rule/.test(r.skipped[0].reason), 'parent skipped with the bollard rule');
+    OAD._assertEqual(p.next_action_date || null, null, 'parent still has no next action date');
+  });
+});
+
+OAD.test('Bulk.apply: close-type ops skip threads that need the Closure Wizard', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bk-cw', title: 'Parent', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'bk-cw-c', title: 'Child', status: 'open', parent_uuid: 'bk-cw' });
+  _withThreads([p, c], function () {
+    var r = OAD.Bulk.apply(['bk-cw'], { type: 'drop' });
+    OAD._assertEqual(r.changed.length, 0, 'not closed');
+    OAD._assertEqual(p.status, 'open', 'status unchanged');
+    OAD._assert(/Closure Wizard/.test(r.skipped[0].reason), 'reason points at the Closure Wizard');
+  });
+});
+
+OAD.test('Bulk.apply: done asserts the closing condition, drop does not', function () {
+  var a = OAD.makeThread({ id: 1, uuid: 'bk-done', title: 'Did it', status: 'open' });
+  var b = OAD.makeThread({ id: 2, uuid: 'bk-drop', title: 'Not doing it', status: 'open' });
+  _withThreads([a, b], function () {
+    OAD.Bulk.apply(['bk-done'], { type: 'done' });
+    OAD.Bulk.apply(['bk-drop'], { type: 'drop' });
+    OAD._assertEqual(a.status, 'closed', 'done closes');
+    OAD._assertEqual(a.closing_condition_met, true, 'done = user confirmed the outcome');
+    OAD._assertEqual(b.status, 'closed', 'drop closes');
+    OAD._assertEqual(!!b.closing_condition_met, false, 'drop must not claim the outcome happened (EA-Confirmation Rule)');
+    OAD._assertEqual(!!a.assumption_verified, false, 'neither touches assumption_verified');
+  });
+});
+
+OAD.test('Bulk.undo: restores every changed field of the last batch and logs the undo', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-undo', title: 'U', status: 'waiting', user_action_complete: true, next_action_date: _bd(-3), priority: 'high' });
+  _withThreads([t], function () {
+    OAD.Bulk.apply(['bk-undo'], { type: 'park', trigger: 'later' });
+    OAD._assertEqual(t.status, 'dormant', 'parked');
+    OAD._assertEqual(t.user_action_complete, false, 'leaving waiting resets user_action_complete, as the edit modal does');
+    var n = OAD.Bulk.undo();
+    OAD._assertEqual(n, 1, 'one thread restored');
+    OAD._assertEqual(t.status, 'waiting', 'status restored');
+    OAD._assertEqual(t.user_action_complete, true, 'ball-in-court flag restored');
+    OAD._assert(/^Undone:/.test(t.evolution_log[t.evolution_log.length - 1].note), 'undo is logged, history not erased');
+    OAD._assertEqual(OAD.Bulk._lastBatch, null, 'undo is one step');
+  });
+});
+
+OAD.test('Bulk.parkBollard: parks open descendants at any depth, honors keep-active, leaves already-dormant ones unmarked', function () {
+  var b  = OAD.makeThread({ id: 1, uuid: 'pk-b', title: 'RAG', status: 'open' });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'pk-c1', title: 'VEVRAA outreach', status: 'open', parent_uuid: 'pk-b' });
+  var g1 = OAD.makeThread({ id: 3, uuid: 'pk-g1', title: 'Grandchild', status: 'waiting', parent_uuid: 'pk-c1' });
+  var k  = OAD.makeThread({ id: 4, uuid: 'pk-k', title: 'LLC address update', status: 'open', parent_uuid: 'pk-b' });
+  var d  = OAD.makeThread({ id: 5, uuid: 'pk-d', title: 'Already dormant', status: 'dormant', dormant_trigger: 'own reason', parent_uuid: 'pk-b' });
+  var x  = OAD.makeThread({ id: 6, uuid: 'pk-x', title: 'Closed', status: 'closed', parent_uuid: 'pk-b' });
+  _withThreads([b, c1, g1, k, d, x], function () {
+    var r = OAD.Bulk.parkBollard('pk-b', { keepActive: ['pk-k'], reason: 'Focusing on W-2' });
+    OAD._assert(r.ok, 'parked');
+    OAD._assertEqual(b.status, 'dormant', 'bollard dormant');
+    OAD._assertEqual(b.dormant_trigger, 'Focusing on W-2', 'bollard carries the reason');
+    OAD._assertEqual(c1.status, 'dormant', 'child parked');
+    OAD._assertEqual(g1.status, 'dormant', 'grandchild parked');
+    OAD._assertEqual(g1.metadata.parked_prior_status, 'waiting', 'prior status remembered');
+    OAD._assertEqual(c1.metadata.parked_by, 'pk-b', 'marked with the bollard uuid');
+    OAD._assertEqual(k.status, 'open', 'kept-active child untouched');
+    OAD._assertEqual((d.metadata || {}).parked_by, undefined, 'already-dormant child is not marked');
+    OAD._assertEqual(x.status, 'closed', 'closed child untouched');
+  });
+});
+
+OAD.test('Bulk.reactivateBollard: restores exactly what it parked, nothing a human changed since', function () {
+  var b  = OAD.makeThread({ id: 1, uuid: 'ra-b', title: 'RAG', status: 'open' });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'ra-c1', title: 'One', status: 'waiting', dormant_trigger: '', parent_uuid: 'ra-b' });
+  var c2 = OAD.makeThread({ id: 3, uuid: 'ra-c2', title: 'Two', status: 'open', parent_uuid: 'ra-b' });
+  var d  = OAD.makeThread({ id: 4, uuid: 'ra-d', title: 'Already dormant', status: 'dormant', dormant_trigger: 'own reason', parent_uuid: 'ra-b' });
+  _withThreads([b, c1, c2, d], function () {
+    OAD.Bulk.parkBollard('ra-b', {});
+    // While parked, the user closes c2 by hand from the bulk bar.
+    OAD.Bulk.apply(['ra-c2'], { type: 'drop' });
+    var r = OAD.Bulk.reactivateBollard('ra-b');
+    OAD._assert(r.ok, 'reactivated');
+    OAD._assertEqual(b.status, 'open', 'bollard back to open');
+    OAD._assertEqual(c1.status, 'waiting', 'c1 back to its prior status, not just open');
+    OAD._assertEqual(c1.dormant_trigger, '', 'c1 trigger restored');
+    OAD._assertEqual(c1.metadata.parked_by, undefined, 'markers cleared');
+    OAD._assertEqual(c2.status, 'closed', 'a thread closed by hand while parked stays closed');
+    OAD._assertEqual(d.status, 'dormant', 'a thread dormant before the park stays dormant');
+    OAD._assertEqual(d.dormant_trigger, 'own reason', 'and keeps its own trigger');
+    OAD._assertEqual(r.restored.length, 1, 'only c1 restored');
+  });
+});
+
+OAD.test('Bulk.parkBollard + undo: one undo brings the whole bollard back', function () {
+  var b = OAD.makeThread({ id: 1, uuid: 'pu-b', title: 'B', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'pu-c', title: 'C', status: 'open', parent_uuid: 'pu-b' });
+  _withThreads([b, c], function () {
+    OAD.Bulk.parkBollard('pu-b', {});
+    OAD.Bulk.undo();
+    OAD._assertEqual(b.status, 'open', 'bollard restored');
+    OAD._assertEqual(c.status, 'open', 'child restored');
+    OAD._assertEqual(c.metadata.parked_by, undefined, 'marker gone');
+    OAD._assertEqual(OAD.Bulk.isParkedBollard(b), false, 'not a parked bollard anymore');
+  });
+});
+
+OAD.test('Bulk.isInStartWindow: drifted next action with the deadline inside its lead time is the buffer working', function () {
+  var now = new Date();
+  var inWindow = OAD.makeThread({ uuid: 'sw-1', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var farOff   = OAD.makeThread({ uuid: 'sw-2', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var noDl     = OAD.makeThread({ uuid: 'sw-3', status: 'open', next_action_date: _bd(-2) });
+  var past     = OAD.makeThread({ uuid: 'sw-4', status: 'open', next_action_date: _bd(-8), deadline: _bd(-5) });
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(inWindow, now), true, 'deadline tomorrow, Education lead 5: start window');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(farOff, now), false, '24 days out is real drift');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(noDl, now), false, 'no deadline, no window');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(past, now), false, 'past deadline is not a window');
+});
+
+OAD.test('Bulk.catchUpQueue: past deadlines first, real drift next, start-window/dormant/ball-in-court excluded', function () {
+  var pastDl  = OAD.makeThread({ id: 1, uuid: 'cq-pd', title: 'Missed', status: 'open', next_action_date: _bd(-9), deadline: _bd(-6) });
+  var drift   = OAD.makeThread({ id: 2, uuid: 'cq-dr', title: 'Packing', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var noDl    = OAD.makeThread({ id: 3, uuid: 'cq-nd', title: 'PO Box', status: 'open', next_action_date: _bd(-25) });
+  var window_ = OAD.makeThread({ id: 4, uuid: 'cq-sw', title: 'Quiz due tomorrow', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var dorm    = OAD.makeThread({ id: 5, uuid: 'cq-do', title: 'Parked', status: 'dormant', next_action_date: _bd(-30) });
+  var ball    = OAD.makeThread({ id: 6, uuid: 'cq-ba', title: 'Their move', status: 'waiting', user_action_complete: true, next_action_date: _bd(-10) });
+  _withThreads([pastDl, drift, noDl, window_, dorm, ball], function () {
+    var q = OAD.Bulk.catchUpQueue(new Date());
+    OAD._assertEqual(q.map(i => i.thread.uuid).join(), 'cq-pd,cq-nd,cq-dr', 'past deadline first, then oldest drift first');
+    OAD._assertEqual(q[0].reason, 'past_deadline', 'reason tagged');
+  });
+});
+
+OAD.test('card badge: start window renders "start now", far-off drift keeps "next action overdue"', function () {
+  var now = new Date();
+  var strings = OAD.Config.temporalStatusStrings;
+  var inWindow = OAD.makeThread({ uuid: 'bg-1', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var farOff   = OAD.makeThread({ uuid: 'bg-2', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var a = OAD._maskedBadgeHtml(inWindow, true, now, strings);
+  var b = OAD._maskedBadgeHtml(farOff, true, now, strings);
+  OAD._assert(a.indexOf('deadline-start-now') !== -1 && a.indexOf('deadline-behind') === -1, 'start window gets the calm badge: ' + a);
+  OAD._assert(b.indexOf('deadline-behind') !== -1, 'real drift keeps the warning: ' + b);
+  OAD._assertEqual(OAD._maskedBadgeHtml(farOff, false, now, strings), '', 'no warning, no badge');
+});
+
+OAD.test('life areas: retired names migrate to the six current areas; brand-new names are left alone', function () {
+  OAD._assertEqual(OAD.migrateLifeArea('Job Search'), 'Career');
+  OAD._assertEqual(OAD.migrateLifeArea('job_search'), 'Career', 'casing/underscore variants of a retired name too');
+  OAD._assertEqual(OAD.migrateLifeArea('Education'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('App Dev'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('Relationships'), 'Family');
+  OAD._assertEqual(OAD.migrateLifeArea('Personal'), 'Family');
+  OAD._assertEqual(OAD.migrateLifeArea('Legal'), 'Finances');
+  OAD._assertEqual(OAD.migrateLifeArea('Other'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('System'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('Home'), 'Housing');
+  OAD._assertEqual(OAD.migrateLifeArea(''), 'Personal Growth', 'empty gets the default');
+  OAD._assertEqual(OAD.migrateLifeArea('Health'), 'Health', 'current areas unchanged');
+  OAD._assertEqual(OAD.migrateLifeArea('Woodworking'), 'Woodworking', 'a new custom area is not renamed');
+  OAD._assertEqual(OAD.normalizeLifeArea('Legal'), 'Legal', 'normalizeLifeArea (used when adding an area in Settings) never applies the retired map');
+});
+
+OAD.test('life areas: new threads default to Personal Growth, never Other', function () {
+  OAD._assertEqual(OAD.makeThread({ title: 'x' }).life_area, 'Personal Growth');
+  OAD._assertEqual(OAD.Config.lifeAreas.indexOf('Other'), -1, 'Other is not offered');
+  OAD._assertEqual(OAD.Config.lifeAreas.indexOf('System'), -1, 'System is not offered');
+  OAD._assertEqual(OAD._cheLeadDays({ life_area: 'Personal Growth' }), 5, 'coursework keeps its 5-day lead time after Education merged into Personal Growth');
+});
+
+OAD.test('life areas: _normalizeDB migrates a thread stored under a retired area', function () {
+  var orig = OAD.DB.threads;
+  try {
+    var t = OAD.makeThread({ id: 1, uuid: 'la-1', title: 'Old', life_area: 'Job Search' });
+    OAD.DB.threads = [t];
+    OAD._normalizeDB();
+    OAD._assertEqual(OAD.DB.threads[0].life_area, 'Career');
+  } finally { OAD.DB.threads = orig; }
+});
+
+OAD.test('dataHygieneWarnings: a bollard (parent with open children) is not flagged no_dates_set; a plain undated thread still is', function () {
+  var now = new Date();
+  var t = OAD.makeThread({ uuid: 'hy-1', title: 'Bollard', status: 'open' });
+  var asBollard = OAD.TemporalStatus.dataHygieneWarnings(t, now, undefined, { hasOpenChildren: true });
+  var plain = OAD.TemporalStatus.dataHygieneWarnings(t, now);
+  OAD._assert(!asBollard.some(w => w.rule === 'no_dates_set'), 'bollard rule keeps parents undated on purpose');
+  OAD._assert(plain.some(w => w.rule === 'no_dates_set'), 'without context the old behavior holds');
 });
 
 OAD.boot = async function () {

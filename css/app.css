@@ -1699,3 +1699,27 @@ button.success:hover { opacity: .88; }
   }
 }
 
+
+/* ── Bulk update, Catch Up, Park Bollard (js/bulk.js) ───────────────────────── */
+.deadline-start-now { color: var(--accent, #0f766e); font-weight: 700; }
+.bulk-bar { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 12px; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; background: var(--surface2); }
+.bulk-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bulk-bar button { font-size: 12px; padding: 5px 10px; }
+.bulk-group { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; border-left: 1px solid var(--border); font-size: 12px; }
+.bulk-group input, .bulk-group select { font-size: 12px; padding: 4px 6px; }
+.bulk-result { font-size: 12px; }
+.bulk-skipped ul { margin: 6px 0 0 16px; padding: 0; }
+.bulk-skipped li { margin: 2px 0; }
+.bulk-check { margin: 2px 8px 0 0; flex: none; width: 16px; height: 16px; }
+.list-tab-card.bulk-selected { outline: 2px solid var(--accent, #0f766e); outline-offset: -2px; }
+.catchup-card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; margin-bottom: 12px; }
+.catchup-title { font-size: 16px; font-weight: 700; }
+.catchup-reason { margin-top: 8px; font-weight: 600; color: var(--stalled); }
+.catchup-reason.is-past-deadline { color: var(--critical); }
+.catchup-error { margin-top: 10px; color: var(--critical); font-size: 13px; }
+.catchup-actions { display: flex; flex-direction: column; gap: 8px; }
+.catchup-action { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.catchup-action button { min-width: 96px; }
+.catchup-done { text-align: center; padding: 24px 8px; }
+.park-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px; margin: 8px 0; }
+.park-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }

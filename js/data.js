@@ -430,7 +430,7 @@ OAD.sweepInboxSentinel = function () {
     OAD.addThread(OAD.makeThread({
       uuid: OAD._INBOX_SENTINEL_UUID,
       title: title,
-      life_area: 'System',
+      life_area: OAD.Config.defaultLifeArea, // app-managed thread; there is no System area anymore
       status: 'open',
       priority: priority,
       parent_uuid: null,
@@ -493,7 +493,7 @@ OAD.makeThread = function (overrides) {
     owner_id: OAD.DEFAULT_OWNER_ID, // multi-tenancy hook — see OAD.DEFAULT_OWNER_ID's comment
     created_at: new Date().toISOString(),
     title: '',
-    life_area: 'Other',
+    life_area: OAD.Config.defaultLifeArea,
     status: 'open',
     priority: 'medium',
     closing_condition: '',
@@ -590,6 +590,15 @@ OAD.makeCadence = function (overrides) {
   }, overrides));
 };
 
+// normalizeLifeArea (js/config.js) only fixes casing/spelling, so a brand-new area typed in
+// Settings is never renamed. migrateLifeArea additionally maps retired area names
+// (OAD.Config.retiredLifeAreas) to their current area; it runs on stored and imported data only.
+OAD.migrateLifeArea = function (area) {
+  var a = OAD.normalizeLifeArea(area);
+  var retired = OAD.Config.retiredLifeAreas || {};
+  return retired[a.toLowerCase()] || a;
+};
+
 OAD.addCadence = function (cadence) {
   cadence.life_area = OAD.normalizeLifeArea(cadence.life_area);
   return OAD.addThread(cadence);
@@ -669,7 +678,7 @@ OAD.bulkImport = function (arr) {
     if (OAD.DB.threads.some(function (t) { return t.title === title; })) return;
     OAD.addThread(OAD.makeThread({
       title:                    title,
-      life_area:               (r.lifeArea             || r.life_area            || 'Other').toLowerCase(),
+      life_area:               (r.lifeArea             || r.life_area            || OAD.Config.defaultLifeArea),
       status:                   r.status               || 'open',
       priority:                 r.priority             || 'medium',
       closing_condition:        r.closingCondition     || r.closing_condition    || '',
@@ -882,7 +891,7 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedDeleteIds) {
       owner_id:                 row.owner_id                 || OAD.DEFAULT_OWNER_ID,
       status:                   row.status                   || 'open',
       priority:                 row.priority                 || 'medium',
-      life_area:                row.life_area                || 'Other',
+      life_area:                row.life_area                || OAD.Config.defaultLifeArea,
       parent_uuid:              row.parent_uuid              || null,
       closing_condition:        row.closing_condition        || '',
       closing_condition_type:   row.closing_condition_type   || 'outcome',
@@ -1358,8 +1367,15 @@ OAD.exportDevDiagnostic = function () {
     };
   });
 
+  // Parents with open children are bollards; the bollard rule keeps them undated on purpose.
+  var openParentUUIDs = {};
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.parent_uuid && t.status !== 'closed') openParentUUIDs[t.parent_uuid] = true;
+  });
   base.data_hygiene_warnings = (OAD.DB.threads || [])
-    .reduce(function (all, t) { return all.concat(OAD.TemporalStatus.dataHygieneWarnings(t, now)); }, []);
+    .reduce(function (all, t) {
+      return all.concat(OAD.TemporalStatus.dataHygieneWarnings(t, now, undefined, { hasOpenChildren: !!openParentUUIDs[t.uuid] }));
+    }, []);
   base.che_alerts = cheAlerts;
   base.toat_diagnostic = OAD._toatDiagnostic();
   base.focus_now_diagnostic = OAD._focusNowDiagnostic();
@@ -1569,7 +1585,7 @@ OAD._normalizeDB = function () {
       t.status = 'open';
       t.evolution_log.push({ date: OAD.todayStr(), note: 'Status auto-corrected from inbox to open: thread has a parent, attaching is itself an act of triage.' });
     }
-    t.life_area = OAD.normalizeLifeArea(t.life_area);
+    t.life_area = OAD.migrateLifeArea(t.life_area);
     // Backfill days_of_week for cadences created before weekly-days support existed. Harmless
     // for non-cadence threads — same neutral empty-array default OAD.makeThread already gives
     // every thread. life_area normalization above already covers cadences too now that they're

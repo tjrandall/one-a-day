@@ -24,7 +24,36 @@ The vision doc's own "Current State" section (as of its May 29 writing) says v10
 ## Keeping This Document Current
 At the end of every build session, update this file to reflect what was completed. Mark finished items ✅. Update data model descriptions when fields are added. Update the Render Layer section when new panels ship. Update the Architecture Queue. Commit the update with the work. A stale CLAUDE.md is a navigation hazard — future sessions will re-propose work that's already done.
 
-**Last updated: July 12, 2026 (part 5)** — **Critical Load headline could disagree with its own tier breakdown (reported live: headline read 16, "6 at 80+ · 16 at 50-79" summed to 22) — root cause was two independently-computed values sharing no source of truth.**
+**Last updated: October 23, 2026** - **Bulk update, Catch Up, Park/Reactivate Bollard, and the six-area Life Area consolidation.** Origin: T.J.: "once I get behind, the task/thread list is overwhelming," the failure mode of every TODO app he has abandoned. A Raptor on the first plan reframed it: bulk editing treats the symptom; the cause was structure that did not match his life, so every life shift had to be applied one thread at a time.
+
+## Life Areas: six areas, bollards are the second level
+
+- `OAD.Config.lifeAreas` default is now `Career, Housing, Personal Growth, Family, Health, Finances`. Job Search -> Career, App Dev and Education -> Personal Growth, Personal and Relationships -> Family, Legal -> Finances. **Other and System are gone.** Bollards (parent threads) are the second level inside an area, e.g. Career / W-2 Work and Career / RAG.
+- `OAD.Config.defaultLifeArea = 'Personal Growth'` (T.J.'s choice) replaces every hardcoded `'Other'` fallback: `makeThread`, import create, legacy import, cadence form, mailroom suggestions, `getLifeAreaHeat`, `normalizeLifeArea('')`. The Inbox Sentinel is created in it too (was `'System'`).
+- `OAD.Config.retiredLifeAreas` + `OAD.migrateLifeArea()` (`js/data.js`): `_normalizeDB` maps retired names on every load, so old exports, stale caches, and AI-written patches self-heal. Deliberately separate from `normalizeLifeArea`, which Settings uses to add an area, so a new custom area is never silently renamed.
+- `cheLeadDays['Personal Growth'] = 5` so coursework keeps the 5-day lead time Education had.
+- Keyword maps (`areaKeywords` in config, the mailroom's own map) remapped. Side fix: the mailroom used to suggest `'Finance'`, an area that never existed; it now suggests `'Finances'`.
+- **Per-browser caveat:** `oad_life_areas`, `oad_area_keywords`, and `oad_che_lead_days` localStorage overrides win over these defaults. Clean them in Settings on each browser.
+- Data side was done by import, not code: `1_open_threads_restructure_2026-10-23.json` (5 new bollards, 133 open threads moved/relabeled, Sandwich move dates, RAG address checklist `blocked_by` PO Box) and `2_closed_threads_relabel_2026-10-23.json` (237 closed threads, area only). Verified against T.J.'s post-import export: 375/375 rows match, 0 changes outside the files.
+
+## `js/bulk.js` (`OAD.Bulk`): bulk actions, Catch Up, Park/Reactivate Bollard
+
+All on existing Thread fields (ARCHITECTURE_RULES.md Rule 1). No new top-level model; undo is in-memory for the session only (Rule 2 would require written justification to persist it).
+
+- **Bulk actions** (List tab, "Select" mode): park (with trigger), reopen, drop, push next action N days, set date, set priority, one-step undo. Guards: **buffer rule** (next action must stay before the deadline), **bollard rule** (no next action date on a parent with open children), and close-type ops skip anything `needsClosureWizard` says needs the wizard. Every skip is reported with its reason. One `saveDB()` per batch, not per thread.
+- **Catch Up** (List tab button, count shown): one behind thread at a time with Done / New date / Park / Drop / Skip / Undo last. Queue = past deadline (oldest first), then drifted next actions (oldest first), built on `OAD.TemporalStatus`. **Done** sets `closing_condition_met` (the click is the confirmation); **Drop** closes without asserting it. Neither touches `assumption_verified` (EA-Confirmation Rule).
+- **Start window** (`OAD.Bulk.isInStartWindow`): drifted next action whose deadline is still within `OAD._cheLeadDays` is the buffer rule working, not a failure. It is excluded from Catch Up, and cards show "▶ start now" instead of "⚠ next action overdue" (shared `OAD._maskedBadgeHtml`, both card renderers). Real drift with a far-off deadline keeps the ENV-125 warning.
+- **Park Bollard** (thread view, any active thread with open descendants): bollard + checked descendants go dormant; per-child checkboxes keep obligations active (RAG address updates). State: `metadata.parked_bollard` / `parked_by` / `parked_prior_status` / `parked_prior_dormant_trigger`, all already round-tripping in `_IMPORT_FIELDS`. **Reactivate** restores exactly what it parked; anything already dormant before the park, or changed by hand since, is left alone. Threads that fell behind while parked open in Catch Up rather than all at once on the list.
+- `dataHygieneWarnings` takes an optional `context.hasOpenChildren`; `exportDevDiagnostic` passes it so bollards are no longer flagged `no_dates_set` (65 -> 37 on real data: 28 bollards were false positives).
+
+## Verification
+
+- 382 unit tests passing (16 new, 6 updated for the area consolidation), same 5 pre-existing baseline failures (2 need the private fq-demo module, 3 are date-sensitive and fail on unmodified `main` too).
+- Driven in a real browser against T.J.'s real exports: Catch Up 38 -> 37 items, start window = exactly the 9 Wk07/eCornell items due within lead time; bulk push of all eCornell items correctly skipped 13 by the buffer rule; mixed Abigail push changed 11 and skipped 4 (buffer + bollard rule), undo restored all 11 exactly; Park RAG with the address checklist kept active parked 11, left the Nov 2 restart review and 20 already-dormant roadmap items alone; Reactivate restored 11 and opened Catch Up. Area dropdown shows the six areas. 0 JS errors.
+- Self-reported per the standing rule: T.J. verifies against his own run before this merges.
+- **Not done, flagged:** reparenting left old ADE-002 `enables` edges from previous parents in place (cosmetic; pressure only walks `blocked_by`). Review them from the Graph card's pending list.
+
+**Previously, July 12, 2026 (part 5)** — **Critical Load headline could disagree with its own tier breakdown (reported live: headline read 16, "6 at 80+ · 16 at 50-79" summed to 22) — root cause was two independently-computed values sharing no source of truth.**
 
 ## Critical Load: headline was never actually the sum of the tiers next to it
 

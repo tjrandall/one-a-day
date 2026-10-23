@@ -14,13 +14,13 @@ OAD.Mailroom.MONTHS = {
 };
 
 OAD.Mailroom.parseText = function (text) {
-  if (!text) return { dates: [], money: [], suggestedTitle: '', suggestedLifeArea: 'Other' };
+  if (!text) return { dates: [], money: [], suggestedTitle: '', suggestedLifeArea: OAD.Config.defaultLifeArea };
   
   const results = {
     dates: [],
     money: [],
     suggestedTitle: '',
-    suggestedLifeArea: 'Other'
+    suggestedLifeArea: OAD.Config.defaultLifeArea
   };
 
   // 1. Extract dates
@@ -100,15 +100,14 @@ OAD.Mailroom.parseText = function (text) {
   // 4. Heuristic Life Area detection
   const textLower = text.toLowerCase();
   const areaKeywords = {
-    Finance: ['bill', 'invoice', 'statement', 'tax', 'payment', 'balance', 'fee', 'charge', 'due', 'amount', 'pay', 'bank', 'finance', 'debt', 'irs', 'lien'],
+    Finances: ['bill', 'invoice', 'statement', 'tax', 'payment', 'balance', 'fee', 'charge', 'due', 'amount', 'pay', 'bank', 'finance', 'debt', 'irs', 'lien', 'court', 'law', 'lawyer', 'legal', 'summons'],
     Career: ['job', 'resume', 'offer', 'employment', 'employer', 'salary', 'manager', 'corporation', 'company', 'meeting', 'contract'],
-    Health: ['doctor', 'medical', 'hospital', 'clinic', 'health', 'insurance', 'patient', 'prescription', 'pharmacy', 'care', 'benefit'],
-    Education: ['school', 'college', 'university', 'ecornell', 'course', 'class', 'assignment', 'grade', 'student', 'tuition', 'enrollment'],
-    Housing: ['rent', 'landlord', 'lease', 'home', 'house', 'apartment', 'property', 'mortgage', 'utility', 'electric', 'water', 'gas'],
-    Legal: ['court', 'law', 'lawyer', 'legal', 'agreement', 'notice', 'official', 'summons', 'appeal', 'resolution', 'claim']
+    Health: ['doctor', 'medical', 'hospital', 'clinic', 'health', 'insurance', 'patient', 'prescription', 'pharmacy', 'care', 'benefit', 'claim', 'appeal'],
+    'Personal Growth': ['school', 'college', 'university', 'ecornell', 'course', 'class', 'assignment', 'grade', 'student', 'tuition', 'enrollment'],
+    Housing: ['rent', 'landlord', 'lease', 'home', 'house', 'apartment', 'property', 'mortgage', 'utility', 'electric', 'water', 'gas']
   };
 
-  let bestArea = 'Other';
+  let bestArea = OAD.Config.defaultLifeArea;
   let maxMatches = 0;
   for (const [area, keywords] of Object.entries(areaKeywords)) {
     let matches = 0;

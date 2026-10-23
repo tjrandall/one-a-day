@@ -1016,7 +1016,7 @@ OAD._readCadenceForm = function (base) {
     title,
     recurrence:     document.getElementById('cd-recurrence')?.value     || 'monthly-1st',
     days_of_week,
-    life_area:      document.getElementById('cd-area')?.value           || 'Other',
+    life_area:      document.getElementById('cd-area')?.value           || OAD.Config.defaultLifeArea,
     next_due:       document.getElementById('cd-next-due')?.value       || null,
     last_completed: document.getElementById('cd-last-completed')?.value || null,
     notes:          document.getElementById('cd-notes')?.value.trim()        || '',
@@ -2557,7 +2557,7 @@ OAD._renderMailroomIntakeForm = function (text) {
   const shouldRecommendAttach = recommendations.length > 0 && recommendations[0].score >= 5;
   const recommendedThreadUuid = shouldRecommendAttach ? recommendations[0].thread.uuid : '';
 
-  const areas = ['Career', 'Finance', 'Housing', 'Health', 'Education', 'Legal', 'Other'];
+  const areas = OAD.LIFE_AREAS;
   const areaOpts = areas.map(a => `<option value="${a}" ${a === suggestedArea ? 'selected' : ''}>${a}</option>`).join('');
 
   const sortedActive = (OAD.DB.threads || [])
@@ -2921,4 +2921,219 @@ OAD._executeAdmission = async function() {
   if (OAD._lastView === 'CommandCenter' && typeof OAD.renderCommandCenter === 'function') OAD.renderCommandCenter();
   else if (OAD._lastView === 'Matrix') OAD.renderMatrixView();
   else OAD.renderListView();
+};
+
+// ── Catch Up (js/bulk.js OAD.Bulk.catchUpQueue) ─────────────────────────────────────────────
+// One behind thread at a time, four decisions. The point is that a backlog becomes a queue you
+// can clear, not a wall you avoid. Every action goes through OAD.Bulk.apply, so the buffer and
+// bollard rules and the Closure Wizard guard all apply here too, and "Undo last" works.
+OAD.openCatchUpModal = function () {
+  OAD._catchUpSkipped = new Set();
+  OAD._catchUpStats = { done: 0, dated: 0, parked: 0, dropped: 0 };
+  OAD._catchUpError = '';
+  OAD._renderCatchUp();
+};
+
+OAD._catchUpDefaultDate = function (t) {
+  var tomorrow = OAD.Bulk._addDays(OAD.todayStr(), 1);
+  if (t.deadline && t.deadline > OAD.todayStr()) {
+    var dayBefore = OAD.Bulk._addDays(t.deadline, -1);
+    return dayBefore < tomorrow ? OAD.todayStr() : tomorrow;
+  }
+  return tomorrow;
+};
+
+OAD._renderCatchUp = function () {
+  var now = new Date();
+  var queue = OAD.Bulk.catchUpQueue(now).filter(function (i) { return !OAD._catchUpSkipped.has(i.thread.uuid); });
+  var st = OAD._catchUpStats;
+  var undo = OAD.Bulk._lastBatch
+    ? '<button class="ghost" onclick="OAD._catchUpUndo()">Undo last</button>'
+    : '';
+
+  if (!queue.length) {
+    OAD.openModal(
+      '<div class="modal-header"><h2>Catch Up</h2></div>' +
+      '<div class="catchup-done" id="catchup-done">' +
+        '<div style="font-size:28px">🎉</div>' +
+        '<p><strong>Nothing left in the queue.</strong></p>' +
+        '<p class="text-muted text-sm">Done ' + st.done + ' · New date ' + st.dated + ' · Parked ' + st.parked + ' · Dropped ' + st.dropped +
+          (OAD._catchUpSkipped.size ? ' · Skipped ' + OAD._catchUpSkipped.size : '') + '</p>' +
+      '</div>' +
+      '<div class="modal-footer">' + undo + '<button onclick="OAD._closeCatchUp()">Close</button></div>'
+    );
+    return;
+  }
+
+  var item = queue[0];
+  var t = item.thread;
+  var reasonText;
+  if (item.reason === 'past_deadline') {
+    var dl = -OAD.TemporalStatus.daysUntilDeadline(t, now);
+    reasonText = 'Deadline was ' + OAD.formatDate(t.deadline) + ' (' + dl + ' day' + (dl === 1 ? '' : 's') + ' ago). Did it happen?';
+  } else {
+    var ago = OAD.TemporalStatus.daysSinceNextActionDate(t, now);
+    reasonText = 'Next action was due ' + OAD.formatDate(t.next_action_date) + ' (' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago)' +
+      (t.deadline ? '. Deadline ' + OAD.formatDate(t.deadline) + '.' : '. No deadline.');
+  }
+  var closeBlock = OAD.Bulk._closeBlocker(t);
+  var parent = t.parent_uuid ? OAD.getThreadByUUID(t.parent_uuid) : null;
+
+  OAD.openModal(
+    '<div class="modal-header"><h2>Catch Up <span class="text-muted text-sm" id="catchup-remaining">' + queue.length + ' left</span></h2></div>' +
+    '<div class="catchup-card" data-uuid="' + OAD.esc(t.uuid) + '">' +
+      '<div class="catchup-title" id="catchup-title">' + OAD.esc(OAD.formatDisplayTitle(t.title)) + '</div>' +
+      '<div class="detail-badges" style="margin:6px 0">' +
+        '<span class="pill ' + OAD.esc(t.status) + '">' + OAD.esc(t.status) + '</span> ' +
+        '<span class="pill ' + OAD.esc(t.priority) + '">' + OAD.esc(t.priority) + '</span> ' +
+        '<span class="text-muted text-sm">' + OAD.esc(t.life_area || '') + (parent ? ' · under ' + OAD.esc(parent.title) : '') + '</span>' +
+      '</div>' +
+      '<div class="catchup-reason ' + (item.reason === 'past_deadline' ? 'is-past-deadline' : '') + '">' + OAD.esc(reasonText) + '</div>' +
+      (t.next_action ? '<div class="text-sm mt-8"><strong>Next action:</strong> ' + OAD.esc(t.next_action) + '</div>' : '') +
+      (t.closing_condition ? '<div class="text-sm mt-8 text-muted"><strong>Closes when:</strong> ' + OAD.esc(t.closing_condition) + '</div>' : '') +
+      (OAD._catchUpError ? '<div class="catchup-error" id="catchup-error">' + OAD.esc(OAD._catchUpError) + '</div>' : '') +
+    '</div>' +
+    '<div class="catchup-actions">' +
+      '<div class="catchup-action">' +
+        '<button class="success" id="catchup-done-btn" ' + (closeBlock ? 'disabled title="' + OAD.esc(closeBlock) + '"' : '') + ' onclick="OAD._catchUpAct(\'done\')">✓ Done</button>' +
+        '<span class="text-muted text-sm">' + (closeBlock ? OAD.esc(closeBlock) : 'It happened. Close it.') + '</span>' +
+      '</div>' +
+      '<div class="catchup-action">' +
+        '<input type="date" id="catchup-date" value="' + OAD._catchUpDefaultDate(t) + '">' +
+        '<button class="secondary" id="catchup-date-btn" onclick="OAD._catchUpAct(\'date\')">New date</button>' +
+        '<span class="text-muted text-sm">Still doing it. When is the next action?</span>' +
+      '</div>' +
+      '<div class="catchup-action">' +
+        '<input type="text" id="catchup-trigger" placeholder="What would bring this back?" style="flex:1;min-width:160px">' +
+        '<button class="secondary" id="catchup-park-btn" onclick="OAD._catchUpAct(\'park\')">Park</button>' +
+      '</div>' +
+      '<div class="catchup-action">' +
+        '<button class="ghost" id="catchup-drop-btn" ' + (closeBlock ? 'disabled title="' + OAD.esc(closeBlock) + '"' : '') + ' onclick="OAD._catchUpAct(\'drop\')">Drop</button>' +
+        '<span class="text-muted text-sm">Not doing it. Close without claiming it was done.</span>' +
+      '</div>' +
+    '</div>' +
+    '<div class="modal-footer">' +
+      undo +
+      '<button class="ghost" onclick="OAD.closeModal(); OAD.selectThread(' + t.id + ');">Open thread</button>' +
+      '<button class="ghost" id="catchup-skip-btn" onclick="OAD._catchUpAct(\'skip\')">Skip for now</button>' +
+      '<button onclick="OAD._closeCatchUp()">Close</button>' +
+    '</div>'
+  );
+};
+
+OAD._catchUpAct = function (action) {
+  var card = document.querySelector('#modal-overlay .catchup-card');
+  if (!card) return;
+  var uuid = card.getAttribute('data-uuid');
+  OAD._catchUpError = '';
+  if (action === 'skip') {
+    OAD._catchUpSkipped.add(uuid);
+    OAD._renderCatchUp();
+    return;
+  }
+  var op;
+  if (action === 'done') op = { type: 'done' };
+  else if (action === 'drop') op = { type: 'drop' };
+  else if (action === 'park') {
+    var trig = document.getElementById('catchup-trigger');
+    op = { type: 'park', trigger: trig ? trig.value : '' };
+  } else if (action === 'date') {
+    var d = document.getElementById('catchup-date');
+    op = { type: 'setDate', date: d ? d.value : '' };
+  }
+  var r = OAD.Bulk.apply([uuid], op, 'Catch Up: ' + OAD.Bulk.describe(op).toLowerCase());
+  if (r.skipped.length) {
+    OAD._catchUpError = r.skipped[0].reason;
+  } else if (r.changed.length) {
+    var key = { done: 'done', drop: 'dropped', park: 'parked', date: 'dated' }[action];
+    OAD._catchUpStats[key]++;
+  } else if (action === 'date') {
+    OAD._catchUpError = 'That is the same date it already has. Pick a later one, or Skip.';
+  }
+  OAD._renderCatchUp();
+};
+
+OAD._catchUpUndo = function () {
+  var last = OAD.Bulk._lastBatch;
+  if (!last) return;
+  last.entries.forEach(function (e) { OAD._catchUpSkipped.delete(e.uuid); });
+  OAD.Bulk.undo();
+  OAD._catchUpError = '';
+  OAD._renderCatchUp();
+};
+
+// Closing Catch Up refreshes whatever is underneath: the List tab (so the Catch Up (N) count is
+// current) or the open thread.
+OAD._closeCatchUp = function () {
+  OAD.closeModal();
+  OAD.refreshActiveView();
+  if (OAD._lastView === 'List' && document.getElementById('list-tab-threads')) {
+    OAD.renderListView();
+  } else if (OAD._activeId) {
+    OAD.renderDetail(OAD._activeId);
+  }
+};
+
+// ── Park / Reactivate Bollard ───────────────────────────────────────────────────────────────
+OAD.openParkBollardModal = function (uuid) {
+  var p = OAD.Bulk.parkPreview(uuid);
+  if (!p) return;
+  var rows = p.candidates.map(function (x) {
+    return '<label class="park-row"><input type="checkbox" class="park-check" data-uuid="' + OAD.esc(x.uuid) + '" checked> ' +
+      '<span>' + OAD.esc(x.title) + '</span> <span class="pill ' + OAD.esc(x.status) + '">' + OAD.esc(x.status) + '</span></label>';
+  }).join('');
+  OAD.openModal(
+    '<div class="modal-header"><h2>Park Bollard</h2></div>' +
+    '<p><strong>' + OAD.esc(p.bollard.title) + '</strong> goes dormant, along with the checked threads under it. ' +
+    'Uncheck anything that has to keep moving regardless (a legal or financial obligation, say). ' +
+    'Threads that are already dormant are left alone and will stay dormant when you reactivate.</p>' +
+    '<div class="form-group"><label>Why is this on hold? What brings it back?</label>' +
+    '<input type="text" id="park-reason" placeholder="e.g. Focusing on W-2 search. Revisit at the Nov 2 review."></div>' +
+    '<div class="park-list">' + rows + '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="ghost" onclick="OAD.closeModal()">Cancel</button>' +
+      '<button id="park-confirm-btn" onclick="OAD._confirmParkBollard(\'' + OAD.esc(uuid) + '\')">Park</button>' +
+    '</div>'
+  );
+};
+
+OAD._confirmParkBollard = function (uuid) {
+  var keep = Array.from(document.querySelectorAll('#modal-overlay .park-check'))
+    .filter(function (c) { return !c.checked; })
+    .map(function (c) { return c.getAttribute('data-uuid'); });
+  var reasonEl = document.getElementById('park-reason');
+  OAD.Bulk.parkBollard(uuid, { keepActive: keep, reason: reasonEl ? reasonEl.value : '' });
+  OAD.closeModal();
+  OAD.refreshActiveView();
+  // refreshActiveView redraws the last list/dashboard view, not the open thread, so redraw the
+  // thread explicitly (same as every other save path in this file).
+  var b = OAD.getThreadByUUID(uuid);
+  if (b) OAD.renderDetail(b.id);
+};
+
+OAD.openReactivateBollardModal = function (uuid) {
+  var b = OAD.getThreadByUUID(uuid);
+  if (!b) return;
+  var parked = (OAD.DB.threads || []).filter(function (x) {
+    return x.metadata && x.metadata.parked_by === uuid && x.status === 'dormant';
+  });
+  OAD.openModal(
+    '<div class="modal-header"><h2>Reactivate Bollard</h2></div>' +
+    '<p><strong>' + OAD.esc(b.title) + '</strong> and the ' + parked.length + ' thread' + (parked.length === 1 ? '' : 's') +
+    ' parked with it come back to their previous status. Anything that fell behind while parked goes into Catch Up rather than all at once onto your list.</p>' +
+    '<div class="park-list">' + parked.map(function (x) { return '<div class="park-row">' + OAD.esc(x.title) + '</div>'; }).join('') + '</div>' +
+    '<div class="modal-footer">' +
+      '<button class="ghost" onclick="OAD.closeModal()">Cancel</button>' +
+      '<button id="reactivate-confirm-btn" onclick="OAD._confirmReactivateBollard(\'' + OAD.esc(uuid) + '\')">Reactivate</button>' +
+    '</div>'
+  );
+};
+
+OAD._confirmReactivateBollard = function (uuid) {
+  var r = OAD.Bulk.reactivateBollard(uuid);
+  OAD.closeModal();
+  OAD.refreshActiveView();
+  var b = OAD.getThreadByUUID(uuid);
+  if (b) OAD.renderDetail(b.id);
+  if (r.ok && r.behind) OAD.openCatchUpModal();
 };

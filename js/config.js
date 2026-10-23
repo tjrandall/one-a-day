@@ -7,11 +7,29 @@ OAD.Config = {
   gmailSearchFilter: localStorage.getItem('oad_gmail_filter') || 'is:unread (subject:Notice OR subject:Bill OR subject:Statement OR subject:Register OR subject:Enrollment)',
   ocrLanguage: 'eng',
   defaultPriority: 'medium',
+  // Six life areas, consolidated Oct 23 2026. Bollards (parent threads) are the second level
+  // inside each area. There is no catch-all "Other" or "System" area anymore: anything without an
+  // area defaults to defaultLifeArea, and retired names are mapped by retiredLifeAreas below.
   lifeAreas: JSON.parse(localStorage.getItem('oad_life_areas')) || [
-    'Career', 'Health', 'Finances', 'Relationships', 'Education', 'Housing',
-    'Legal', 'Personal Growth', 'App Dev', 'Job Search', 'Family', 'Personal', 'Other',
-    'System' // system-managed threads only (e.g. the Inbox Sentinel, OAD.sweepInboxSentinel in js/engine.js) — never user-assigned
+    'Career', 'Housing', 'Personal Growth', 'Family', 'Health', 'Finances'
   ],
+  defaultLifeArea: 'Personal Growth',
+  // Old area name (lowercase) -> current area. Applied to every thread on load by
+  // OAD.migrateLifeArea (js/data.js _normalizeDB), so an old export, a stale browser cache, or an
+  // AI-written patch using an old name lands in the right place instead of an area that no
+  // longer appears in any filter.
+  retiredLifeAreas: {
+    'job search': 'Career',
+    'app dev': 'Personal Growth',
+    'education': 'Personal Growth',
+    'personal': 'Family',
+    'relationships': 'Family',
+    'legal': 'Finances',
+    'other': 'Personal Growth',
+    'system': 'Personal Growth',
+    'home': 'Housing',
+    'finance': 'Finances'
+  },
   aiConfig: JSON.parse(localStorage.getItem('oad_ai_config')) || {
     defaultProvider: 'anthropic',
     defaultClaudeModel: 'claude-3-5-sonnet-latest',
@@ -217,15 +235,12 @@ justifying the classification briefly. Output valid JSON only:
     criticalMinDays: 4  // 4+ days old → critical
   },
   areaKeywords: JSON.parse(localStorage.getItem('oad_area_keywords')) || {
-    'Job Search': ['job board', 'job search', 'job hunt', 'weekly job', 'apply to'],
-    'Career': ['job', 'work', 'career', 'employ', 'hire', 'interview', 'resume'],
-    'Health': ['health', 'doctor', 'medical', 'therapy', 'mental', 'physical'],
-    'Family': ['family', 'parent', 'sibling', 'spouse', 'kid', 'child', 'mom', 'dad'],
-    'Finances': ['money', 'finance', 'bank', 'debt', 'loan', 'tax', 'budget', 'invest'],
-    'Relationships': ['friend', 'partner', 'relationship', 'social'],
-    'Education': ['school', 'class', 'degree', 'cert', 'course', 'learn', 'study'],
-    'Housing': ['house', 'rent', 'lease', 'mortgage', 'apartment', 'move'],
-    'Legal': ['legal', 'court', 'law', 'attorney', 'contract', 'va ', 'vr&e', 'vre']
+    'Career': ['job board', 'job search', 'job hunt', 'weekly job', 'apply to', 'job', 'work', 'career', 'employ', 'hire', 'interview', 'resume', 'contract'],
+    'Health': ['health', 'doctor', 'medical', 'therapy', 'mental', 'physical', 'va '],
+    'Family': ['family', 'parent', 'sibling', 'spouse', 'kid', 'child', 'mom', 'dad', 'friend', 'partner', 'relationship', 'social'],
+    'Finances': ['money', 'finance', 'bank', 'debt', 'loan', 'tax', 'budget', 'invest', 'legal', 'court', 'law', 'attorney'],
+    'Personal Growth': ['school', 'class', 'degree', 'cert', 'course', 'learn', 'study', 'vr&e', 'vre'],
+    'Housing': ['house', 'rent', 'lease', 'mortgage', 'apartment', 'move']
   },
   pressureThresholds: JSON.parse(localStorage.getItem('oad_pressure_thresholds')) || {
     high: 60,
@@ -269,11 +284,13 @@ justifying the classification briefly. Output valid JSON only:
     warnDriftedMaskedByDeadline: 'Next action has drifted into the past, but a comfortable future deadline may be masking that on cards',
     warnNoDatesSet: 'No next action date or deadline set — this thread can drift forever without appearing anywhere date-based',
     warnQuickCaptureDeadlineSkipped: 'Flagged as possibly having a real deadline at capture, but the date was skipped',
-    maskedBadge: '⚠ next action overdue'
+    maskedBadge: '⚠ next action overdue',
+    startNowBadge: '▶ start now',
+    startNowTitle: 'The planned start date has passed and the deadline is inside its lead time. This is the buffer working, not a missed date.'
   },
   cheLeadDays: JSON.parse(localStorage.getItem('oad_che_lead_days')) || {
-    'Education':  5,
-    'Job Search': 3,
+    // Personal Growth holds all coursework, which needs the 5-day lead time Education had.
+    'Personal Growth': 5,
     'Health':     2,
     'Career':     4,
     'Finances':   3,
@@ -326,7 +343,7 @@ if (!OAD.Config.demoMode) {
 
 
 OAD.normalizeLifeArea = function (area) {
-  if (!area) return 'Other';
+  if (!area) return OAD.Config.defaultLifeArea;
   let cleaned = area.trim().replace(/_/g, ' ');
   if (cleaned.toLowerCase() === 'finance' || cleaned.toLowerCase() === 'finances') {
     return 'Finances';
