@@ -2918,6 +2918,7 @@ OAD.toggleBulkMode = function () {
 };
 
 OAD.toggleBulkSelect = function (uuid) {
+  OAD._bulkConfirmDone = false;
   if (!OAD._bulkSelected) OAD._bulkSelected = new Set();
   if (OAD._bulkSelected.has(uuid)) OAD._bulkSelected.delete(uuid);
   else OAD._bulkSelected.add(uuid);
@@ -2925,12 +2926,14 @@ OAD.toggleBulkSelect = function (uuid) {
 };
 
 OAD.bulkSelectShown = function () {
+  OAD._bulkConfirmDone = false;
   if (!OAD._bulkSelected) OAD._bulkSelected = new Set();
   (OAD._listShownUUIDs || []).forEach(u => OAD._bulkSelected.add(u));
   OAD.filterListTab();
 };
 
 OAD.bulkClearSelection = function () {
+  OAD._bulkConfirmDone = false;
   OAD._bulkSelected = new Set();
   OAD.filterListTab();
 };
@@ -2966,6 +2969,10 @@ OAD.renderBulkBar = function () {
         <button class="secondary" ${dis} onclick="OAD.bulkPark()">Park</button>
       </span>
       <button class="secondary" ${dis} onclick="OAD.bulkRun({ type: 'status', status: 'open' })">Reopen</button>
+      ${OAD._bulkConfirmDone && n
+        ? `<button class="success" id="bulk-done-confirm" onclick="OAD.bulkDoneConfirm()">Confirm: ${n} happened, close them</button>
+           <button class="ghost" onclick="OAD.bulkDoneCancel()">Cancel</button>`
+        : `<button class="success" id="bulk-done-btn" ${dis} onclick="OAD.bulkDoneAsk()" title="Close and mark the closing condition met. Asks you to confirm first.">✓ Done</button>`}
       <button class="secondary" ${dis} onclick="OAD.bulkRun({ type: 'drop' })" title="Close without asserting the closing condition was met">Drop</button>
       <span class="bulk-group">
         <label>Push next action</label>
@@ -3005,6 +3012,24 @@ OAD.bulkRun = function (op) {
   // Changed threads drop out of the selection; skipped ones stay selected so they can be fixed.
   r.changed.forEach(u => OAD._bulkSelected.delete(u));
   OAD.renderListView();
+};
+
+// Bulk Done asserts that each selected thread's outcome actually happened (closing_condition_met),
+// so it takes a second, explicit click naming the count: the EA-Confirmation Rule's "explicit
+// confirmation", never a single stray click. Drop needs no confirmation; it asserts nothing.
+OAD.bulkDoneAsk = function () {
+  OAD._bulkConfirmDone = true;
+  OAD.renderBulkBar();
+};
+
+OAD.bulkDoneCancel = function () {
+  OAD._bulkConfirmDone = false;
+  OAD.renderBulkBar();
+};
+
+OAD.bulkDoneConfirm = function () {
+  OAD._bulkConfirmDone = false;
+  OAD.bulkRun({ type: 'done' });
 };
 
 OAD.bulkPark = function () {

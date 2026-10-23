@@ -250,12 +250,37 @@ OAD.Bulk.captureContext = function (t) {
 //   { type: 'drop' }   closed, closing condition NOT asserted as met
 //   { type: 'park', trigger }           dormant with a re-engagement trigger
 // Returns { changed: [uuid], skipped: [{ uuid, title, reason }] }.
+OAD.Bulk._isCloseOp = function (op) {
+  return op.type === 'done' || op.type === 'drop' || (op.type === 'status' && op.status === 'closed');
+};
+
+// Depth in the parent_uuid tree (0 = top level). Cycle-safe.
+OAD.Bulk._depth = function (t) {
+  var d = 0, seen = {};
+  while (t && t.parent_uuid && !seen[t.uuid]) {
+    seen[t.uuid] = true;
+    t = OAD.getThreadByUUID(t.parent_uuid);
+    if (t) d++;
+  }
+  return d;
+};
+
 OAD.Bulk.apply = function (uuids, op, label) {
   var changed = [];
   var skipped = [];
   var entries = [];
 
-  (uuids || []).forEach(function (uuid) {
+  // Closing a parent together with its children in one batch: close the deepest threads first,
+  // so by the time the parent is checked its children are already closed and it no longer needs
+  // the Closure Wizard. A parent selected WITHOUT all of its open children is still skipped.
+  var order = (uuids || []).slice();
+  if (OAD.Bulk._isCloseOp(op)) {
+    order.sort(function (a, b) {
+      return OAD.Bulk._depth(OAD.getThreadByUUID(b)) - OAD.Bulk._depth(OAD.getThreadByUUID(a));
+    });
+  }
+
+  order.forEach(function (uuid) {
     var t = OAD.getThreadByUUID(uuid);
     var reason = OAD.Bulk.validate(t, op);
     if (reason) {

@@ -6629,6 +6629,26 @@ OAD.test('Bulk.captureContext: shows when and how a bare capture arrived, skippi
   OAD._assertEqual(c2.lastNote, 'Called Robin, waiting on CP3219A copy.');
 });
 
+OAD.test('Bulk done: a parent selected together with all its open children closes in one batch (children first); a parent alone is still skipped', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bd-p', title: 'eCornell - Analyzing Data with Python', status: 'open',
+    connections: [{ uuid: 'be1', to_uuid: 'bd-c1', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' },
+                  { uuid: 'be2', to_uuid: 'bd-c2', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' }] });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'bd-c1', title: 'Quiz', status: 'open', parent_uuid: 'bd-p' });
+  var c2 = OAD.makeThread({ id: 3, uuid: 'bd-c2', title: 'Codio', status: 'open', parent_uuid: 'bd-p' });
+  _withThreads([p, c1, c2], function () {
+    var alone = OAD.Bulk.apply(['bd-p', 'bd-c1'], { type: 'done' });
+    OAD._assertEqual(alone.changed.join(), 'bd-c1', 'parent with a still-open child (c2 not selected) is skipped');
+    OAD._assertEqual(p.status, 'open');
+    OAD.Bulk.undo();
+    var r = OAD.Bulk.apply(['bd-p', 'bd-c1', 'bd-c2'], { type: 'done' });
+    OAD._assertEqual(r.changed.length, 3, 'parent listed first in the selection still closes, after its children');
+    OAD._assertEqual(r.skipped.length, 0);
+    OAD._assert([p, c1, c2].every(t => t.status === 'closed' && t.closing_condition_met === true), 'all closed as done');
+    OAD.Bulk.undo();
+    OAD._assert([p, c1, c2].every(t => t.status === 'open'), 'one undo reopens all three');
+  });
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();
