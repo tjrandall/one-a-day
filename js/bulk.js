@@ -184,22 +184,62 @@ OAD.Bulk._isStructuralParentEdge = function (fromThread, edge, toThread) {
   return edge.edge_type === 'enables' && toThread && toThread.parent_uuid === fromThread.uuid;
 };
 
-OAD.Bulk.needsWizard = function (t) {
+// An ADE suggestion the user has never confirmed (auto_generated, confirmed_by_user false) is a
+// pending guess, not a dependency. Found Oct 23 2026: ADE-001 read "Week 1" in an unrelated Quick
+// Add capture ("AI - Week 1 video and documents") and linked it as blocking the AISYS Wk15 final
+// lab and capstone, which then forced the Closure Wizard for a thread with no real dependencies.
+OAD.Bulk._isUnconfirmedSuggestion = function (edge) {
+  return !!edge.auto_generated && !edge.confirmed_by_user;
+};
+
+// Why closing this thread needs the Closure Wizard, as human-readable lines; empty = it does not.
+// Counts open sub-threads and every edge the user created or confirmed. Ignores the structural
+// parent -> child edge and unconfirmed ADE suggestions (see above).
+OAD.Bulk.wizardReasons = function (t) {
   var threads = OAD.DB.threads || [];
-  if (OAD.Bulk._openChildren(t).length) return true;
+  var reasons = [];
+  OAD.Bulk._openChildren(t).forEach(function (c) { reasons.push('Open sub-thread: ' + c.title); });
   var byUuid = {};
   threads.forEach(function (x) { byUuid[x.uuid] = x; });
-  var outgoing = (t.connections || []).some(function (c) {
+  (t.connections || []).forEach(function (c) {
     var target = c.to_uuid && byUuid[c.to_uuid];
-    return target && target.status !== 'closed' && !OAD.Bulk._isStructuralParentEdge(t, c, target);
+    if (!target || target.status === 'closed') return;
+    if (OAD.Bulk._isStructuralParentEdge(t, c, target) || OAD.Bulk._isUnconfirmedSuggestion(c)) return;
+    reasons.push(OAD.Bulk._edgeLabel(c.edge_type) + ': ' + target.title);
   });
-  if (outgoing) return true;
-  return threads.some(function (x) {
-    if (x.uuid === t.uuid || x.status === 'closed') return false;
-    return (x.connections || []).some(function (c) {
-      return c.to_uuid === t.uuid && !OAD.Bulk._isStructuralParentEdge(x, c, t);
+  threads.forEach(function (x) {
+    if (x.uuid === t.uuid || x.status === 'closed') return;
+    (x.connections || []).forEach(function (c) {
+      if (c.to_uuid !== t.uuid) return;
+      if (OAD.Bulk._isStructuralParentEdge(x, c, t) || OAD.Bulk._isUnconfirmedSuggestion(c)) return;
+      reasons.push(x.title + ' ' + OAD.Bulk._edgeLabel(c.edge_type).toLowerCase() + ' this');
     });
   });
+  return reasons;
+};
+
+OAD.Bulk._edgeLabel = function (type) {
+  return { blocks: 'Blocks', blocked_by: 'Blocked by', enables: 'Enables', relates: 'Related to', relates_to: 'Related to' }[type] || (type || 'Linked to');
+};
+
+OAD.Bulk.needsWizard = function (t) {
+  return OAD.Bulk.wizardReasons(t).length > 0;
+};
+
+// Where a thread came from and the last thing that happened to it, for context on a bare card.
+// Import-sync bookkeeping notes are skipped; they say nothing about the thread itself.
+OAD.Bulk.captureContext = function (t) {
+  var log = (t.evolution_log || []).filter(function (e) { return e && e.note; });
+  var first = log[0] || null;
+  var capturedOn = t.created_at ? String(t.created_at).slice(0, 10) : (first ? first.date : null);
+  var how = '';
+  if (first) {
+    var m = /^(Captured via [^.]+|Created via [^.]+|Thread created via [^.]+|Thread promoted from [^.]+|Accepted from AI Proposal)/.exec(first.note);
+    if (m) how = m[1].replace(/^Thread /, '').replace(/^Captured /, '').replace(/^Created /, '');
+  }
+  var meaningful = log.filter(function (e) { return !/via import sync\.?$/i.test(e.note) && !/^Life area cleanup:/.test(e.note); });
+  var last = meaningful.length > 1 ? meaningful[meaningful.length - 1] : null;
+  return { capturedOn: capturedOn, how: how, lastNote: last ? last.note : '', lastDate: last ? last.date : null, source: t.source || '' };
 };
 
 // ── Apply ───────────────────────────────────────────────────────────────────────────────────

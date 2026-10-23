@@ -6592,6 +6592,43 @@ OAD.test('Bulk.dayOptions: days on or after a future deadline are marked and nev
   });
 });
 
+OAD.test('Bulk.wizardReasons: unconfirmed ADE suggestions are not dependencies; confirmed ones and manual links are, with readable reasons', function () {
+  var cap = OAD.makeThread({ id: 1, uuid: 'wr-cap', title: 'AI - Week 1 video and documents', status: 'inbox',
+    connections: [{ uuid: 'w1', to_uuid: 'wr-final', edge_type: 'blocks', auto_generated: true, confirmed_by_user: false, rule: 'ADE-001' }] });
+  var fin = OAD.makeThread({ id: 2, uuid: 'wr-final', title: 'AISYS Wk15 Final', status: 'open' });
+  var conf = OAD.makeThread({ id: 3, uuid: 'wr-conf', title: 'Confirmed blocker', status: 'open',
+    connections: [{ uuid: 'w2', to_uuid: 'wr-final', edge_type: 'blocks', auto_generated: true, confirmed_by_user: true }] });
+  var man = OAD.makeThread({ id: 4, uuid: 'wr-man', title: 'Manual dependent', status: 'open',
+    connections: [{ uuid: 'w3', to_uuid: 'wr-final', edge_type: 'blocked_by' }] });
+  _withThreads([cap, fin, conf, man], function () {
+    OAD._assertEqual(OAD.Bulk.wizardReasons(cap).length, 0, 'a pending ADE guess does not force the wizard');
+    OAD._assertEqual(OAD.Bulk.needsWizard(cap), false);
+    OAD._assertEqual(OAD.Bulk.wizardReasons(conf).join(), 'Blocks: AISYS Wk15 Final', 'a confirmed suggestion counts, with its reason');
+    var r = OAD.Bulk.wizardReasons(fin);
+    OAD._assert(r.indexOf('Manual dependent blocked by this') !== -1, 'incoming manual link reads naturally: ' + r.join(' | '));
+    OAD._assert(r.indexOf('Confirmed blocker blocks this') !== -1, 'incoming confirmed link listed');
+    OAD._assertEqual(r.some(x => /AI - Week 1/.test(x)), false, 'incoming unconfirmed guess not listed');
+  });
+});
+
+OAD.test('Bulk.captureContext: shows when and how a bare capture arrived, skipping import-sync bookkeeping', function () {
+  var t = OAD.makeThread({ uuid: 'cc-1', title: 'AI - Week 1 video and documents', status: 'inbox', created_at: null,
+    evolution_log: [
+      { date: '2026-10-05', note: 'Captured via Quick Add.' },
+      { date: '2026-10-23', note: 'Life area cleanup: life area Other -> Personal Growth.' },
+      { date: '2026-10-23', note: 'Updated via import sync.' }
+    ] });
+  var c = OAD.Bulk.captureContext(t);
+  OAD._assertEqual(c.capturedOn, '2026-10-05', 'capture date from the first log entry when created_at is null');
+  OAD._assertEqual(c.how, 'via Quick Add');
+  OAD._assertEqual(c.lastNote, '', 'no meaningful later note: bookkeeping is not shown as context');
+  var t2 = OAD.makeThread({ uuid: 'cc-2', title: 'x', created_at: '2026-09-01T10:00:00Z',
+    evolution_log: [{ date: '2026-09-01', note: 'Thread created.' }, { date: '2026-09-10', note: 'Called Robin, waiting on CP3219A copy.' }] });
+  var c2 = OAD.Bulk.captureContext(t2);
+  OAD._assertEqual(c2.capturedOn, '2026-09-01');
+  OAD._assertEqual(c2.lastNote, 'Called Robin, waiting on CP3219A copy.');
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();

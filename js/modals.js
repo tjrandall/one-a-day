@@ -3040,7 +3040,14 @@ OAD._renderCatchUp = function () {
     reasonText = 'Next action was due ' + OAD.formatDate(t.next_action_date) + ' (' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago)' +
       (t.deadline ? '. Deadline ' + OAD.formatDate(t.deadline) + '.' : '. No deadline.');
   }
-  var needsWizard = !!OAD.Bulk._closeBlocker(t);
+  var wizardReasons = OAD.Bulk.wizardReasons(t);
+  var needsWizard = wizardReasons.length > 0;
+  var ctx = OAD.Bulk.captureContext(t);
+  var ctxParts = [];
+  if (ctx.capturedOn) ctxParts.push('Captured ' + OAD.formatDate(ctx.capturedOn) + (ctx.how ? ' ' + ctx.how : ''));
+  if (ctx.source) ctxParts.push('Source: ' + ctx.source);
+  if (ctx.lastNote) ctxParts.push('Last note (' + OAD.formatDate(ctx.lastDate) + '): ' + ctx.lastNote);
+  if (!t.next_action && !t.closing_condition) ctxParts.push('No next action or closing condition was ever written down');
   var parent = t.parent_uuid ? OAD.getThreadByUUID(t.parent_uuid) : null;
   var pastDl = OAD.Bulk.deadlinePassed(t);
   var err = function (field) {
@@ -3051,7 +3058,8 @@ OAD._renderCatchUp = function () {
     ? '<div class="catchup-action">' +
         '<button class="success" id="catchup-done-btn" onclick="OAD._catchUpWizard(\'done\')">✓ Done via Closure Wizard →</button>' +
         '<button class="ghost" id="catchup-drop-btn" onclick="OAD._catchUpWizard(\'drop\')">Drop via Closure Wizard →</button>' +
-        '<div class="text-muted text-sm" style="flex-basis:100%">This one has open sub-threads or a real dependency, so the wizard asks what happens to them. Reopen Catch Up afterward to continue.</div>' +
+        '<div class="text-muted text-sm" style="flex-basis:100%">The wizard decides what happens to these. Reopen Catch Up afterward to continue.' +
+          '<ul class="catchup-wizard-reasons" id="catchup-wizard-reasons">' + wizardReasons.map(function (r) { return '<li>' + OAD.esc(r) + '</li>'; }).join('') + '</ul></div>' +
       '</div>'
     : '<div class="catchup-action">' +
         '<button class="success" id="catchup-done-btn" onclick="OAD._catchUpAct(\'done\')">✓ Done → next</button>' +
@@ -3070,6 +3078,7 @@ OAD._renderCatchUp = function () {
       '<div class="catchup-reason ' + (item.reason === 'past_deadline' ? 'is-past-deadline' : '') + '">' + OAD.esc(reasonText) + '</div>' +
       (t.next_action ? '<div class="text-sm mt-8"><strong>Next action:</strong> ' + OAD.esc(t.next_action) + '</div>' : '') +
       (t.closing_condition ? '<div class="text-sm mt-8 text-muted"><strong>Closes when:</strong> ' + OAD.esc(t.closing_condition) + '</div>' : '') +
+      (ctxParts.length ? '<div class="catchup-context text-sm" id="catchup-context">' + ctxParts.map(OAD.esc).join(' · ') + '</div>' : '') +
     '</div>' +
     '<div class="catchup-actions">' +
       closeRow + err('close') +
