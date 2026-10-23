@@ -203,6 +203,15 @@ justifying the classification briefly. Output valid JSON only:
   // used and compared against how days actually feel. edgeMultiplier and cadenceWeight scale
   // structural/commitment signals to be roughly comparable in magnitude to a pressure score
   // (0-100 per thread); busyThreshold/heavyThreshold are cutoffs on the resulting composite.
+  // Day notes on Catch Up's smart-date chips (js/bulk.js OAD.Bulk.dayOptions). Notes only,
+  // never blocks: T.J. decides. Sunday is kept free of work-related threads by choice; Monday
+  // morning absorbs weekend work that was done but not recorded, so it is not suggested.
+  dayNotes: JSON.parse(localStorage.getItem('oad_day_notes')) || {
+    sundayRestAreas: ['Career'],
+    sundayRestNote: 'Sunday rest',
+    mondayCatchUp: true,
+    mondayCatchUpNote: 'catch-up day'
+  },
   weekLoadWeights: JSON.parse(localStorage.getItem('oad_week_load_weights')) || {
     edgeMultiplier: 2,    // per graph connection (in+out, any type) on a thread due that day
     cadenceWeight: 20,    // flat, per cadence due that day (cadences have no pressure score of their own)

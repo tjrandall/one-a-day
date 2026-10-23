@@ -6512,6 +6512,86 @@ OAD.test('dataHygieneWarnings: a bollard (parent with open children) is not flag
   OAD._assert(plain.some(w => w.rule === 'no_dates_set'), 'without context the old behavior holds');
 });
 
+OAD.test('Bulk.needsWizard: a child whose only link is its parent\'s auto "enables" edge can close without the wizard', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'nw-p', title: 'Family Relationships', status: 'open',
+    connections: [{ uuid: 'e1', to_uuid: 'nw-c', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' }] });
+  var c = OAD.makeThread({ id: 2, uuid: 'nw-c', title: 'Letter to Aunt Shirley', status: 'open', parent_uuid: 'nw-p' });
+  var other = OAD.makeThread({ id: 3, uuid: 'nw-o', title: 'Blocked by the letter', status: 'open',
+    connections: [{ uuid: 'e2', to_uuid: 'nw-x', edge_type: 'blocked_by' }] });
+  var x = OAD.makeThread({ id: 4, uuid: 'nw-x', title: 'Has a real dependent', status: 'open' });
+  _withThreads([p, c, other, x], function () {
+    OAD._assertEqual(OAD.Bulk.needsWizard(c), false, 'structural parent edge alone does not need the wizard');
+    OAD._assertEqual(OAD.needsClosureWizard(c.id), true, 'sanity: the original check did flag it (the bug)');
+    OAD._assertEqual(OAD.Bulk.needsWizard(x), true, 'a real blocked_by dependent still needs the wizard');
+    OAD._assertEqual(OAD.Bulk.needsWizard(p), true, 'a parent with an open child still needs the wizard');
+    var r = OAD.Bulk.apply(['nw-c'], { type: 'done' });
+    OAD._assertEqual(r.changed.length, 1, 'Done works on the leaf child');
+  });
+});
+
+OAD.test('Bulk setDate on a past-deadline thread: requires a new deadline, sets both, and undo restores the old deadline', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'pd-1', title: 'Letter', status: 'open', next_action_date: _bd(-27), deadline: _bd(-26) });
+  _withThreads([t], function () {
+    var r1 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3) });
+    OAD._assertEqual(r1.changed.length, 0, 'no silent change without a new deadline');
+    OAD._assert(/has passed/.test(r1.skipped[0].reason), 'reason says the deadline passed, not a buffer-rule dead end: ' + r1.skipped[0].reason);
+    var r2 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: _bd(3) });
+    OAD._assert(/new deadline/.test(r2.skipped[0].reason), 'buffer rule applies against the NEW deadline');
+    var r3 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: _bd(8) });
+    OAD._assertEqual(r3.changed.length, 1, 'date + new deadline accepted');
+    OAD._assertEqual(t.next_action_date, _bd(3));
+    OAD._assertEqual(t.deadline, _bd(8));
+    OAD._assert(/deadline .* -> /.test(t.evolution_log[t.evolution_log.length - 1].note), 'deadline move is logged');
+    OAD.Bulk.undo();
+    OAD._assertEqual(t.deadline, _bd(-26), 'undo restores the old deadline');
+    OAD._assertEqual(t.next_action_date, _bd(-27), 'and the old date');
+    var r4 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: '' });
+    OAD._assertEqual(r4.changed.length, 1, 'empty new deadline = no deadline');
+    OAD._assertEqual(t.deadline, null, 'deadline cleared');
+  });
+});
+
+OAD.test('Bulk setDate on a future-deadline thread: buffer rule unchanged, newDeadline ignored', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'fd-1', title: 'Quiz', status: 'open', next_action_date: _bd(-1), deadline: _bd(2) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['fd-1'], { type: 'setDate', date: _bd(5), newDeadline: _bd(9) });
+    OAD._assert(/Buffer rule/.test(r.skipped[0].reason), 'a deadline that has not passed is never moved from here');
+    OAD._assertEqual(t.deadline, _bd(2));
+  });
+});
+
+OAD.test('Bulk.dayOptions: 7 days with live load; Sunday rest note for Career only; Monday catch-up note; suggestion avoids noted days', function () {
+  var offsetOf = function (dow) { for (var i = 0; i < 7; i++) { if (new Date(_bd(i) + 'T12:00:00').getDay() === dow) return i; } };
+  var sun = offsetOf(0), mon = offsetOf(1);
+  var career = OAD.makeThread({ id: 1, uuid: 'do-c', title: 'VEVRAA outreach', status: 'open', life_area: 'Career', next_action_date: _bd(-20) });
+  var edu = OAD.makeThread({ id: 2, uuid: 'do-e', title: 'Quiz', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-20) });
+  var onMon = OAD.makeThread({ id: 3, uuid: 'do-m', title: 'Already Monday', status: 'open', life_area: 'Family', next_action_date: _bd(mon) });
+  _withThreads([career, edu, onMon], function () {
+    var oc = OAD.Bulk.dayOptions(career, new Date(), 7);
+    var oe = OAD.Bulk.dayOptions(edu, new Date(), 7);
+    OAD._assertEqual(oc.length, 7, 'a week of options');
+    OAD._assertEqual(oc[0].date, OAD.todayStr(), 'starts today');
+    OAD._assert(oc[sun].notes.indexOf('Sunday rest') !== -1, 'Career thread: Sunday carries the rest note');
+    OAD._assertEqual(oe[sun].notes.indexOf('Sunday rest'), -1, 'Personal Growth thread: Sunday is a normal day (coursework due Sunday 23:59)');
+    OAD._assert(oc[mon].notes.indexOf('catch-up day') !== -1, 'Monday is marked as the catch-up day');
+    OAD._assertEqual(oc[mon].count, 1, 'live count of next actions already on Monday');
+    var sug = oc.filter(o => o.suggested);
+    OAD._assertEqual(sug.length, 1, 'exactly one suggestion');
+    OAD._assertEqual(sug[0].notes.length, 0, 'the suggestion is never a noted day when a clean day exists');
+    OAD._assert(oc.every(o => !o.afterDeadline), 'no deadline, nothing disabled');
+  });
+});
+
+OAD.test('Bulk.dayOptions: days on or after a future deadline are marked and never suggested', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'dl-1', title: 'Due soon', status: 'open', life_area: 'Family', next_action_date: _bd(-3), deadline: _bd(2) });
+  _withThreads([t], function () {
+    var o = OAD.Bulk.dayOptions(t, new Date(), 7);
+    OAD._assertEqual(o[1].afterDeadline, false, 'tomorrow is fine');
+    OAD._assertEqual(o[2].afterDeadline, true, 'the deadline day itself is out (buffer rule)');
+    OAD._assert(o.filter(x => x.suggested).every(x => !x.afterDeadline), 'never suggested past the deadline');
+  });
+});
+
 OAD.boot = async function () {
   if (window.location.search.includes('reset=true')) {
     localStorage.clear();

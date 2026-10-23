@@ -2928,19 +2928,81 @@ OAD._executeAdmission = async function() {
 // can clear, not a wall you avoid. Every action goes through OAD.Bulk.apply, so the buffer and
 // bollard rules and the Closure Wizard guard all apply here too, and "Undo last" works.
 OAD.openCatchUpModal = function () {
+  OAD._catchUpDraft = null;
   OAD._catchUpSkipped = new Set();
   OAD._catchUpStats = { done: 0, dated: 0, parked: 0, dropped: 0 };
-  OAD._catchUpError = '';
   OAD._renderCatchUp();
 };
 
 OAD._catchUpDefaultDate = function (t) {
+  var opts = OAD.Bulk.dayOptions(t, new Date(), 7);
+  var pick = opts.filter(function (o) { return o.suggested; })[0];
+  if (pick) return pick.date;
   var tomorrow = OAD.Bulk._addDays(OAD.todayStr(), 1);
   if (t.deadline && t.deadline > OAD.todayStr()) {
     var dayBefore = OAD.Bulk._addDays(t.deadline, -1);
     return dayBefore < tomorrow ? OAD.todayStr() : tomorrow;
   }
   return tomorrow;
+};
+
+// What the user has typed on the current card survives a redraw (a failed action used to reset
+// the date field to the default, losing the date they had just chosen).
+OAD._catchUpDraftFor = function (t) {
+  var d = OAD._catchUpDraft;
+  if (d && d.uuid === t.uuid) return d;
+  var date = OAD._catchUpDefaultDate(t);
+  OAD._catchUpDraft = {
+    uuid: t.uuid,
+    date: date,
+    deadline: OAD.Bulk.deadlinePassed(t) ? OAD.Bulk.suggestedDeadline(t, date) : '',
+    deadlineTouched: false,
+    trigger: '',
+    error: '',
+    errorField: ''
+  };
+  return OAD._catchUpDraft;
+};
+
+OAD._catchUpReadInputs = function () {
+  var d = OAD._catchUpDraft;
+  if (!d) return;
+  var date = document.getElementById('catchup-date');
+  var dl = document.getElementById('catchup-deadline');
+  var trig = document.getElementById('catchup-trigger');
+  if (date) d.date = date.value;
+  if (dl) d.deadline = dl.value;
+  if (trig) d.trigger = trig.value;
+};
+
+OAD._catchUpPickDate = function (ds) {
+  OAD._catchUpReadInputs();
+  var d = OAD._catchUpDraft;
+  var t = d && OAD.getThreadByUUID(d.uuid);
+  if (!t) return;
+  d.date = ds;
+  // Keep the suggested new deadline in step with the chosen date until the user edits it.
+  if (OAD.Bulk.deadlinePassed(t) && !d.deadlineTouched) d.deadline = OAD.Bulk.suggestedDeadline(t, ds);
+  d.error = ''; d.errorField = '';
+  OAD._renderCatchUp();
+  var btn = document.getElementById('catchup-date-btn');
+  if (btn) btn.focus();
+};
+
+OAD._catchUpDayChipsHtml = function (t, selected) {
+  var names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return '<div class="catchup-days" id="catchup-days">' + OAD.Bulk.dayOptions(t, new Date(), 7).map(function (o) {
+    var md = Number(o.date.slice(5, 7)) + '/' + Number(o.date.slice(8, 10));
+    var cls = 'day-chip load-' + o.load + (o.date === selected ? ' is-selected' : '') + (o.suggested ? ' is-suggested' : '');
+    var title = o.count + ' next action' + (o.count === 1 ? '' : 's') + ' already on this day, load ' + o.load +
+      (o.notes.length ? '. ' + o.notes.join(', ') : '') + (o.afterDeadline ? '. On or after the deadline' : '');
+    return '<button type="button" class="' + cls + '" data-date="' + o.date + '" ' + (o.afterDeadline ? 'disabled ' : '') +
+      'title="' + OAD.esc(title) + '" onclick="OAD._catchUpPickDate(\'' + o.date + '\')">' +
+      '<span class="day-chip-day">' + names[o.dow] + ' ' + md + (o.suggested ? ' ★' : '') + '</span>' +
+      '<span class="day-chip-load">' + o.count + ' · ' + o.load + '</span>' +
+      (o.notes.length ? '<span class="day-chip-note">' + OAD.esc(o.notes.join(', ')) + '</span>' : '') +
+    '</button>';
+  }).join('') + '</div>';
 };
 
 OAD._renderCatchUp = function () {
@@ -2952,12 +3014,13 @@ OAD._renderCatchUp = function () {
     : '';
 
   if (!queue.length) {
+    OAD._catchUpDraft = null;
     OAD.openModal(
       '<div class="modal-header"><h2>Catch Up</h2></div>' +
       '<div class="catchup-done" id="catchup-done">' +
         '<div style="font-size:28px">🎉</div>' +
         '<p><strong>Nothing left in the queue.</strong></p>' +
-        '<p class="text-muted text-sm">Done ' + st.done + ' · New date ' + st.dated + ' · Parked ' + st.parked + ' · Dropped ' + st.dropped +
+        '<p class="text-muted text-sm">Done ' + st.done + ' · Rescheduled ' + st.dated + ' · Parked ' + st.parked + ' · Dropped ' + st.dropped +
           (OAD._catchUpSkipped.size ? ' · Skipped ' + OAD._catchUpSkipped.size : '') + '</p>' +
       '</div>' +
       '<div class="modal-footer">' + undo + '<button onclick="OAD._closeCatchUp()">Close</button></div>'
@@ -2967,6 +3030,7 @@ OAD._renderCatchUp = function () {
 
   var item = queue[0];
   var t = item.thread;
+  var d = OAD._catchUpDraftFor(t);
   var reasonText;
   if (item.reason === 'past_deadline') {
     var dl = -OAD.TemporalStatus.daysUntilDeadline(t, now);
@@ -2976,8 +3040,23 @@ OAD._renderCatchUp = function () {
     reasonText = 'Next action was due ' + OAD.formatDate(t.next_action_date) + ' (' + ago + ' day' + (ago === 1 ? '' : 's') + ' ago)' +
       (t.deadline ? '. Deadline ' + OAD.formatDate(t.deadline) + '.' : '. No deadline.');
   }
-  var closeBlock = OAD.Bulk._closeBlocker(t);
+  var needsWizard = !!OAD.Bulk._closeBlocker(t);
   var parent = t.parent_uuid ? OAD.getThreadByUUID(t.parent_uuid) : null;
+  var pastDl = OAD.Bulk.deadlinePassed(t);
+  var err = function (field) {
+    return d.error && d.errorField === field ? '<div class="catchup-error" id="catchup-error">' + OAD.esc(d.error) + '</div>' : '';
+  };
+
+  var closeRow = needsWizard
+    ? '<div class="catchup-action">' +
+        '<button class="success" id="catchup-done-btn" onclick="OAD._catchUpWizard(\'done\')">✓ Done via Closure Wizard →</button>' +
+        '<button class="ghost" id="catchup-drop-btn" onclick="OAD._catchUpWizard(\'drop\')">Drop via Closure Wizard →</button>' +
+        '<div class="text-muted text-sm" style="flex-basis:100%">This one has open sub-threads or a real dependency, so the wizard asks what happens to them. Reopen Catch Up afterward to continue.</div>' +
+      '</div>'
+    : '<div class="catchup-action">' +
+        '<button class="success" id="catchup-done-btn" onclick="OAD._catchUpAct(\'done\')">✓ Done → next</button>' +
+        '<span class="text-muted text-sm">It happened. Close it.</span>' +
+      '</div>';
 
   OAD.openModal(
     '<div class="modal-header"><h2>Catch Up <span class="text-muted text-sm" id="catchup-remaining">' + queue.length + ' left</span></h2></div>' +
@@ -2991,31 +3070,38 @@ OAD._renderCatchUp = function () {
       '<div class="catchup-reason ' + (item.reason === 'past_deadline' ? 'is-past-deadline' : '') + '">' + OAD.esc(reasonText) + '</div>' +
       (t.next_action ? '<div class="text-sm mt-8"><strong>Next action:</strong> ' + OAD.esc(t.next_action) + '</div>' : '') +
       (t.closing_condition ? '<div class="text-sm mt-8 text-muted"><strong>Closes when:</strong> ' + OAD.esc(t.closing_condition) + '</div>' : '') +
-      (OAD._catchUpError ? '<div class="catchup-error" id="catchup-error">' + OAD.esc(OAD._catchUpError) + '</div>' : '') +
     '</div>' +
     '<div class="catchup-actions">' +
-      '<div class="catchup-action">' +
-        '<button class="success" id="catchup-done-btn" ' + (closeBlock ? 'disabled title="' + OAD.esc(closeBlock) + '"' : '') + ' onclick="OAD._catchUpAct(\'done\')">✓ Done</button>' +
-        '<span class="text-muted text-sm">' + (closeBlock ? OAD.esc(closeBlock) : 'It happened. Close it.') + '</span>' +
+      closeRow + err('close') +
+      '<div class="catchup-section">' +
+        '<div class="text-sm"><strong>Still doing it.</strong> Pick the next action day. Numbers are next actions already on that day. ★ = suggested.</div>' +
+        OAD._catchUpDayChipsHtml(t, d.date) +
+        '<div class="catchup-action">' +
+          '<label class="text-sm" for="catchup-date">Next action</label>' +
+          '<input type="date" id="catchup-date" value="' + OAD.esc(d.date) + '" onkeydown="if (event.key === \'Enter\') OAD._catchUpAct(\'date\')">' +
+          (pastDl
+            ? '<label class="text-sm" for="catchup-deadline">New deadline</label>' +
+              '<input type="date" id="catchup-deadline" value="' + OAD.esc(d.deadline) + '" oninput="OAD._catchUpDraft.deadlineTouched = true" onkeydown="if (event.key === \'Enter\') OAD._catchUpAct(\'date\')" title="The old deadline (' + OAD.esc(t.deadline) + ') has passed. Leave empty for no deadline.">'
+            : '') +
+          '<button class="secondary" id="catchup-date-btn" onclick="OAD._catchUpAct(\'date\')">Reschedule → next</button>' +
+        '</div>' +
+        (pastDl ? '<div class="text-muted text-sm">The old deadline (' + OAD.esc(OAD.formatDate(t.deadline)) + ') has passed, so set a new one, or clear it for no deadline.</div>' : '') +
+        err('date') +
       '</div>' +
       '<div class="catchup-action">' +
-        '<input type="date" id="catchup-date" value="' + OAD._catchUpDefaultDate(t) + '">' +
-        '<button class="secondary" id="catchup-date-btn" onclick="OAD._catchUpAct(\'date\')">New date</button>' +
-        '<span class="text-muted text-sm">Still doing it. When is the next action?</span>' +
-      '</div>' +
+        '<input type="text" id="catchup-trigger" value="' + OAD.esc(d.trigger) + '" placeholder="Not now. What would bring this back?" style="flex:1;min-width:160px" onkeydown="if (event.key === \'Enter\') OAD._catchUpAct(\'park\')">' +
+        '<button class="secondary" id="catchup-park-btn" onclick="OAD._catchUpAct(\'park\')">Park → next</button>' +
+      '</div>' + err('park') +
+      (needsWizard ? '' :
       '<div class="catchup-action">' +
-        '<input type="text" id="catchup-trigger" placeholder="What would bring this back?" style="flex:1;min-width:160px">' +
-        '<button class="secondary" id="catchup-park-btn" onclick="OAD._catchUpAct(\'park\')">Park</button>' +
-      '</div>' +
-      '<div class="catchup-action">' +
-        '<button class="ghost" id="catchup-drop-btn" ' + (closeBlock ? 'disabled title="' + OAD.esc(closeBlock) + '"' : '') + ' onclick="OAD._catchUpAct(\'drop\')">Drop</button>' +
+        '<button class="ghost" id="catchup-drop-btn" onclick="OAD._catchUpAct(\'drop\')">Drop → next</button>' +
         '<span class="text-muted text-sm">Not doing it. Close without claiming it was done.</span>' +
-      '</div>' +
+      '</div>') +
     '</div>' +
     '<div class="modal-footer">' +
       undo +
       '<button class="ghost" onclick="OAD.closeModal(); OAD.selectThread(' + t.id + ');">Open thread</button>' +
-      '<button class="ghost" id="catchup-skip-btn" onclick="OAD._catchUpAct(\'skip\')">Skip for now</button>' +
+      '<button class="ghost" id="catchup-skip-btn" onclick="OAD._catchUpAct(\'skip\')">Skip for now → next</button>' +
       '<button onclick="OAD._closeCatchUp()">Close</button>' +
     '</div>'
   );
@@ -3025,32 +3111,53 @@ OAD._catchUpAct = function (action) {
   var card = document.querySelector('#modal-overlay .catchup-card');
   if (!card) return;
   var uuid = card.getAttribute('data-uuid');
-  OAD._catchUpError = '';
+  OAD._catchUpReadInputs();
+  var d = OAD._catchUpDraft;
+  d.error = ''; d.errorField = '';
   if (action === 'skip') {
     OAD._catchUpSkipped.add(uuid);
+    OAD._catchUpDraft = null;
     OAD._renderCatchUp();
     return;
   }
+  var t = OAD.getThreadByUUID(uuid);
   var op;
   if (action === 'done') op = { type: 'done' };
   else if (action === 'drop') op = { type: 'drop' };
-  else if (action === 'park') {
-    var trig = document.getElementById('catchup-trigger');
-    op = { type: 'park', trigger: trig ? trig.value : '' };
-  } else if (action === 'date') {
-    var d = document.getElementById('catchup-date');
-    op = { type: 'setDate', date: d ? d.value : '' };
+  else if (action === 'park') op = { type: 'park', trigger: d.trigger };
+  else if (action === 'date') {
+    op = { type: 'setDate', date: d.date };
+    if (OAD.Bulk.deadlinePassed(t)) op.newDeadline = d.deadline || '';
   }
   var r = OAD.Bulk.apply([uuid], op, 'Catch Up: ' + OAD.Bulk.describe(op).toLowerCase());
+  var field = action === 'date' ? 'date' : action === 'park' ? 'park' : 'close';
   if (r.skipped.length) {
-    OAD._catchUpError = r.skipped[0].reason;
+    d.error = r.skipped[0].reason; d.errorField = field;
   } else if (r.changed.length) {
     var key = { done: 'done', drop: 'dropped', park: 'parked', date: 'dated' }[action];
     OAD._catchUpStats[key]++;
+    OAD._catchUpDraft = null;
+    // A thread rescheduled to a date that is still in the past stays behind; move past it
+    // rather than showing the same card again.
+    if (OAD.Bulk.catchUpQueue(new Date()).some(function (i) { return i.thread.uuid === uuid; })) OAD._catchUpSkipped.add(uuid);
   } else if (action === 'date') {
-    OAD._catchUpError = 'That is the same date it already has. Pick a later one, or Skip.';
+    d.error = 'That is the date it already has. Pick another day, or Skip.'; d.errorField = 'date';
   }
   OAD._renderCatchUp();
+};
+
+// Threads with open sub-threads or a real dependency close through the existing Closure Wizard
+// (cascade / reparent / transfer decisions live there), not a dead-end disabled button.
+OAD._catchUpWizard = function (action) {
+  var card = document.querySelector('#modal-overlay .catchup-card');
+  if (!card) return;
+  var t = OAD.getThreadByUUID(card.getAttribute('data-uuid'));
+  if (!t) return;
+  OAD._catchUpDraft = null;
+  OAD.closeModal();
+  var patch = action === 'done' ? { status: 'closed', closing_condition_met: true } : { status: 'closed' };
+  var note = action === 'done' ? 'Catch Up: marked done (confirmed by user).' : 'Catch Up: dropped. No longer pursuing; closing condition not met.';
+  OAD.openClosureWizard(t.id, patch, note);
 };
 
 OAD._catchUpUndo = function () {
@@ -3058,7 +3165,7 @@ OAD._catchUpUndo = function () {
   if (!last) return;
   last.entries.forEach(function (e) { OAD._catchUpSkipped.delete(e.uuid); });
   OAD.Bulk.undo();
-  OAD._catchUpError = '';
+  OAD._catchUpDraft = null;
   OAD._renderCatchUp();
 };
 

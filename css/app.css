@@ -1723,3 +1723,16 @@ button.success:hover { opacity: .88; }
 .catchup-done { text-align: center; padding: 24px 8px; }
 .park-list { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 8px; margin: 8px 0; }
 .park-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.catchup-section { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.catchup-days { display: flex; flex-wrap: wrap; gap: 6px; }
+.day-chip { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; min-width: 84px; padding: 5px 8px; font-size: 12px; line-height: 1.25; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer; text-align: left; }
+.day-chip:disabled { opacity: 0.4; cursor: not-allowed; }
+.day-chip-day { font-weight: 700; }
+.day-chip-load { color: var(--text-muted); }
+.day-chip-note { color: var(--medium); font-weight: 600; }
+.day-chip.load-busy { border-color: var(--high); }
+.day-chip.load-heavy { border-color: var(--critical); background: rgba(250, 82, 82, 0.06); }
+.day-chip.load-heavy .day-chip-load { color: var(--critical); font-weight: 700; }
+.day-chip.is-suggested { box-shadow: inset 0 0 0 1px var(--accent); }
+.day-chip.is-selected { background: var(--accent); border-color: var(--accent); color: #fff; }
+.day-chip.is-selected .day-chip-load, .day-chip.is-selected .day-chip-note { color: #fff; }

@@ -33,7 +33,8 @@ OAD.Bulk._lastBatch = null;
 
 OAD.Bulk._SNAPSHOT_FIELDS = [
   'status', 'next_action_date', 'priority', 'dormant_trigger',
-  'date_push_count', 'closing_condition_met', 'user_action_complete'
+  'date_push_count', 'closing_condition_met', 'user_action_complete',
+  'deadline', 'deadline_time'
 ];
 
 OAD.Bulk._addDays = function (dateStr, n) {
@@ -118,6 +119,10 @@ OAD.Bulk._newDateFor = function (t, op) {
   return null;
 };
 
+OAD.Bulk.deadlinePassed = function (t) {
+  return !!(t && t.deadline && t.deadline < OAD.todayStr());
+};
+
 OAD.Bulk.validate = function (t, op) {
   if (!t) return 'Thread not found';
   if (op.type === 'shift' || op.type === 'setDate') {
@@ -126,6 +131,19 @@ OAD.Bulk.validate = function (t, op) {
     if (!newDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDate)) return 'No valid date given';
     if (OAD.Bulk._openChildren(t).length) {
       return 'Bollard rule: a parent thread with open children does not carry its own next action date';
+    }
+    // A deadline that has already passed can no longer constrain the next action date; the
+    // buffer rule would block every possible date. The deadline only moves when the user says
+    // the real-world date has changed, so a new one (or an explicit "no deadline") is required.
+    if (OAD.Bulk.deadlinePassed(t)) {
+      if (op.newDeadline === undefined) {
+        return 'Deadline ' + t.deadline + ' has passed. Set a new deadline (or none) along with the new date; Catch Up asks for it';
+      }
+      if (op.newDeadline && !/^\d{4}-\d{2}-\d{2}$/.test(op.newDeadline)) return 'New deadline is not a valid date';
+      if (op.newDeadline && newDate >= op.newDeadline) {
+        return 'Buffer rule: next action date must stay before the new deadline (' + op.newDeadline + ')';
+      }
+      return null;
     }
     if (t.deadline && newDate >= t.deadline) {
       return 'Buffer rule: next action date must stay before the deadline (' + t.deadline + ')';
@@ -150,10 +168,38 @@ OAD.Bulk.validate = function (t, op) {
 // never makes those decisions silently; it skips the thread and says why.
 OAD.Bulk._closeBlocker = function (t) {
   if (t.status === 'closed') return 'Already closed';
-  if (typeof OAD.needsClosureWizard === 'function' && OAD.needsClosureWizard(t.id)) {
-    return 'Has open sub-threads or active connections; close it from the thread itself so the Closure Wizard can handle them';
+  if (OAD.Bulk.needsWizard(t)) {
+    return 'Has open sub-threads or a real dependency; the Closure Wizard decides what happens to them';
   }
   return null;
+};
+
+// Same question as OAD.needsClosureWizard (js/modals.js), minus one edge kind: the parent ->
+// child "enables" edge that ADE-002 generates for every parent_uuid relationship. That edge is
+// structure, not a dependency; closing a leaf child has nothing to decide about it. Counting it
+// made nearly every child thread unclosable from Catch Up and bulk (found Oct 23 2026 on
+// "Letter to Aunt Shirley", whose only connection was its parent's auto-edge). Open children and
+// every other edge (blocks, blocked_by, relates, non-structural enables) still require the wizard.
+OAD.Bulk._isStructuralParentEdge = function (fromThread, edge, toThread) {
+  return edge.edge_type === 'enables' && toThread && toThread.parent_uuid === fromThread.uuid;
+};
+
+OAD.Bulk.needsWizard = function (t) {
+  var threads = OAD.DB.threads || [];
+  if (OAD.Bulk._openChildren(t).length) return true;
+  var byUuid = {};
+  threads.forEach(function (x) { byUuid[x.uuid] = x; });
+  var outgoing = (t.connections || []).some(function (c) {
+    var target = c.to_uuid && byUuid[c.to_uuid];
+    return target && target.status !== 'closed' && !OAD.Bulk._isStructuralParentEdge(t, c, target);
+  });
+  if (outgoing) return true;
+  return threads.some(function (x) {
+    if (x.uuid === t.uuid || x.status === 'closed') return false;
+    return (x.connections || []).some(function (c) {
+      return c.to_uuid === t.uuid && !OAD.Bulk._isStructuralParentEdge(x, c, t);
+    });
+  });
 };
 
 // ── Apply ───────────────────────────────────────────────────────────────────────────────────
@@ -198,10 +244,17 @@ OAD.Bulk._applyOne = function (t, op) {
   if (op.type === 'shift' || op.type === 'setDate') {
     var from = t.next_action_date;
     var to = OAD.Bulk._newDateFor(t, op);
-    if (from === to) return null;
+    var dlNote = '';
+    if (op.newDeadline !== undefined && OAD.Bulk.deadlinePassed(t)) {
+      var oldDl = t.deadline;
+      t.deadline = op.newDeadline || null;
+      if (!op.newDeadline) t.deadline_time = null;
+      dlNote = '; deadline ' + oldDl + ' -> ' + (op.newDeadline || 'none') + ' (old deadline had passed; new one set by user)';
+    }
+    if (from === to && !dlNote) return null;
     if (from && to > from) t.date_push_count = (t.date_push_count || 0) + 1;
     t.next_action_date = to;
-    return prefix + 'next action date ' + (from || 'none') + ' -> ' + to;
+    return prefix + 'next action date ' + (from || 'none') + ' -> ' + to + dlNote;
   }
   if (op.type === 'priority') {
     if (t.priority === op.priority) return null;
@@ -293,6 +346,53 @@ OAD.Bulk.catchUpQueue = function (now) {
     return (ka || '').localeCompare(kb || '');
   });
   return items;
+};
+
+// ── Smart next date ─────────────────────────────────────────────────────────────────────────
+// The next `days` calendar days with their current load, so rescheduling a backlog does not
+// quietly pile everything onto one day. Load = OAD.calculateDayLoadScore + OAD.getDayLoadLabel,
+// the same definition the dashboard's "This Week's Load" uses, recomputed live, so each
+// reschedule in a Catch Up session shows up on the next card. Nothing is hidden or blocked:
+// weekends are offered with their load. Two notes come from OAD.Config.dayNotes (T.J., Oct 23
+// 2026): Sunday is a rest day for work areas (a note, not a block), and Monday morning is the
+// de facto catch-up day for weekend work that never got recorded, so the suggestion avoids it.
+OAD.Bulk.dayOptions = function (t, now, days) {
+  now = now || new Date();
+  days = days || 7;
+  var cfg = (OAD.Config && OAD.Config.dayNotes) || {};
+  var restAreas = cfg.sundayRestAreas || [];
+  var today = new Date(now.getTime()); today.setHours(0, 0, 0, 0);
+  var todayStr = OAD.Bulk._addDays(OAD.todayStr(), 0);
+  var futureDeadline = t && t.deadline && !OAD.Bulk.deadlinePassed(t) ? t.deadline : null;
+  var raw = OAD.Due.activeThreadsRaw();
+  var out = [];
+  for (var i = 0; i < days; i++) {
+    var ds = OAD.Bulk._addDays(todayStr, i);
+    var dow = new Date(ds + 'T12:00:00').getDay();
+    var count = raw.filter(function (x) { return x.next_action_date === ds && (!t || x.uuid !== t.uuid); }).length;
+    var label = OAD.getDayLoadLabel(OAD.calculateDayLoadScore(ds));
+    var notes = [];
+    if (dow === 0 && t && restAreas.indexOf(t.life_area) !== -1) notes.push(cfg.sundayRestNote || 'Sunday rest');
+    if (dow === 1 && cfg.mondayCatchUp) notes.push(cfg.mondayCatchUpNote || 'catch-up day');
+    out.push({
+      date: ds,
+      dow: dow,
+      count: count,
+      load: label,
+      notes: notes,
+      afterDeadline: !!(futureDeadline && ds >= futureDeadline)
+    });
+  }
+  // Suggestion: earliest Clear day with no note, inside the deadline. Falls back to the
+  // earliest Clear day, then to nothing (the user picks).
+  var ok = out.filter(function (o) { return !o.afterDeadline && o.load === 'clear'; });
+  var pick = ok.filter(function (o) { return !o.notes.length; })[0] || ok[0] || null;
+  out.forEach(function (o) { o.suggested = !!(pick && o.date === pick.date); });
+  return out;
+};
+
+OAD.Bulk.suggestedDeadline = function (t, nextDate) {
+  return OAD.Bulk._addDays(nextDate, OAD._cheLeadDays(t));
 };
 
 // ── Park / Reactivate Bollard ───────────────────────────────────────────────────────────────
