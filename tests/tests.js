@@ -2658,6 +2658,7 @@ OAD._initApp = async function () {
         const res = await fetch('/modules/demo/demo_data.json');
         if (res.ok) {
           OAD.DB = await res.json();
+          OAD.DB._demo_seeded = true;
           OAD._normalizeDB();
           OAD.saveDB();
         } else {
@@ -2682,11 +2683,29 @@ OAD._initApp = async function () {
 // Called after successful auth to load cloud data (or seed if none), then render.
 OAD._bootAfterAuth = async function () {
   let cloudLoaded = false;
-  if (sessionStorage.getItem('oad_fresh_demo_seed_required')) {
+  // The demo "fresh instance" flag (set by index.html when a browser has never seen the demo
+  // BootID) used to skip the cloud load for ANY signed-in user, so a real account got demo data
+  // seeded and saved over its row (Oct 23 2026 incident). It now applies to demo identities only;
+  // a real account always loads its own data.
+  const freshDemoSeed = sessionStorage.getItem('oad_fresh_demo_seed_required');
+  sessionStorage.removeItem('oad_fresh_demo_seed_required');
+  if (freshDemoSeed && OAD._isDemoIdentity(OAD._userId)) {
     console.log('[OAD] Fresh demo seed required. Bypassing cloud load to force re-hydration.');
-    sessionStorage.removeItem('oad_fresh_demo_seed_required');
   } else {
+    if (freshDemoSeed) console.warn('[OAD] Ignoring demo fresh-seed flag: signed in as a real account. Loading your cloud data.');
     cloudLoaded = await OAD._loadFromCloud();
+  }
+
+  // A failed read must never be treated as "new account". Before this, it fell through to an
+  // empty or demo DB that was then saved over the real row. Now the session renders empty and
+  // read-only, and says so.
+  if (!cloudLoaded && OAD._cloudLoadState === 'error') {
+    OAD._savesBlockedReason = 'Your data could not be loaded from the cloud, so this session is read-only and nothing will be saved. Reload in a minute.';
+    OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
+    OAD._normalizeDB();
+    OAD._showDataSafetyBanner(OAD._savesBlockedReason);
+    OAD._finishBoot();
+    return;
   }
 
   if (!cloudLoaded) {
@@ -2714,6 +2733,7 @@ OAD._bootAfterAuth = async function () {
             dataObj = await res.json();
           }
           OAD.DB = JSON.parse(JSON.stringify(dataObj));
+          OAD.DB._demo_seeded = true; // never writable to a non-demo account (see _cloudSaveBlocker)
           OAD.DB.lastError = "FETCH SUCCESS. Parsed threads array length: " + (OAD.DB.threads ? OAD.DB.threads.length : 'null');
           OAD._normalizeDB();
           OAD.saveDB(); // Persist auto-loaded demo data to localStorage
@@ -6646,6 +6666,124 @@ OAD.test('Bulk done: a parent selected together with all its open children close
     OAD._assert([p, c1, c2].every(t => t.status === 'closed' && t.closing_condition_met === true), 'all closed as done');
     OAD.Bulk.undo();
     OAD._assert([p, c1, c2].every(t => t.status === 'open'), 'one undo reopens all three');
+  });
+});
+
+// ── Data-safety guards: replays of the Oct 23 2026 overwrite incident ─────────────────────
+function _fakeSupabase(row, opts) {
+  opts = opts || {};
+  var writes = [];
+  return {
+    writes: writes,
+    from: function () {
+      return {
+        select: function () { return { eq: function () { return { single: async function () {
+          if (opts.readError) return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+          return row ? { data: { db: JSON.parse(JSON.stringify(row)) }, error: null } : { data: null, error: { code: 'PGRST116' } };
+        } }; } }; },
+        upsert: async function (payload) { writes.push(JSON.parse(JSON.stringify(payload))); return { error: null, status: 201 }; }
+      };
+    }
+  };
+}
+
+async function _withBootSandbox(fn) {
+  var saved = { supabase: OAD.supabase, userId: OAD._userId, db: OAD.DB, demo: window.OAD_DEMO_DATA, demoMode: OAD.Config.demoMode,
+    finish: OAD._finishBoot, persist: OAD._DB_PERSIST, blocked: OAD._savesBlockedReason, base: OAD._cloudBaselineCount,
+    state: OAD._cloudLoadState, allow: OAD._allowShrink, cfg: OAD.DemoConfig, sweeps: [OAD._runJune16DedupV2, OAD._runJune16PatchV1, OAD._runJuly2Cac102EdgeTypeFixV1] };
+  OAD._finishBoot = function () {};
+  OAD._runJune16DedupV2 = OAD._runJune16PatchV1 = OAD._runJuly2Cac102EdgeTypeFixV1 = function () {};
+  OAD._DB_PERSIST = false;
+  try { await fn(); } finally {
+    OAD.supabase = saved.supabase; OAD._userId = saved.userId; OAD.DB = saved.db; window.OAD_DEMO_DATA = saved.demo;
+    OAD.Config.demoMode = saved.demoMode; OAD._finishBoot = saved.finish; OAD._DB_PERSIST = saved.persist;
+    OAD._savesBlockedReason = saved.blocked; OAD._cloudBaselineCount = saved.base; OAD._cloudLoadState = saved.state;
+    OAD._allowShrink = saved.allow; OAD.DemoConfig = saved.cfg;
+    OAD._runJune16DedupV2 = saved.sweeps[0]; OAD._runJune16PatchV1 = saved.sweeps[1]; OAD._runJuly2Cac102EdgeTypeFixV1 = saved.sweeps[2];
+    sessionStorage.removeItem('oad_fresh_demo_seed_required');
+    var b = document.getElementById('data-safety-banner'); if (b) b.remove();
+  }
+}
+
+function _realRow(n) {
+  var threads = [];
+  for (var i = 0; i < n; i++) threads.push(OAD.makeThread({ id: i + 1, uuid: 'real-' + i, title: 'Real thread ' + i, status: 'open' }));
+  return { threads: threads, persona: { life_context: {} } };
+}
+
+OAD.test('data safety: _isDemoIdentity is true only for demo- ids and DemoConfig role ids', function () {
+  var cfg = OAD.DemoConfig;
+  try {
+    OAD.DemoConfig = { roles: [{ role: 'Counselor', userId: 'feb508c3-demo-role' }] };
+    OAD._assertEqual(OAD._isDemoIdentity('demo-superadmin-id'), true);
+    OAD._assertEqual(OAD._isDemoIdentity('feb508c3-demo-role'), true);
+    OAD._assertEqual(OAD._isDemoIdentity('dbec4f88-9573-433a-8571-baf637049ceb'), false, 'a real account is not a demo identity');
+    OAD._assertEqual(OAD._isDemoIdentity(null), false);
+  } finally { OAD.DemoConfig = cfg; }
+});
+
+OAD.test('data safety (incident replay 1): demo fresh-seed flag + real account loads the REAL cloud data and never writes demo data', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-9573-433a-8571-baf637049ceb'; OAD.DemoConfig = null;
+    OAD.Config.demoMode = true;
+    window.OAD_DEMO_DATA = { threads: [OAD.makeThread({ uuid: 'demo-1', title: '[RA] Bed check - GenClient 62ed' })] };
+    sessionStorage.setItem('oad_fresh_demo_seed_required', 'true');
+    await OAD._bootAfterAuth();
+    OAD._assertEqual(OAD.DB.threads.filter(t => /^real-/.test(t.uuid)).length, 554, 'all 554 real threads loaded, demo seed ignored for a real account (count, ' + OAD.DB.threads.length + ' total incl. any default habit/idea seeds)');
+    OAD._assertEqual(OAD.DB.threads.filter(t => /GenClient/.test(t.title)).length, 0, 'no demo thread in memory');
+    OAD._assert(!fake.writes.some(w => (w.db.threads || []).some(t => /GenClient/.test(t.title))), 'demo data never written');
+    OAD._assertEqual(sessionStorage.getItem('oad_fresh_demo_seed_required'), null, 'flag consumed');
+  });
+});
+
+OAD.test('data safety: even if demo data is in memory, a save to a real account is refused and bannered', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(null);
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null;
+    OAD.DB = { threads: [OAD.makeThread({ title: '[RA] Bed check' })], _demo_seeded: true, persona: {} };
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, 'no write');
+    OAD._assert(/demo data/.test(document.getElementById('data-safety-banner').textContent), 'red banner explains it');
+    OAD._userId = 'demo-superadmin-id';
+    OAD._assertEqual(OAD._cloudSaveBlocker(OAD.DB, 'demo-superadmin-id'), null, 'a demo identity may still save demo data');
+  });
+});
+
+OAD.test('data safety (incident replay 2): a FAILED cloud read at boot makes the session read-only instead of saving an empty or demo DB', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554), { readError: true });
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null;
+    OAD.Config.demoMode = true;
+    window.OAD_DEMO_DATA = { threads: [OAD.makeThread({ title: '[RA] Bed check' })] };
+    await OAD._bootAfterAuth();
+    OAD._assertEqual(OAD._cloudLoadState, 'error');
+    OAD._assertEqual(fake.writes.length, 0, 'boot wrote nothing');
+    OAD.DB.threads.push(OAD.makeThread({ title: 'typed during a failed session' }));
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, 'later saves in that session are refused too');
+    OAD._assert(/read-only/.test(document.getElementById('data-safety-banner').textContent), 'banner says read-only');
+  });
+});
+
+OAD.test('data safety: shrink guard refuses a save that drops more than half the threads, until explicitly allowed once', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    await OAD._loadFromCloud();
+    OAD._assertEqual(OAD._cloudBaselineCount, 554);
+    OAD.DB.threads = OAD.DB.threads.slice(0, 46);
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, '554 -> 46 refused');
+    OAD._assert(/554 to 46/.test(document.getElementById('data-safety-banner').textContent), 'banner names the numbers');
+    OAD.allowShrinkOnce();
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 1, 'allowed once after explicit permission');
+    OAD._assertEqual(OAD._cloudBaselineCount, 46, 'baseline follows the successful save');
+    OAD._assertEqual(OAD._allowShrink, false, 'permission is single-use');
+    OAD.DB.threads = OAD.DB.threads.slice(0, 40);
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 2, 'normal small changes are unaffected');
   });
 });
 

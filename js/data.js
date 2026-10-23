@@ -1937,6 +1937,7 @@ OAD.loadDB = function () {
   if (OAD.isEnterpriseMode()) {
     if (window.OAD_DEMO_DATA) {
       OAD.DB = window.OAD_DEMO_DATA;
+      OAD.DB._demo_seeded = true; // never writable to a non-demo account (see _cloudSaveBlocker)
       OAD._normalizeDB();
       return true;
     }
@@ -1949,6 +1950,7 @@ OAD.loadDB = function () {
       data = JSON.parse(raw);
     } else if (window.OAD_DEMO_DATA) {
       data = window.OAD_DEMO_DATA;
+      data._demo_seeded = true;
       OAD.DB = data;
       OAD._normalizeDB();
       OAD.saveDB(); // save to localStorage for next time
@@ -1987,14 +1989,75 @@ window.addEventListener('beforeunload', function (e) {
   }
 });
 
+// ── Data-safety guards (Oct 23 2026) ────────────────────────────────────────────────────────
+// Incident: a fresh browser context tripped index.html's demo "fresh instance" wipe; boot then
+// skipped the real user's cloud load, seeded demo data, and _saveToCloud wrote it over the real
+// user's row (554 threads replaced by 46 demo threads; the project has no backups). Every save
+// writes the WHOLE database, so any wrong in-memory DB is one save away from replacing real data.
+// These guards sit at the single write point, so they hold no matter which path produced the bad
+// state:
+//   1. Demo-seeded data is never written to a non-demo account.
+//   2. If the cloud read failed at boot, nothing is written at all this session (a failed read
+//      used to fall through to an empty or demo DB, which was then saved over the real row).
+//   3. Shrink guard: a save that would drop more than half the threads the cloud last held is
+//      refused until the user explicitly allows it once (OAD.allowShrinkOnce()).
+// Refusals are loud: console.error plus a red banner, never a silent console.warn.
+OAD._isDemoIdentity = function (uid) {
+  if (!uid) return false;
+  if (uid.indexOf('demo-') === 0) return true;
+  var cfg = window.OAD && OAD.DemoConfig;
+  return !!(cfg && Array.isArray(cfg.roles) && cfg.roles.some(function (r) { return r && r.userId === uid; }));
+};
+
+OAD._cloudBaselineCount = null;   // thread count the cloud last held (set on load and on each successful save)
+OAD._savesBlockedReason = null;   // set when this session must not write at all
+OAD._allowShrink = false;
+
+OAD.allowShrinkOnce = function () { OAD._allowShrink = true; return 'Next save may shrink the database. Make a change or call OAD.saveDB().'; };
+
+OAD._showDataSafetyBanner = function (msg) {
+  console.error('[OAD] DATA SAFETY: ' + msg);
+  if (typeof document === 'undefined' || !document.body) return;
+  var el = document.getElementById('data-safety-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'data-safety-banner';
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#c92a2a;color:#fff;padding:10px 16px;font:600 14px/1.4 Inter,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+    document.body.appendChild(el);
+  }
+  el.textContent = 'NOT SAVED: ' + msg;
+};
+
+// Returns null when the save may proceed, or the reason it must not.
+OAD._cloudSaveBlocker = function (db, uid) {
+  if (OAD._savesBlockedReason) return OAD._savesBlockedReason;
+  if (db && db._demo_seeded && !OAD._isDemoIdentity(uid)) {
+    return 'This session holds demo data but you are signed in to a real account. Saving would replace your real data, so it was blocked. Close this tab.';
+  }
+  var count = db && Array.isArray(db.threads) ? db.threads.length : 0;
+  var base = OAD._cloudBaselineCount;
+  if (base != null && base >= 20 && count < base * 0.5 && !OAD._allowShrink) {
+    return 'This save would shrink your database from ' + base + ' to ' + count + ' threads. Blocked as a possible wipe. If that is really intended, run OAD.allowShrinkOnce() in the console and save again.';
+  }
+  return null;
+};
+
 OAD._saveToCloud = async function () {
   if (OAD._userId && OAD._userId.startsWith('demo-')) return; // bypass mock demo users
+  var blocked = OAD._cloudSaveBlocker(OAD.DB, OAD._userId);
+  if (blocked) { OAD._showDataSafetyBanner(blocked); return; }
   OAD._pendingCloudSaves++;
   try {
     var { error } = await OAD.supabase
       .from('user_data')
       .upsert({ user_id: OAD._userId, db: OAD.DB });
-    if (error) console.warn('[OAD] cloud save failed:', error.message);
+    if (error) {
+      console.warn('[OAD] cloud save failed:', error.message);
+    } else {
+      OAD._cloudBaselineCount = (OAD.DB.threads || []).length;
+      OAD._allowShrink = false;
+    }
   } catch (e) {
     console.warn('[OAD] cloud save error:', e);
   } finally {
@@ -2002,7 +2065,13 @@ OAD._saveToCloud = async function () {
   }
 };
 
+// Sets OAD._cloudLoadState to 'loaded' | 'empty' (no row, or no threads) | 'error' (the read
+// itself failed). The return value stays true/false for existing callers; _bootAfterAuth reads
+// the state to tell "new account" apart from "could not read", which used to look identical.
+OAD._cloudLoadState = null;
+
 OAD._loadFromCloud = async function () {
+  OAD._cloudLoadState = null;
   if (OAD._userId && OAD._userId.startsWith('demo-')) return false; // bypass mock demo users
   try {
     var { data, error } = await OAD.supabase
@@ -2012,6 +2081,7 @@ OAD._loadFromCloud = async function () {
       .single();
     if (error && error.code !== 'PGRST116') { // PGRST116 = row not found
       console.warn('[OAD] cloud load failed:', error.message);
+      OAD._cloudLoadState = 'error';
       return false;
     }
     if (data && data.db && Array.isArray(data.db.threads)) {
@@ -2021,14 +2091,19 @@ OAD._loadFromCloud = async function () {
       }
       OAD.DB = data.db;
       OAD.DB.lastError = 'LOADED_FROM_CLOUD';
+      OAD._cloudLoadState = 'loaded';
+      OAD._cloudBaselineCount = data.db.threads.length;
       OAD._normalizeDB();
       // Keep localStorage in sync as local cache
       OAD.saveDB();
       return true;
     }
+    if (data && data.db && Array.isArray(data.db.threads)) OAD._cloudBaselineCount = data.db.threads.length;
+    OAD._cloudLoadState = 'empty';
     return false; // no cloud data yet
   } catch (e) {
     console.warn('[OAD] cloud load error:', e);
+    OAD._cloudLoadState = 'error';
     return false;
   }
 };
