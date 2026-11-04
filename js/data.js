@@ -202,11 +202,24 @@ OAD.addThread = function (thread) {
 // Quick Add — zero-friction capture. Raw text only, no synthesis, no LLM call, instant save.
 // Creates a minimal thread with status "inbox" so it stays out of pressure-sorted views,
 // Focus Now, and Daily View until reviewed. Returns null on empty/whitespace-only input.
+// Kept synchronous (not async) on purpose: OAD.submitQuickAdd (js/render.js) needs the created
+// thread, or null for an empty input, back immediately, not a Promise. addThread and
+// addEvolution used to each fire their own independent saveDB() call; suppressed here and
+// replaced with one, same as OAD.updateThreadAndLog. The real cloud save underneath is still
+// fire-and-forget from this function's point of view, as it always was; OAD._saveToCloudQueued
+// (js/data.js, OAD.saveDB) is what keeps it from racing a second quick Quick Add.
 OAD.quickAddThread = function (rawText) {
   var title = (rawText || '').trim();
   if (!title) return null;
-  var thread = OAD.addThread(OAD.makeThread({ title: title, status: 'inbox' }));
-  OAD.addEvolution(thread.id, 'Captured via Quick Add.');
+  OAD._suppressSaveDB = true;
+  var thread;
+  try {
+    thread = OAD.addThread(OAD.makeThread({ title: title, status: 'inbox' }));
+    OAD.addEvolution(thread.id, 'Captured via Quick Add.');
+  } finally {
+    OAD._suppressSaveDB = false;
+  }
+  OAD.saveDB();
   return thread;
 };
 
@@ -1974,6 +1987,29 @@ OAD._saveLocalCache = function () {
   }
 };
 
+// Write-safety-phase1 follow-up: serializes real cloud saves from this tab. Two saveDB() calls
+// fired back to back with neither awaited (the exact shape the old OAD.quickAddThread had:
+// OAD.addThread then OAD.addEvolution, each saving on its own) both read OAD._cloudVersion
+// before either one's result came back to update it, so both sent the same
+// p_expected_version. The server can only accept one as a match; the other came back as
+// version_conflict, a self-inflicted lockout with no other writer involved at all (confirmed
+// in production: a single-tab Quick Add did not persist, and the row's version advanced by 2,
+// the other half of the pair having conflicted and been dropped). Chaining every call onto the
+// tail of the previous one means a save never starts until the one before it has fully settled,
+// so it always reads the version that one actually landed at, not the version that was current
+// before it ran. This only orders THIS tab's own saves against each other; it has no way to
+// know about a genuinely different session's version, so cross-session conflict detection is
+// unchanged, see the "stale session" test next to the "two unawaited saves" test above.
+OAD._saveQueueTail = Promise.resolve();
+
+OAD._saveToCloudQueued = function () {
+  var result = OAD._saveQueueTail.then(function () { return OAD._saveToCloud(); });
+  // The queue itself must never reject, or every later save chained onto it would throw too;
+  // each attempt's own ok/error/conflict is still returned to its own caller via `result`.
+  OAD._saveQueueTail = result.catch(function () {});
+  return result;
+};
+
 OAD.saveDB = function () {
   if (OAD._suppressSaveDB) return Promise.resolve({ ok: true, suppressed: true });
   if (!OAD._DB_PERSIST) return Promise.resolve({ ok: true });
@@ -1986,7 +2022,7 @@ OAD.saveDB = function () {
   // otherwise) instead of assuming every save landed. See _saveToCloud's pending-save tracking
   // below for how a hard refresh under Enterprise Mode (no synchronous local-cache fallback to
   // land on) is protected against racing ahead of this.
-  if (OAD.supabase && OAD._userId) return OAD._saveToCloud();
+  if (OAD.supabase && OAD._userId) return OAD._saveToCloudQueued();
   return Promise.resolve({ ok: true });
 };
 

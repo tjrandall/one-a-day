@@ -6732,6 +6732,10 @@ async function _withBootSandbox(fn) {
   OAD._finishBoot = function () {};
   OAD._runJune16DedupV2 = OAD._runJune16PatchV1 = OAD._runJuly2Cac102EdgeTypeFixV1 = function () {};
   OAD._DB_PERSIST = false;
+  // Fresh per-tab save queue for every sandboxed test, so an unawaited save left over from a
+  // prior test (there should not be any, since every test awaits its own saves, but this is
+  // zero-cost insurance) can never delay or interleave with this test's own queued saves.
+  OAD._saveQueueTail = Promise.resolve();
   // A prior test's OAD.addThread/addEvolution call can leave the debounced inbox-sentinel
   // sweep (js/data.js, _afterSaveCallbacks, 50ms setTimeout) still pending. Left alone, it
   // fires mid-sandbox against whatever fake Supabase THIS test just installed, an extra,
@@ -6969,6 +6973,60 @@ OAD.test('write safety: closing a thread through the collapsed status+log path p
     var saved = fake.writes[0].db.threads.find(function (x) { return x.id === t.id; });
     OAD._assertEqual(saved.status, 'closed', 'status change present in the single save');
     OAD._assert(saved.evolution_log.some(function (e) { return e.note === 'Completed: did the thing, thread closed.'; }), 'log entry present in the same save');
+  });
+});
+
+// ── Write-safety-phase1 follow-up: self-conflict from two unawaited saves in one tab ───────
+// Production report: a single-tab Quick Add did not persist, and the row's version advanced
+// by 2. OAD.quickAddThread fires OAD.addThread then OAD.addEvolution, each saving on its own
+// without awaiting the other, so both read OAD._cloudVersion before either one's result came
+// back and updated it. Both saves then sent the SAME p_expected_version, so the server can
+// only accept one of the two as a match; the other is rejected as version_conflict, which also
+// sets OAD._savesBlockedReason and blocks every later save this session, a self-inflicted
+// lockout with no other writer involved at all.
+
+OAD.test('write safety: two unawaited saves fired back to back from one session both succeed, no self-conflict', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true;
+    await OAD._loadFromCloud();
+
+    OAD.DB.threads.push(OAD.makeThread({ uuid: 'qa-1', title: 'First change' }));
+    var p1 = OAD.saveDB(); // not awaited, same shape as the old OAD.quickAddThread's two calls
+    OAD.DB.threads.push(OAD.makeThread({ uuid: 'qa-2', title: 'Second change' }));
+    var p2 = OAD.saveDB(); // fired immediately after, also not awaited
+
+    var r1 = await p1;
+    var r2 = await p2;
+
+    OAD._assertEqual(r1.ok, true, 'first save succeeds');
+    OAD._assertEqual(r2.ok, true, 'second save succeeds too, not rejected as a self-inflicted conflict');
+    OAD._assertEqual(fake.writes.length, 2, 'both saves actually landed, one after the other');
+    OAD._assertEqual(fake.serverVersion(), 3, 'version advanced by exactly 2, one per real save, no lockout');
+    OAD._assertEqual(OAD._savesBlockedReason, null, 'this session is not blocked afterward');
+    var last = fake.writes[fake.writes.length - 1];
+    OAD._assert(last.db.threads.some(function (t) { return t.uuid === 'qa-1'; }) && last.db.threads.some(function (t) { return t.uuid === 'qa-2'; }), 'the final state carries both changes');
+  });
+});
+
+OAD.test('write safety: serializing same-session saves does not weaken cross-session conflict detection', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true;
+    await OAD._loadFromCloud();
+
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Session A change' }));
+    var saveA = await OAD.saveDB();
+    OAD._assertEqual(saveA.ok, true, 'session A saves cleanly');
+
+    // A genuinely separate, stale session: loaded before session A's save, never refreshed.
+    OAD._cloudVersion = 1;
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Stale session change, should be rejected' }));
+    var saveB = await OAD.saveDB();
+    OAD._assertEqual(saveB.ok, false, 'a genuinely stale session is still rejected');
+    OAD._assert(saveB.conflict, 'still reported as a version conflict, serialization only orders this tab\'s own saves');
   });
 });
 
