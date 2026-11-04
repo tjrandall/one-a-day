@@ -202,11 +202,24 @@ OAD.addThread = function (thread) {
 // Quick Add — zero-friction capture. Raw text only, no synthesis, no LLM call, instant save.
 // Creates a minimal thread with status "inbox" so it stays out of pressure-sorted views,
 // Focus Now, and Daily View until reviewed. Returns null on empty/whitespace-only input.
+// Kept synchronous (not async) on purpose: OAD.submitQuickAdd (js/render.js) needs the created
+// thread, or null for an empty input, back immediately, not a Promise. addThread and
+// addEvolution used to each fire their own independent saveDB() call; suppressed here and
+// replaced with one, same as OAD.updateThreadAndLog. The real cloud save underneath is still
+// fire-and-forget from this function's point of view, as it always was; OAD._saveToCloudQueued
+// (js/data.js, OAD.saveDB) is what keeps it from racing a second quick Quick Add.
 OAD.quickAddThread = function (rawText) {
   var title = (rawText || '').trim();
   if (!title) return null;
-  var thread = OAD.addThread(OAD.makeThread({ title: title, status: 'inbox' }));
-  OAD.addEvolution(thread.id, 'Captured via Quick Add.');
+  OAD._suppressSaveDB = true;
+  var thread;
+  try {
+    thread = OAD.addThread(OAD.makeThread({ title: title, status: 'inbox' }));
+    OAD.addEvolution(thread.id, 'Captured via Quick Add.');
+  } finally {
+    OAD._suppressSaveDB = false;
+  }
+  OAD.saveDB();
   return thread;
 };
 
@@ -286,6 +299,26 @@ OAD.addEvolution = function (id, note) {
   if (!t) return;
   t.evolution_log.push({ date: OAD.todayStr(), note });
   OAD.saveDB();
+};
+
+// Applies a field patch and an evolution_log note as one save, not two. Before this, a status
+// change and the log note explaining it went through OAD.updateThread then a separate
+// OAD.addEvolution, each firing its own independent saveDB() call (see private design notes
+// (fq-personal)). Both calls still run their normal logic (next_action_updated_at stamping, the
+// inbox-to-open correction, the evolution_log push); only the network write is deferred and
+// collapsed into one. Used anywhere a status patch and its log note are applied together: the
+// Closure Wizard confirm, the regular Edit Thread "close" save, and the quick-complete flow.
+OAD.updateThreadAndLog = async function (id, patch, note) {
+  OAD._suppressSaveDB = true;
+  var t;
+  try {
+    t = OAD.updateThread(id, patch);
+    if (note) OAD.addEvolution(id, note);
+  } finally {
+    OAD._suppressSaveDB = false;
+  }
+  await OAD.saveDB();
+  return t;
 };
 
 // Mechanical evidence log — one row per raw signal (a pushback, a detected stall), never itself
@@ -430,7 +463,7 @@ OAD.sweepInboxSentinel = function () {
     OAD.addThread(OAD.makeThread({
       uuid: OAD._INBOX_SENTINEL_UUID,
       title: title,
-      life_area: 'System',
+      life_area: OAD.Config.defaultLifeArea, // app-managed thread; there is no System area anymore
       status: 'open',
       priority: priority,
       parent_uuid: null,
@@ -493,7 +526,7 @@ OAD.makeThread = function (overrides) {
     owner_id: OAD.DEFAULT_OWNER_ID, // multi-tenancy hook — see OAD.DEFAULT_OWNER_ID's comment
     created_at: new Date().toISOString(),
     title: '',
-    life_area: 'Other',
+    life_area: OAD.Config.defaultLifeArea,
     status: 'open',
     priority: 'medium',
     closing_condition: '',
@@ -590,6 +623,15 @@ OAD.makeCadence = function (overrides) {
   }, overrides));
 };
 
+// normalizeLifeArea (js/config.js) only fixes casing/spelling, so a brand-new area typed in
+// Settings is never renamed. migrateLifeArea additionally maps retired area names
+// (OAD.Config.retiredLifeAreas) to their current area; it runs on stored and imported data only.
+OAD.migrateLifeArea = function (area) {
+  var a = OAD.normalizeLifeArea(area);
+  var retired = OAD.Config.retiredLifeAreas || {};
+  return retired[a.toLowerCase()] || a;
+};
+
 OAD.addCadence = function (cadence) {
   cadence.life_area = OAD.normalizeLifeArea(cadence.life_area);
   return OAD.addThread(cadence);
@@ -669,7 +711,7 @@ OAD.bulkImport = function (arr) {
     if (OAD.DB.threads.some(function (t) { return t.title === title; })) return;
     OAD.addThread(OAD.makeThread({
       title:                    title,
-      life_area:               (r.lifeArea             || r.life_area            || 'Other').toLowerCase(),
+      life_area:               (r.lifeArea             || r.life_area            || OAD.Config.defaultLifeArea),
       status:                   r.status               || 'open',
       priority:                 r.priority             || 'medium',
       closing_condition:        r.closingCondition     || r.closing_condition    || '',
@@ -851,8 +893,20 @@ OAD._IMPORT_FIELDS = [
   'recurrence', 'days_of_week', 'last_completed', 'next_due', 'consequences'
 ];
 
-OAD.applyImport = function (results, confirmedUpdates, confirmedDeleteIds) {
+// Returns { created, updated, closed, deleted, edges_merged, saveOk, saveConflict, saveError }.
+// Every row-level mutation below used to call OAD.updateThread/addEvolution/addThread/
+// deleteThread directly, each of which fires its own independent saveDB(), so an import of N
+// rows fired on the order of 2N unbatched, unawaited cloud writes (see private design notes
+// (fq-personal)). Per-row saves are now suppressed for the whole function and replaced
+// with exactly one real, awaited save at the end, the same batching principle OAD.Bulk.apply
+// already uses (js/bulk.js:25-30, 268-304). saveOk tells the caller whether that one save
+// actually landed; a false value means every row above is correct in memory, but the cloud
+// was NOT updated, no partial write happened.
+OAD.applyImport = async function (results, confirmedUpdates, confirmedDeleteIds) {
   var created = 0, updated = 0, closed = 0, deleted = 0;
+
+  OAD._suppressSaveDB = true;
+  try {
 
   // Close threads flagged in deleted_uuids — cadences (thread_kind:'cadence') hard-delete
   // instead of closing, preserving the original cadence-specific semantic (no "reopen a deleted
@@ -882,7 +936,7 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedDeleteIds) {
       owner_id:                 row.owner_id                 || OAD.DEFAULT_OWNER_ID,
       status:                   row.status                   || 'open',
       priority:                 row.priority                 || 'medium',
-      life_area:                row.life_area                || 'Other',
+      life_area:                row.life_area                || OAD.Config.defaultLifeArea,
       parent_uuid:              row.parent_uuid              || null,
       closing_condition:        row.closing_condition        || '',
       closing_condition_type:   row.closing_condition_type   || 'outcome',
@@ -1011,15 +1065,22 @@ OAD.applyImport = function (results, confirmedUpdates, confirmedDeleteIds) {
     }
   });
 
-  // No separate cadence create/update/delete block anymore — per
+  // No separate cadence create/update/delete block anymore, per
   // ticket-flowqueue-data-model-migration.md Step 4, a cadence-shaped row already flowed through
   // results.create/confirmedUpdates above (matched by uuid like any other thread), and deletion
   // is handled in the results.close loop above (branches to a real delete for thread_kind:
   // 'cadence').
 
-  OAD.saveDB();
+  } finally {
+    OAD._suppressSaveDB = false;
+  }
+
+  var saveResult = await OAD.saveDB();
   return {
-    created: created, updated: updated, closed: closed, deleted: deleted, edges_merged: edgesMerged
+    created: created, updated: updated, closed: closed, deleted: deleted, edges_merged: edgesMerged,
+    saveOk: !!(saveResult && saveResult.ok),
+    saveConflict: !!(saveResult && saveResult.conflict),
+    saveError: (saveResult && (saveResult.error || saveResult.reason)) || null
   };
 };
 
@@ -1358,8 +1419,15 @@ OAD.exportDevDiagnostic = function () {
     };
   });
 
+  // Parents with open children are bollards; the bollard rule keeps them undated on purpose.
+  var openParentUUIDs = {};
+  (OAD.DB.threads || []).forEach(function (t) {
+    if (t.parent_uuid && t.status !== 'closed') openParentUUIDs[t.parent_uuid] = true;
+  });
   base.data_hygiene_warnings = (OAD.DB.threads || [])
-    .reduce(function (all, t) { return all.concat(OAD.TemporalStatus.dataHygieneWarnings(t, now)); }, []);
+    .reduce(function (all, t) {
+      return all.concat(OAD.TemporalStatus.dataHygieneWarnings(t, now, undefined, { hasOpenChildren: !!openParentUUIDs[t.uuid] }));
+    }, []);
   base.che_alerts = cheAlerts;
   base.toat_diagnostic = OAD._toatDiagnostic();
   base.focus_now_diagnostic = OAD._focusNowDiagnostic();
@@ -1569,7 +1637,7 @@ OAD._normalizeDB = function () {
       t.status = 'open';
       t.evolution_log.push({ date: OAD.todayStr(), note: 'Status auto-corrected from inbox to open: thread has a parent, attaching is itself an act of triage.' });
     }
-    t.life_area = OAD.normalizeLifeArea(t.life_area);
+    t.life_area = OAD.migrateLifeArea(t.life_area);
     // Backfill days_of_week for cadences created before weekly-days support existed. Harmless
     // for non-cadence threads — same neutral empty-array default OAD.makeThread already gives
     // every thread. life_area normalization above already covers cadences too now that they're
@@ -1896,8 +1964,18 @@ OAD.isEnterpriseMode = function () {
   return isDemo || localStorage.getItem('oad_enterprise_mode') === 'true';
 };
 
-OAD.saveDB = function () {
-  if (!OAD._DB_PERSIST) return Promise.resolve();
+// Write-safety-phase1: set true around a batch of mutations (an import, a wizard close that
+// applies a status patch and a log note) so each individual OAD.updateThread/addEvolution/
+// addThread/deleteThread call in that batch skips its own saveDB() entirely, local and cloud
+// both. The caller clears the flag and calls OAD.saveDB() itself exactly once, after the whole
+// batch. Always restore this in a finally block; leaving it true would silently stop all saves.
+OAD._suppressSaveDB = false;
+
+// Split out of OAD.saveDB so OAD._loadFromCloud can refresh the local cache after a fresh
+// read without also re-pushing that exact, unmodified data back to the cloud (see the comment
+// on that call site). Not suppression-gated on its own; callers that want suppression honored
+// go through OAD.saveDB.
+OAD._saveLocalCache = function () {
   try {
     if (!OAD.isEnterpriseMode()) {
       localStorage.setItem(OAD._DB_KEY, JSON.stringify(OAD.DB));
@@ -1907,20 +1985,52 @@ OAD.saveDB = function () {
   } catch (e) {
     console.warn('[OAD] saveDB failed:', e);
   }
+};
+
+// Write-safety-phase1 follow-up: serializes real cloud saves from this tab. Two saveDB() calls
+// fired back to back with neither awaited (the exact shape the old OAD.quickAddThread had:
+// OAD.addThread then OAD.addEvolution, each saving on its own) both read OAD._cloudVersion
+// before either one's result came back to update it, so both sent the same
+// p_expected_version. The server can only accept one as a match; the other came back as
+// version_conflict, a self-inflicted lockout with no other writer involved at all (confirmed
+// in production: a single-tab Quick Add did not persist, and the row's version advanced by 2,
+// the other half of the pair having conflicted and been dropped). Chaining every call onto the
+// tail of the previous one means a save never starts until the one before it has fully settled,
+// so it always reads the version that one actually landed at, not the version that was current
+// before it ran. This only orders THIS tab's own saves against each other; it has no way to
+// know about a genuinely different session's version, so cross-session conflict detection is
+// unchanged, see the "stale session" test next to the "two unawaited saves" test above.
+OAD._saveQueueTail = Promise.resolve();
+
+OAD._saveToCloudQueued = function () {
+  var result = OAD._saveQueueTail.then(function () { return OAD._saveToCloud(); });
+  // The queue itself must never reject, or every later save chained onto it would throw too;
+  // each attempt's own ok/error/conflict is still returned to its own caller via `result`.
+  OAD._saveQueueTail = result.catch(function () {});
+  return result;
+};
+
+OAD.saveDB = function () {
+  if (OAD._suppressSaveDB) return Promise.resolve({ ok: true, suppressed: true });
+  if (!OAD._DB_PERSIST) return Promise.resolve({ ok: true });
+  OAD._saveLocalCache();
   // Push to Supabase when authenticated, and return that promise instead of firing-and-forgetting
-  // it — per ticket-enterprise-mode-and-load-overview.md Part 4. Existing call sites that don't
-  // await this are unaffected (an un-awaited async call behaves exactly as fire-and-forget did);
-  // this just lets "done" mean "persisted" for anything that actually needs that guarantee. See
-  // _saveToCloud's pending-save tracking below for how a hard refresh under Enterprise Mode (no
-  // synchronous local-cache fallback to land on) is protected against racing ahead of this.
-  if (OAD.supabase && OAD._userId) return OAD._saveToCloud();
-  return Promise.resolve();
+  // it, per ticket-enterprise-mode-and-load-overview.md Part 4. Existing call sites that don't
+  // await this are unaffected (an un-awaited async call behaves exactly as fire-and-forget did).
+  // This lets "done" mean "persisted" for anything that actually needs that guarantee, and lets
+  // a caller inspect the result ({ ok, version } on success; { ok: false, error/conflict/reason }
+  // otherwise) instead of assuming every save landed. See _saveToCloud's pending-save tracking
+  // below for how a hard refresh under Enterprise Mode (no synchronous local-cache fallback to
+  // land on) is protected against racing ahead of this.
+  if (OAD.supabase && OAD._userId) return OAD._saveToCloudQueued();
+  return Promise.resolve({ ok: true });
 };
 
 OAD.loadDB = function () {
   if (OAD.isEnterpriseMode()) {
     if (window.OAD_DEMO_DATA) {
       OAD.DB = window.OAD_DEMO_DATA;
+      OAD.DB._demo_seeded = true; // never writable to a non-demo account (see _cloudSaveBlocker)
       OAD._normalizeDB();
       return true;
     }
@@ -1933,6 +2043,7 @@ OAD.loadDB = function () {
       data = JSON.parse(raw);
     } else if (window.OAD_DEMO_DATA) {
       data = window.OAD_DEMO_DATA;
+      data._demo_seeded = true;
       OAD.DB = data;
       OAD._normalizeDB();
       OAD.saveDB(); // save to localStorage for next time
@@ -1971,31 +2082,170 @@ window.addEventListener('beforeunload', function (e) {
   }
 });
 
+// ── Data-safety guards (Oct 23 2026) ────────────────────────────────────────────────────────
+// Incident: a fresh browser context tripped index.html's demo "fresh instance" wipe; boot then
+// skipped the real user's cloud load, seeded demo data, and _saveToCloud wrote it over the real
+// user's row (554 threads replaced by 46 demo threads; the project has no backups). Every save
+// writes the WHOLE database, so any wrong in-memory DB is one save away from replacing real data.
+// These guards sit at the single write point, so they hold no matter which path produced the bad
+// state:
+//   1. Demo-seeded data is never written to a non-demo account.
+//   2. If the cloud read failed at boot, nothing is written at all this session (a failed read
+//      used to fall through to an empty or demo DB, which was then saved over the real row).
+//   3. Shrink guard: a save that would drop more than half the threads the cloud last held is
+//      refused until the user explicitly allows it once (OAD.allowShrinkOnce()).
+// Refusals are loud: console.error plus a red banner, never a silent console.warn.
+OAD._isDemoIdentity = function (uid) {
+  if (!uid) return false;
+  if (uid.indexOf('demo-') === 0) return true;
+  var cfg = window.OAD && OAD.DemoConfig;
+  return !!(cfg && Array.isArray(cfg.roles) && cfg.roles.some(function (r) { return r && r.userId === uid; }));
+};
+
+OAD._cloudBaselineCount = null;   // thread count the cloud last held (set on load and on each successful save)
+OAD._savesBlockedReason = null;   // set when this session must not write at all
+OAD._allowShrink = false;
+
+OAD.allowShrinkOnce = function () { OAD._allowShrink = true; return 'Next save may shrink the database. Make a change or call OAD.saveDB().'; };
+
+OAD._showDataSafetyBanner = function (msg) {
+  console.error('[OAD] DATA SAFETY: ' + msg);
+  if (typeof document === 'undefined' || !document.body) return;
+  var el = document.getElementById('data-safety-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'data-safety-banner';
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#c92a2a;color:#fff;padding:10px 16px;font:600 14px/1.4 Inter,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.3)';
+    document.body.appendChild(el);
+  }
+  el.textContent = 'NOT SAVED: ' + msg;
+};
+
+// Returns null when the save may proceed, or the reason it must not.
+OAD._cloudSaveBlocker = function (db, uid) {
+  if (OAD._savesBlockedReason) return OAD._savesBlockedReason;
+  if (db && db._demo_seeded && !OAD._isDemoIdentity(uid)) {
+    return 'This session holds demo data but you are signed in to a real account. Saving would replace your real data, so it was blocked. Close this tab.';
+  }
+  var count = db && Array.isArray(db.threads) ? db.threads.length : 0;
+  var base = OAD._cloudBaselineCount;
+  if (base != null && base >= 20 && count < base * 0.5 && !OAD._allowShrink) {
+    return 'This save would shrink your database from ' + base + ' to ' + count + ' threads. Blocked as a possible wipe. If that is really intended, run OAD.allowShrinkOnce() in the console and save again.';
+  }
+  return null;
+};
+
+// Write-safety-phase1: versioned saves. Every save used to be a blind upsert({user_id, db})
+// with no check against what the server currently held, so whichever save committed last
+// always won, even if it was built from a stale read (see private design notes (fq-personal)).
+// Saves now go through the save_db RPC (db/migrations/0001_versioned_saves.sql),
+// which only commits when the row's version still matches OAD._cloudVersion, the version this
+// tab last saw. A mismatch means someone else's save has already moved the row forward, and
+// this RPC rejects the write (version_conflict) instead of silently overwriting it.
+OAD._cloudVersion = null;
+
+// No request to Supabase had a timeout before this. A hung request (confirmed in the 11/3
+// incident: "stayed pending indefinitely") never resolved and never rejected, so the code
+// that would report a failure never ran, and OAD._pendingCloudSaves never decremented either
+// (see the beforeunload guard above). Racing every cloud call against a timer turns a silent,
+// unbounded hang into an honest, reportable failure. The underlying request can't actually be
+// cancelled without an AbortController, which this does not add; it may still land later in
+// the background after we've already told the user it failed. That is an accepted limitation,
+// not a correctness problem: OAD._cloudVersion is only ever updated from a call this function
+// itself awaited and trusted, never from a late-arriving response we already gave up on.
+OAD._SAVE_TIMEOUT_MS = 20000;
+
+OAD._withTimeout = function (promise, ms, label) {
+  return new Promise(function (resolve, reject) {
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      reject(new Error((label || 'Request') + ' timed out after ' + ms + 'ms'));
+    }, ms);
+    promise.then(
+      function (v) { if (settled) return; settled = true; clearTimeout(timer); resolve(v); },
+      function (e) { if (settled) return; settled = true; clearTimeout(timer); reject(e); }
+    );
+  });
+};
+
+// Set while a save-failed banner is showing for a plain error or timeout (not a hard block
+// like version_conflict or the demo/shrink guards, which stay up until reload or explicit
+// user action). Cleared automatically the next time a save actually succeeds, so the banner
+// does not outlive the problem it described.
+OAD._transientSaveFailure = false;
+
+OAD._clearSaveFailureBanner = function () {
+  if (!OAD._transientSaveFailure) return;
+  OAD._transientSaveFailure = false;
+  var el = document.getElementById('data-safety-banner');
+  if (el) el.remove();
+};
+
+// Returns { ok: true, version } on success, or { ok: false, ...} on any failure: blocked by
+// one of the existing guards (demo mismatch, shrink guard, a prior hard block), rejected by
+// the server as a version conflict (conflict: true), or a plain network error or timeout
+// (error: message). Every failure path shows a visible, persistent banner before returning;
+// nothing fails silently.
 OAD._saveToCloud = async function () {
-  if (OAD._userId && OAD._userId.startsWith('demo-')) return; // bypass mock demo users
+  if (OAD._userId && OAD._userId.startsWith('demo-')) return { ok: true }; // bypass mock demo users
+  var blocked = OAD._cloudSaveBlocker(OAD.DB, OAD._userId);
+  if (blocked) { OAD._showDataSafetyBanner(blocked); return { ok: false, blocked: true, reason: blocked }; }
   OAD._pendingCloudSaves++;
   try {
-    var { error } = await OAD.supabase
-      .from('user_data')
-      .upsert({ user_id: OAD._userId, db: OAD.DB });
-    if (error) console.warn('[OAD] cloud save failed:', error.message);
+    var { data, error } = await OAD._withTimeout(
+      OAD.supabase.rpc('save_db', { p_db: OAD.DB, p_expected_version: OAD._cloudVersion || 0 }),
+      OAD._SAVE_TIMEOUT_MS,
+      'Cloud save'
+    );
+    if (error) {
+      if (/version_conflict/.test(error.message || '')) {
+        // Never auto-merge, never retry. The only way forward is a reload, which reads the
+        // newer data fresh and gives this tab a current version to build its next save on.
+        OAD._savesBlockedReason = 'Newer data exists in the cloud. Reload to continue. Nothing from this tab was saved.';
+        OAD._showDataSafetyBanner(OAD._savesBlockedReason);
+        return { ok: false, conflict: true, reason: OAD._savesBlockedReason };
+      }
+      console.warn('[OAD] cloud save failed:', error.message);
+      OAD._transientSaveFailure = true;
+      OAD._showDataSafetyBanner('Your last change could not be saved to the cloud (' + error.message + '). Keep this tab open and do not reload, or you will lose it. It will retry on your next change.');
+      return { ok: false, error: error.message };
+    }
+    OAD._cloudBaselineCount = (OAD.DB.threads || []).length;
+    OAD._cloudVersion = data;
+    OAD._allowShrink = false;
+    OAD._clearSaveFailureBanner();
+    return { ok: true, version: data };
   } catch (e) {
-    console.warn('[OAD] cloud save error:', e);
+    var msg = (e && e.message) ? e.message : String(e);
+    console.warn('[OAD] cloud save error:', msg);
+    OAD._transientSaveFailure = true;
+    OAD._showDataSafetyBanner('Your last change could not be saved to the cloud (' + msg + '). Keep this tab open and do not reload, or you will lose it. It will retry on your next change.');
+    return { ok: false, error: msg };
   } finally {
     OAD._pendingCloudSaves--;
   }
 };
 
+// Sets OAD._cloudLoadState to 'loaded' | 'empty' (no row, or no threads) | 'error' (the read
+// itself failed). The return value stays true/false for existing callers; _bootAfterAuth reads
+// the state to tell "new account" apart from "could not read", which used to look identical.
+OAD._cloudLoadState = null;
+
 OAD._loadFromCloud = async function () {
+  OAD._cloudLoadState = null;
   if (OAD._userId && OAD._userId.startsWith('demo-')) return false; // bypass mock demo users
   try {
     var { data, error } = await OAD.supabase
       .from('user_data')
-      .select('db')
+      .select('db, version')
       .eq('user_id', OAD._userId)
       .single();
     if (error && error.code !== 'PGRST116') { // PGRST116 = row not found
       console.warn('[OAD] cloud load failed:', error.message);
+      OAD._cloudLoadState = 'error';
       return false;
     }
     if (data && data.db && Array.isArray(data.db.threads)) {
@@ -2005,14 +2255,24 @@ OAD._loadFromCloud = async function () {
       }
       OAD.DB = data.db;
       OAD.DB.lastError = 'LOADED_FROM_CLOUD';
+      OAD._cloudLoadState = 'loaded';
+      OAD._cloudBaselineCount = data.db.threads.length;
+      OAD._cloudVersion = data.version || 0;
       OAD._normalizeDB();
-      // Keep localStorage in sync as local cache
-      OAD.saveDB();
+      // Keep localStorage in sync as local cache. OAD._saveLocalCache(), not OAD.saveDB(): this
+      // data was just read from the cloud, unmodified, so pushing it straight back would waste
+      // a version bump for nothing, and could race the very next real save, which read the same
+      // OAD._cloudVersion a moment ago and would see this redundant write as a conflict.
+      OAD._saveLocalCache();
       return true;
     }
+    if (data && data.db && Array.isArray(data.db.threads)) OAD._cloudBaselineCount = data.db.threads.length;
+    OAD._cloudVersion = 0; // no row yet: this account's first save starts at version 0
+    OAD._cloudLoadState = 'empty';
     return false; // no cloud data yet
   } catch (e) {
     console.warn('[OAD] cloud load error:', e);
+    OAD._cloudLoadState = 'error';
     return false;
   }
 };

@@ -231,9 +231,7 @@ OAD.renderList = function () {
       // underneath it — the exact ENV-125 bug (ticket-flowqueue-temporal-and-schema.md).
       const warnings = OAD.TemporalStatus.dataHygieneWarnings(t, nowInstant);
       const isMasked = warnings.some(w => w.rule === 'drifted_next_action_masked_by_future_deadline');
-      const maskedText = isMasked
-        ? ' <span class="deadline-behind" title="' + OAD.esc(strings.warnDriftedMaskedByDeadline || '') + '">' + OAD.esc(strings.maskedBadge || '⚠ next action overdue') + '</span>'
-        : '';
+      const maskedText = OAD._maskedBadgeHtml(t, isMasked, nowInstant, strings);
       deadlineLineHtml = '<div class="deadline-line">' +
         '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
         riskText + maskedText +
@@ -295,6 +293,18 @@ OAD.selectThread = function (id) {
   OAD.renderDetail(id);
 };
 
+// Shared by both card renderers (OAD.renderList and OAD.filterListTab) so the two badge sites
+// cannot drift apart. A drifted next action whose deadline is still inside its lead time is the
+// buffer rule working as planned, not a failure: it gets a calm "start now" badge. Drift with a
+// comfortable deadline still far off keeps the original warning (the ENV-125 fix).
+OAD._maskedBadgeHtml = function (t, isMasked, now, strings) {
+  if (!isMasked) return '';
+  if (OAD.Bulk && OAD.Bulk.isInStartWindow(t, now)) {
+    return ' <span class="deadline-start-now" title="' + OAD.esc(strings.startNowTitle || '') + '">' + OAD.esc(strings.startNowBadge || '▶ start now') + '</span>';
+  }
+  return ' <span class="deadline-behind" title="' + OAD.esc(strings.warnDriftedMaskedByDeadline || '') + '">' + OAD.esc(strings.maskedBadge || '⚠ next action overdue') + '</span>';
+};
+
 OAD.refreshActiveView = function () {
   OAD.renderList();
 
@@ -325,6 +335,20 @@ OAD.refreshActiveView = function () {
   } else if (OAD._lastView === 'Proposals') {
     OAD.renderProposalsPanel();
   }
+};
+
+// Park/Reactivate Bollard (js/bulk.js). Offered on any active thread that has open descendants,
+// and on a dormant thread that was parked as a bollard. No discriminator field: any parent can
+// be a bollard, which is how the codebase already uses the word.
+OAD._bollardButtonHtml = function (t) {
+  if (!OAD.Bulk) return '';
+  if (OAD.Bulk.isParkedBollard(t)) {
+    return `<button class="secondary" id="reactivate-bollard-btn" onclick="OAD.openReactivateBollardModal('${OAD.esc(t.uuid)}')">Reactivate Bollard</button>`;
+  }
+  if (t.status === 'closed' || t.status === 'dormant') return '';
+  const preview = OAD.Bulk.parkPreview(t.uuid);
+  if (!preview || !preview.candidates.length) return '';
+  return `<button class="ghost" id="park-bollard-btn" onclick="OAD.openParkBollardModal('${OAD.esc(t.uuid)}')">Park Bollard (${preview.candidates.length})</button>`;
 };
 
 OAD.renderDetail = function (id) {
@@ -493,6 +517,7 @@ OAD.renderDetail = function (id) {
         <button class="secondary" onclick="OAD.openEditModal(${t.id})">${OAD.esc(OAD.t('edit'))}</button>
         <button class="ghost" onclick="OAD.openLogModal(${t.id})">${OAD.esc(OAD.t('plusLog'))}</button>
         <button onclick="OAD.generateInsight(${t.id})" id="insight-btn-${t.id}">${OAD.esc(OAD.t('insight'))}</button>
+        ${OAD._bollardButtonHtml(t)}
       </div>
     </div>
 
@@ -2817,6 +2842,8 @@ OAD.renderListView = function () {
     ? OAD.formatDate(persona.life_context.hard_deadline)
     : '—';
   const pressureLevel = (persona && persona.life_context && persona.life_context.pressure_level) || 'moderate';
+  const catchUpCount = OAD.Bulk ? OAD.Bulk.catchUpQueue(new Date()).length : 0;
+  if (!OAD._bulkSelected) OAD._bulkSelected = new Set();
 
   // 'stalled' here is a computed filter preset (OAD.Due.stalledThreads(), see filterListTab
   // below), not a real thread.status value — 'stalled' was removed from OAD.STATUSES per
@@ -2866,14 +2893,174 @@ OAD.renderListView = function () {
           ${(OAD.DB.saved_views || []).map(v => `<option value="${v.id}" ${v.id === OAD._activeSavedViewId ? 'selected' : ''}>${OAD.esc(v.name)}</option>`).join('')}
         </select>
         <button class="ghost" onclick="OAD.openManageSavedViewsModal()">Manage Views</button>
+        <button class="${OAD._bulkMode ? 'secondary' : 'ghost'}" id="bulk-mode-btn" onclick="OAD.toggleBulkMode()">${OAD._bulkMode ? 'Done Selecting' : 'Select'}</button>
+        <button class="ghost" id="catch-up-btn" onclick="OAD.openCatchUpModal()" title="Work through threads that are genuinely behind, one at a time">Catch Up (${catchUpCount})</button>
         <button onclick="OAD.openNewThreadModal()">+ New Thread</button>
       </div>
 
+      <div id="bulk-bar"></div>
       <div id="list-tab-threads" class="list-tab-grid"></div>
     </div>
   `;
 
   OAD.filterListTab();
+};
+
+// ── Bulk selection (List tab) ───────────────────────────────────────────────────────────────
+// Select mode turns card clicks into select/deselect instead of opening the thread. Selection is
+// by uuid and survives filter changes, so "filter to eCornell, select all, then filter to Career
+// and add two more" works. The actions themselves live in OAD.Bulk (js/bulk.js).
+OAD.toggleBulkMode = function () {
+  OAD._bulkMode = !OAD._bulkMode;
+  if (!OAD._bulkMode) OAD._bulkSelected = new Set();
+  OAD._bulkResult = null;
+  OAD.renderListView();
+};
+
+OAD.toggleBulkSelect = function (uuid) {
+  OAD._bulkConfirmDone = false;
+  if (!OAD._bulkSelected) OAD._bulkSelected = new Set();
+  if (OAD._bulkSelected.has(uuid)) OAD._bulkSelected.delete(uuid);
+  else OAD._bulkSelected.add(uuid);
+  OAD.filterListTab();
+};
+
+OAD.bulkSelectShown = function () {
+  OAD._bulkConfirmDone = false;
+  if (!OAD._bulkSelected) OAD._bulkSelected = new Set();
+  (OAD._listShownUUIDs || []).forEach(u => OAD._bulkSelected.add(u));
+  OAD.filterListTab();
+};
+
+OAD.bulkClearSelection = function () {
+  OAD._bulkConfirmDone = false;
+  OAD._bulkSelected = new Set();
+  OAD.filterListTab();
+};
+
+OAD.renderBulkBar = function () {
+  const bar = document.getElementById('bulk-bar');
+  if (!bar) return;
+  const last = OAD.Bulk && OAD.Bulk._lastBatch;
+  const undoBtn = last
+    ? `<button class="ghost" onclick="OAD.bulkUndo()" title="${OAD.esc(last.label)}">Undo: ${OAD.esc(last.label)}</button>`
+    : '';
+  const result = OAD._bulkResult ? OAD._renderBulkResult(OAD._bulkResult) : '';
+
+  if (!OAD._bulkMode) {
+    bar.className = (undoBtn || result) ? 'bulk-bar' : '';
+    bar.innerHTML = (undoBtn || result) ? `<div class="bulk-bar-row">${undoBtn}</div>${result}` : '';
+    return;
+  }
+  const n = OAD._bulkSelected ? OAD._bulkSelected.size : 0;
+  const shown = (OAD._listShownUUIDs || []).length;
+  const dis = n ? '' : 'disabled';
+  bar.className = 'bulk-bar';
+  bar.innerHTML = `
+    <div class="bulk-bar-row">
+      <strong id="bulk-count">${n} selected</strong>
+      <button class="ghost" onclick="OAD.bulkSelectShown()">Select all ${shown} shown</button>
+      <button class="ghost" onclick="OAD.bulkClearSelection()" ${dis}>Clear</button>
+      ${undoBtn}
+    </div>
+    <div class="bulk-bar-row">
+      <span class="bulk-group">
+        <input type="text" id="bulk-park-trigger" placeholder="What brings these back? (re-engagement trigger)" style="width:260px">
+        <button class="secondary" ${dis} onclick="OAD.bulkPark()">Park</button>
+      </span>
+      <button class="secondary" ${dis} onclick="OAD.bulkRun({ type: 'status', status: 'open' })">Reopen</button>
+      ${OAD._bulkConfirmDone && n
+        ? `<button class="success" id="bulk-done-confirm" onclick="OAD.bulkDoneConfirm()">Confirm: ${n} happened, close them</button>
+           <button class="ghost" onclick="OAD.bulkDoneCancel()">Cancel</button>`
+        : `<button class="success" id="bulk-done-btn" ${dis} onclick="OAD.bulkDoneAsk()" title="Close and mark the closing condition met. Asks you to confirm first.">✓ Done</button>`}
+      <button class="secondary" ${dis} onclick="OAD.bulkRun({ type: 'drop' })" title="Close without asserting the closing condition was met">Drop</button>
+      <span class="bulk-group">
+        <label>Push next action</label>
+        <input type="number" id="bulk-shift-days" value="7" min="-60" max="365" style="width:64px">
+        <span>days</span>
+        <button class="secondary" ${dis} onclick="OAD.bulkShift()">Push</button>
+      </span>
+      <span class="bulk-group">
+        <label>Set date</label>
+        <input type="date" id="bulk-set-date">
+        <button class="secondary" ${dis} onclick="OAD.bulkSetDate()">Set</button>
+      </span>
+      <span class="bulk-group">
+        <label>Priority</label>
+        <select id="bulk-priority" ${dis} onchange="OAD.bulkPriority()">
+          <option value="">-</option><option>critical</option><option>high</option><option>medium</option><option>low</option>
+        </select>
+      </span>
+    </div>
+    ${result}`;
+};
+
+OAD._renderBulkResult = function (r) {
+  const skippedHtml = r.skipped.length
+    ? `<details class="bulk-skipped"${r.changed.length ? '' : ' open'}><summary>${r.skipped.length} skipped</summary><ul>` +
+        r.skipped.map(s => `<li><strong>${OAD.esc(s.title)}</strong>: ${OAD.esc(s.reason)}</li>`).join('') +
+      '</ul></details>'
+    : '';
+  return `<div class="bulk-result" id="bulk-result">${OAD.esc(r.label)}: ${r.changed.length} changed${skippedHtml}</div>`;
+};
+
+OAD.bulkRun = function (op) {
+  const uuids = Array.from(OAD._bulkSelected || []);
+  if (!uuids.length) return;
+  const r = OAD.Bulk.apply(uuids, op);
+  OAD._bulkResult = { label: OAD.Bulk.describe(op), changed: r.changed, skipped: r.skipped };
+  // Changed threads drop out of the selection; skipped ones stay selected so they can be fixed.
+  r.changed.forEach(u => OAD._bulkSelected.delete(u));
+  OAD.renderListView();
+};
+
+// Bulk Done asserts that each selected thread's outcome actually happened (closing_condition_met),
+// so it takes a second, explicit click naming the count: the EA-Confirmation Rule's "explicit
+// confirmation", never a single stray click. Drop needs no confirmation; it asserts nothing.
+OAD.bulkDoneAsk = function () {
+  OAD._bulkConfirmDone = true;
+  OAD.renderBulkBar();
+};
+
+OAD.bulkDoneCancel = function () {
+  OAD._bulkConfirmDone = false;
+  OAD.renderBulkBar();
+};
+
+OAD.bulkDoneConfirm = function () {
+  OAD._bulkConfirmDone = false;
+  OAD.bulkRun({ type: 'done' });
+};
+
+OAD.bulkPark = function () {
+  const el = document.getElementById('bulk-park-trigger');
+  OAD.bulkRun({ type: 'park', trigger: el ? el.value : '' });
+};
+
+OAD.bulkShift = function () {
+  const el = document.getElementById('bulk-shift-days');
+  const days = el ? parseInt(el.value, 10) : NaN;
+  if (isNaN(days) || days === 0) return;
+  OAD.bulkRun({ type: 'shift', days: days });
+};
+
+OAD.bulkSetDate = function () {
+  const el = document.getElementById('bulk-set-date');
+  if (!el || !el.value) return;
+  OAD.bulkRun({ type: 'setDate', date: el.value });
+};
+
+OAD.bulkPriority = function () {
+  const el = document.getElementById('bulk-priority');
+  if (!el || !el.value) return;
+  OAD.bulkRun({ type: 'priority', priority: el.value });
+};
+
+OAD.bulkUndo = function () {
+  const label = OAD.Bulk._lastBatch ? OAD.Bulk._lastBatch.label : '';
+  const n = OAD.Bulk.undo();
+  OAD._bulkResult = { label: 'Undid "' + label + '"', changed: new Array(n), skipped: [] };
+  OAD.refreshActiveView();
 };
 
 OAD.applySavedViewFromToolbar = function () {
@@ -2929,6 +3116,9 @@ OAD.filterListTab = function () {
   const container = document.getElementById('list-tab-threads');
   if (!container) return;
 
+  OAD._listShownUUIDs = threads.map(t => t.uuid);
+  OAD.renderBulkBar();
+
   if (!threads.length) {
     container.innerHTML = '<div class="detail-empty" style="grid-column:1/-1; padding:48px; text-align:center;">No tasks found matching current filters.</div>';
     return;
@@ -2958,9 +3148,7 @@ OAD.filterListTab = function () {
         : '';
       const warnings2 = OAD.TemporalStatus.dataHygieneWarnings(t, nowInstant2);
       const isMasked2 = warnings2.some(w => w.rule === 'drifted_next_action_masked_by_future_deadline');
-      const maskedText2 = isMasked2
-        ? ' <span class="deadline-behind" title="' + OAD.esc(strings2.warnDriftedMaskedByDeadline || '') + '">' + OAD.esc(strings2.maskedBadge || '⚠ next action overdue') + '</span>'
-        : '';
+      const maskedText2 = OAD._maskedBadgeHtml(t, isMasked2, nowInstant2, strings2);
       deadlineLineHtml = '<div class="deadline-line">' +
         '<span class="deadline-tag">' + OAD.esc(timeText + sessText) + '</span>' +
         riskText + maskedText2 +
@@ -2972,9 +3160,18 @@ OAD.filterListTab = function () {
       ? `<span class="cycle-warning-badge" style="cursor: pointer;" title="Click to resolve circular dependency" onclick="event.stopPropagation(); OAD.openCycleResolutionModal(${t.id})">🔄 Cycle</span>` 
       : '';
 
+    const isSel = OAD._bulkMode && OAD._bulkSelected && OAD._bulkSelected.has(t.uuid);
+    const cardClick = OAD._bulkMode
+      ? `OAD.toggleBulkSelect('${OAD.esc(t.uuid)}')`
+      : `OAD.selectThread(${t.id})`;
+    const checkbox = OAD._bulkMode
+      ? `<input type="checkbox" class="bulk-check" data-uuid="${OAD.esc(t.uuid)}" ${isSel ? 'checked' : ''} onclick="event.stopPropagation(); OAD.toggleBulkSelect('${OAD.esc(t.uuid)}')" aria-label="Select ${OAD.esc(t.title)}">`
+      : '';
+
     return `
-      <div class="list-tab-card" onclick="OAD.selectThread(${t.id})">
+      <div class="list-tab-card${isSel ? ' bulk-selected' : ''}" data-uuid="${OAD.esc(t.uuid)}" onclick="${cardClick}">
         <div class="list-tab-card-header">
+          ${checkbox}
           <div class="list-tab-card-title">${OAD.esc(OAD.formatDisplayTitle(t.title))}</div>
           <div class="pressure-badge ${pc}">${t._score}</div>
         </div>

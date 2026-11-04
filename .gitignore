@@ -15,3 +15,6 @@ SUPERPROD_ANALYSIS_RESULTS.md
 
 # Local-only guidance for Claude — not a repo artifact, keep out of git
 ARCHITECTURE_RULES.md
+
+# Python bytecode cache, not a repo artifact
+email-integration/__pycache__/

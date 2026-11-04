@@ -430,7 +430,7 @@ class ThreadCollection {
     var map = {};
     (this.threads || []).forEach(function (t) {
       if (t.status === 'closed' || t.status === 'dormant' || t.status === 'inbox' || t.status === 'proposed') return;
-      var a = t.life_area || 'Other';
+      var a = t.life_area || OAD.Config.defaultLifeArea;
       if (!map[a]) map[a] = { count: 0, total: 0, stalled: 0 };
       map[a].count++;
       map[a].total += typeof t.getPressure === 'function' ? t.getPressure() : OAD.pressure(t);

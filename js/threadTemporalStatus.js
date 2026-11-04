@@ -150,7 +150,12 @@ OAD.TemporalStatus.cardDateLabel = function (thread, today, ownerId) {
 // the CAC102 dormant-conversion ticket), and catching an inconsistency NOW is exactly what
 // prevents a bad surprise the moment it's reactivated (this is why the real CAC102 Live
 // Session — July 13 case, now dormant, still needs to surface here).
-OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId) {
+//
+// `context` (optional) carries graph facts this pure module cannot look up itself. Today that is
+// just `hasOpenChildren`: a parent thread with open children is a bollard, and the bollard rule
+// says it must NOT carry its own next_action_date, so "no dates set" is the correct state for it,
+// not a hygiene problem. Callers that omit context get the old behavior.
+OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId, context) {
   var warnings = [];
   if (!thread || thread.status === 'closed' || _ownerMismatch(thread, ownerId)) return warnings;
   var strings = _strings();
@@ -188,7 +193,8 @@ OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId) {
     });
   }
 
-  if ((thread.status === 'open' || thread.status === 'waiting') && !thread.next_action_date && !thread.deadline) {
+  if ((thread.status === 'open' || thread.status === 'waiting') && !thread.next_action_date && !thread.deadline &&
+      !(context && context.hasOpenChildren)) {
     warnings.push({
       thread_id: thread.id,
       thread_uuid: thread.uuid,

@@ -380,12 +380,12 @@ OAD.test('parseImportFile: a cadence-shaped thread row matching an existing uuid
   }
 });
 
-OAD.test('applyImport: creates a new cadence-thread from import', function () {
+OAD.test('applyImport: creates a new cadence-thread from import', async function () {
   const origThreads = OAD.DB.threads;
   try {
     OAD.DB.threads = [];
     const results = { create: [{ title: 'Imported cadence', thread_kind: 'cadence', recurrence: 'monthly-1st', next_due: '2026-08-01' }], update: [], close: [] };
-    const result = OAD.applyImport(results, []);
+    const result = await OAD.applyImport(results, []);
     OAD._assertEqual(result.created, 1, 'one thread created');
     const cadences = OAD.getCadenceThreads();
     OAD._assertEqual(cadences.length, 1, 'cadence added to DB');
@@ -397,12 +397,12 @@ OAD.test('applyImport: creates a new cadence-thread from import', function () {
   }
 });
 
-OAD.test('applyImport: updates an existing cadence-thread\'s next_due via import (Cadence Export/Import spec)', function () {
+OAD.test('applyImport: updates an existing cadence-thread\'s next_due via import (Cadence Export/Import spec)', async function () {
   const origThreads = OAD.DB.threads;
   try {
     const existing = OAD.addCadence(OAD.makeCadence({ title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-01' }));
     const incoming = { uuid: existing.uuid, title: 'Cadence to update', recurrence: 'weekly', next_due: '2026-07-22' };
-    const result = OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
+    const result = await OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
     OAD._assertEqual(result.updated, 1, 'one thread updated');
     OAD._assertEqual(OAD.getCadence(existing.id).next_due, '2026-07-22', 'next_due patched via import');
   } finally {
@@ -410,12 +410,12 @@ OAD.test('applyImport: updates an existing cadence-thread\'s next_due via import
   }
 });
 
-OAD.test('applyImport: cadence-thread update only patches actually-changed fields', function () {
+OAD.test('applyImport: cadence-thread update only patches actually-changed fields', async function () {
   const origThreads = OAD.DB.threads;
   try {
     const existing = OAD.addCadence(OAD.makeCadence({ title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: '' }));
     const incoming = { uuid: existing.uuid, title: 'Unchanged title', recurrence: 'weekly', next_due: '2026-07-01', notes: 'keep me', consequences: 'now set' };
-    OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
+    await OAD.applyImport({ create: [], update: [], close: [] }, [{ incoming: incoming, existing: existing }]);
     OAD._assertEqual(OAD.getCadence(existing.id).consequences, 'now set', 'changed field patched');
     OAD._assertEqual(OAD.getCadence(existing.id).notes, 'keep me', 'unchanged field left alone');
   } finally {
@@ -436,12 +436,12 @@ OAD.test('parseImportFile: deleted_uuids queues a matching cadence-thread for cl
   }
 });
 
-OAD.test('applyImport: hard-deletes confirmed cadence-thread deletes, leaves unconfirmed ones alone (destructive, requires explicit confirmation)', function () {
+OAD.test('applyImport: hard-deletes confirmed cadence-thread deletes, leaves unconfirmed ones alone (destructive, requires explicit confirmation)', async function () {
   const origThreads = OAD.DB.threads;
   try {
     const toDelete = OAD.addCadence(OAD.makeCadence({ title: 'Duplicate to delete', recurrence: 'monthly-15th' }));
     const toKeep   = OAD.addCadence(OAD.makeCadence({ title: 'Not confirmed, should survive', recurrence: 'monthly-15th' }));
-    const result = OAD.applyImport({ create: [], update: [], close: [toDelete, toKeep] }, [], [toDelete.id]);
+    const result = await OAD.applyImport({ create: [], update: [], close: [toDelete, toKeep] }, [], [toDelete.id]);
     OAD._assertEqual(result.deleted, 1, 'one cadence deleted');
     OAD._assert(!OAD.getCadence(toDelete.id), 'confirmed cadence is actually removed');
     OAD._assert(!!OAD.getCadence(toKeep.id), 'unconfirmed cadence is left untouched — deletion is destructive, so it requires explicit confirmation unlike a regular thread close');
@@ -450,11 +450,11 @@ OAD.test('applyImport: hard-deletes confirmed cadence-thread deletes, leaves unc
   }
 });
 
-OAD.test('applyImport: a non-cadence thread flagged in results.close always auto-applies (soft close), matching its original no-confirmation-needed behavior', function () {
+OAD.test('applyImport: a non-cadence thread flagged in results.close always auto-applies (soft close), matching its original no-confirmation-needed behavior', async function () {
   const origThreads = OAD.DB.threads;
   try {
     const t = OAD.addThread(OAD.makeThread({ title: 'Regular thread to close', status: 'open' }));
-    const result = OAD.applyImport({ create: [], update: [], close: [t] }, [], []); // no confirmedDeleteIds — must still close
+    const result = await OAD.applyImport({ create: [], update: [], close: [t] }, [], []); // no confirmedDeleteIds, must still close
     OAD._assertEqual(result.closed, 1, 'one thread closed');
     OAD._assertEqual(OAD.getThread(t.id).status, 'closed', 'a regular thread close needs no confirmation, unlike a cadence delete');
   } finally {
@@ -501,14 +501,14 @@ OAD.test('parseImportFile: deleted_uuids populates close list', function () {
   OAD._assertEqual(results.close[0].id, t.id, 'correct thread identified');
 });
 
-OAD.test('applyImport: closes threads in deleted_uuids', function () {
+OAD.test('applyImport: closes threads in deleted_uuids', async function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'Close me via import', status: 'open' }));
-  OAD.applyImport({ create: [], update: [], close: [t] }, []);
+  await OAD.applyImport({ create: [], update: [], close: [t] }, []);
   OAD._assertEqual(OAD.getThread(t.id).status, 'closed', 'thread status set to closed');
   OAD._assert(OAD.getThread(t.id).closing_condition_met, 'closing_condition_met set true');
 });
 
-OAD.test('applyImport: syncs connections and parent_uuid on update', function () {
+OAD.test('applyImport: syncs connections and parent_uuid on update', async function () {
   const parent = OAD.addThread(OAD.makeThread({ title: 'Parent thread' }));
   const child  = OAD.addThread(OAD.makeThread({ title: 'Child thread', parent_uuid: null }));
   const newConn = [{ to_uuid: parent.uuid, to_label: 'Parent thread', edge_type: 'enables' }];
@@ -517,14 +517,14 @@ OAD.test('applyImport: syncs connections and parent_uuid on update', function ()
       parent_uuid: parent.uuid, connections: newConn },
     existing: child
   };
-  OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
+  await OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
   const updated = OAD.getThread(child.id);
   OAD._assertEqual(updated.parent_uuid, parent.uuid, 'parent_uuid synced from import');
   OAD._assertEqual(updated.connections.length, 1,    'connections synced from import');
   OAD._assertEqual(updated.connections[0].to_uuid, parent.uuid, 'connection to_uuid correct');
 });
 
-OAD.test('applyImport: top-level edges merge does not re-add a stale edge type to an already-connected target', function () {
+OAD.test('applyImport: top-level edges merge does not re-add a stale edge type to an already-connected target', async function () {
   // Real-world regression: OAD.exportThreads() always includes a full flattened `edges` array
   // mirroring every connection (see js/data.js, "Derive flat top-level edges array for
   // ADE-aware consumers"), so re-importing ANY previously-exported file round-trips it. If that
@@ -547,13 +547,13 @@ OAD.test('applyImport: top-level edges merge does not re-add a stale edge type t
     to_label: child.title, auto_generated: true, rule: 'ADE-002', confidence: 1,
     confirmed_by_user: false, created_at: '2025-12-01T00:00:00.000Z'
   }];
-  const result = OAD.applyImport({ create: [], update: [], close: [], edges: staleTopLevelEdges }, []);
+  const result = await OAD.applyImport({ create: [], update: [], close: [], edges: staleTopLevelEdges }, []);
   OAD._assertEqual(result.edges_merged, 0, 'a stale differently-typed edge to an already-connected target must not be merged in');
   OAD._assertEqual((parent.connections || []).length, 1, 'no duplicate edge should exist on the parent');
   OAD._assertEqual(parent.connections[0].edge_type, 'blocked_by', 'the already-corrected edge type must survive the import untouched');
 });
 
-OAD.test('applyImport: top-level edges merge still restores a genuinely deleted edge to a target with no other connection', function () {
+OAD.test('applyImport: top-level edges merge still restores a genuinely deleted edge to a target with no other connection', async function () {
   // Sanity check the fix isn't overbroad: this merge path exists specifically to restore edges
   // that are otherwise missing entirely -- that must keep working for a target with zero
   // existing connections.
@@ -565,7 +565,7 @@ OAD.test('applyImport: top-level edges merge still restores a genuinely deleted 
     to_label: child.title, auto_generated: false, rule: null, confidence: 1,
     confirmed_by_user: true, created_at: '2026-01-01T00:00:00.000Z'
   }];
-  const result = OAD.applyImport({ create: [], update: [], close: [], edges: edges }, []);
+  const result = await OAD.applyImport({ create: [], update: [], close: [], edges: edges }, []);
   OAD._assertEqual(result.edges_merged, 1, 'a genuinely missing edge to an unconnected target must still be restored');
   OAD._assertEqual((parent.connections || []).length, 1, 'the restored edge should now exist');
 });
@@ -607,11 +607,11 @@ OAD.test('parseImportFile: returns error on invalid JSON', function () {
   OAD._assert(!!results.error, 'should return error');
 });
 
-OAD.test('applyImport: creates new thread with evolution log appended', function () {
+OAD.test('applyImport: creates new thread with evolution log appended', async function () {
   const before = OAD.DB.threads.length;
   const results = { create: [{ title: 'Imported new', status: 'open', priority: 'low',
     evolution_log: [{ date: '2026-01-01', note: 'From export' }] }], update: [] };
-  OAD.applyImport(results, []);
+  await OAD.applyImport(results, []);
   OAD._assertEqual(OAD.DB.threads.length, before + 1, 'one thread added');
   const created = OAD.DB.threads.find(function (t) { return t.title === 'Imported new'; });
   OAD._assert(!!created, 'thread found');
@@ -619,7 +619,7 @@ OAD.test('applyImport: creates new thread with evolution log appended', function
     'imported evolution entry appended');
 });
 
-OAD.test('applyImport: updates thread matched by uuid, never overwrites evolution log', function () {
+OAD.test('applyImport: updates thread matched by uuid, never overwrites evolution log', async function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'Import no-overwrite test' }));
   OAD.addEvolution(t.id, 'Original entry');
   const updateItem = {
@@ -627,7 +627,7 @@ OAD.test('applyImport: updates thread matched by uuid, never overwrites evolutio
       evolution_log: [{ date: '2026-06-01', note: 'Imported entry' }] },
     existing: t
   };
-  OAD.applyImport({ create: [], update: [updateItem] }, [updateItem]);
+  await OAD.applyImport({ create: [], update: [updateItem] }, [updateItem]);
   const updated = OAD.getThread(t.id);
   OAD._assertEqual(updated.status, 'waiting', 'status updated');
   OAD._assert(updated.evolution_log.some(function (e) { return e.note === 'Original entry'; }),
@@ -789,8 +789,8 @@ OAD.test('applySavedView: sort_field "title" sorts alphabetically case-insensiti
   OAD._assertEqual(result[0].title, 'apple task', 'case-insensitive alphabetical sort, apple first');
 });
 
-OAD.test('LIFE_AREAS: includes App Dev', function () {
-  OAD._assert(OAD.LIFE_AREAS.includes('App Dev'), 'App Dev should be in LIFE_AREAS');
+OAD.test('LIFE_AREAS: the six consolidated areas (App Dev merged into Personal Growth, Oct 23 2026)', function () {
+  OAD._assertEqual(OAD.LIFE_AREAS.join(), 'Career,Housing,Personal Growth,Family,Health,Finances');
 });
 
 // ── Tests: Idea data model ────────────────────────────────────────────
@@ -1712,16 +1712,16 @@ OAD.test('suggestArea: detects Health', function () {
   OAD._assertEqual(OAD.suggestArea('doctor appointment'), 'Health');
 });
 
-OAD.test('suggestArea: VR&E → Legal', function () {
-  OAD._assertEqual(OAD.suggestArea('VR&E counselor meeting'), 'Legal');
+OAD.test('suggestArea: VR&E → Personal Growth (VR&E funds the coursework; Legal was retired)', function () {
+  OAD._assertEqual(OAD.suggestArea('VR&E counselor meeting'), 'Personal Growth');
 });
 
-OAD.test('suggestArea: job board → Job Search (not Career)', function () {
-  OAD._assertEqual(OAD.suggestArea('M/W/F job board sweep'), 'Job Search');
+OAD.test('suggestArea: job board → Career (Job Search merged into Career)', function () {
+  OAD._assertEqual(OAD.suggestArea('M/W/F job board sweep'), 'Career');
 });
 
-OAD.test('suggestArea: weekly job application cadence → Job Search', function () {
-  OAD._assertEqual(OAD.suggestArea('Weekly Job Application Cadence'), 'Job Search');
+OAD.test('suggestArea: weekly job application cadence → Career', function () {
+  OAD._assertEqual(OAD.suggestArea('Weekly Job Application Cadence'), 'Career');
 });
 
 OAD.test('suggestArea: family → Family (not Relationships)', function () {
@@ -1991,13 +1991,13 @@ OAD.test('bulkImport: skips titleless rows', function () {
 
 // ── Tests: Import — title sync and no-UUID guard ─────────────────────
 
-OAD.test('applyImport: title field updates when title is in _IMPORT_FIELDS', function () {
+OAD.test('applyImport: title field updates when title is in _IMPORT_FIELDS', async function () {
   const t = OAD.addThread(OAD.makeThread({ title: 'Original Title' }));
   const updateItem = {
     incoming: { uuid: t.uuid, title: 'Updated Title', status: 'open' },
     existing: t
   };
-  OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
+  await OAD.applyImport({ create: [], update: [updateItem], close: [] }, [updateItem]);
   OAD._assertEqual(OAD.getThread(t.id).title, 'Updated Title', 'title should be updated via import');
 });
 
@@ -2658,6 +2658,7 @@ OAD._initApp = async function () {
         const res = await fetch('/modules/demo/demo_data.json');
         if (res.ok) {
           OAD.DB = await res.json();
+          OAD.DB._demo_seeded = true;
           OAD._normalizeDB();
           OAD.saveDB();
         } else {
@@ -2675,18 +2676,40 @@ OAD._initApp = async function () {
       };
     }
   }
-  if (OAD._migrateActionDeadlines() > 0) OAD.saveDB();
+  // Write-safety-phase1: boot must never write. This used to run _migrateActionDeadlines()
+  // and save if it changed anything, with zero user action (see private design notes
+  // (fq-personal)). It also set deadline = next_action_date, which violates the buffer rule
+  // (deadline must never equal next_action_date, see private design notes (fq-personal)).
+  // Removed here, not reworked; OAD._migrateActionDeadlines itself is left defined but uncalled.
   OAD._finishBoot();
 };
 
 // Called after successful auth to load cloud data (or seed if none), then render.
 OAD._bootAfterAuth = async function () {
   let cloudLoaded = false;
-  if (sessionStorage.getItem('oad_fresh_demo_seed_required')) {
+  // The demo "fresh instance" flag (set by index.html when a browser has never seen the demo
+  // BootID) used to skip the cloud load for ANY signed-in user, so a real account got demo data
+  // seeded and saved over its row (Oct 23 2026 incident). It now applies to demo identities only;
+  // a real account always loads its own data.
+  const freshDemoSeed = sessionStorage.getItem('oad_fresh_demo_seed_required');
+  sessionStorage.removeItem('oad_fresh_demo_seed_required');
+  if (freshDemoSeed && OAD._isDemoIdentity(OAD._userId)) {
     console.log('[OAD] Fresh demo seed required. Bypassing cloud load to force re-hydration.');
-    sessionStorage.removeItem('oad_fresh_demo_seed_required');
   } else {
+    if (freshDemoSeed) console.warn('[OAD] Ignoring demo fresh-seed flag: signed in as a real account. Loading your cloud data.');
     cloudLoaded = await OAD._loadFromCloud();
+  }
+
+  // A failed read must never be treated as "new account". Before this, it fell through to an
+  // empty or demo DB that was then saved over the real row. Now the session renders empty and
+  // read-only, and says so.
+  if (!cloudLoaded && OAD._cloudLoadState === 'error') {
+    OAD._savesBlockedReason = 'Your data could not be loaded from the cloud, so this session is read-only and nothing will be saved. Reload in a minute.';
+    OAD.DB = { threads: [], cadences: [], habits: [], ideas: [], persona: { life_context: {}, assumption_tendencies: [], what_is_working: [], what_is_not_working: [], tone_calibration: {} } };
+    OAD._normalizeDB();
+    OAD._showDataSafetyBanner(OAD._savesBlockedReason);
+    OAD._finishBoot();
+    return;
   }
 
   if (!cloudLoaded) {
@@ -2714,6 +2737,7 @@ OAD._bootAfterAuth = async function () {
             dataObj = await res.json();
           }
           OAD.DB = JSON.parse(JSON.stringify(dataObj));
+          OAD.DB._demo_seeded = true; // never writable to a non-demo account (see _cloudSaveBlocker)
           OAD.DB.lastError = "FETCH SUCCESS. Parsed threads array length: " + (OAD.DB.threads ? OAD.DB.threads.length : 'null');
           OAD._normalizeDB();
           OAD.saveDB(); // Persist auto-loaded demo data to localStorage
@@ -2741,14 +2765,16 @@ OAD._bootAfterAuth = async function () {
     // Threads now (thread_kind discriminator) — OAD.DB.habits/ideas/cadences are always empty
     // after migration, so checking their .length here would spuriously re-seed on every single
     // cloud load, even for a user who already has real habit/idea/cadence threads.
+    // Write-safety-phase1: boot must never write beyond the first-time seeding below. This
+    // block used to also run _migrateActionDeadlines() (which violates the buffer rule, see
+    // private design notes (fq-personal)) and three one-time June/July migrations, each
+    // saving on its own with zero user action, on every single boot for every account, forever
+    // (see private design notes (fq-personal)). All four calls are removed. The functions
+    // themselves are left defined in js/data.js, uncalled, not deleted.
     var needsSave = false;
     if (!OAD.getHabitThreads().length)   { OAD._seedHabits();   needsSave = true; }
     if (!OAD.getIdeaThreads().length)    { OAD._seedIdeas();    needsSave = true; }
     if (!OAD.getCadenceThreads().length) { OAD._seedCadences(); needsSave = true; }
-    if (OAD._migrateActionDeadlines() > 0) needsSave = true;
-    OAD._runJune16DedupV2();   // calls saveDB() internally; always persists its guard flag
-    OAD._runJune16PatchV1();  // targeted title/status fixes; calls saveDB() internally
-    OAD._runJuly2Cac102EdgeTypeFixV1(); // backfills missing edge_type on CAC102 assignment edges; calls saveDB() internally
     if (needsSave) await OAD._saveToCloud();
   }
   OAD._finishBoot();
@@ -3271,7 +3297,7 @@ OAD.test('mailroom text extraction of dates, currency, and life areas', function
 
   // Assertions for suggested title & life area
   OAD._assertEqual(parsed.suggestedTitle, 'IRS NOTICE OF TAX LIEN - STATEMENT DATE: 2026-07-1', 'Should extract first line as title');
-  OAD._assertEqual(parsed.suggestedLifeArea, 'Finance', 'Should match Finance keywords (tax, balance, irs, lien)');
+  OAD._assertEqual(parsed.suggestedLifeArea, 'Finances', 'Should match Finances keywords (tax, balance, irs, lien); was the non-existent area "Finance" before Oct 23 2026');
 });
 
 OAD.test('mailroom thread recommendation scoring', function () {
@@ -5824,7 +5850,7 @@ OAD.test('sweepInboxSentinel: creates a sentinel with medium priority for a fres
     const sentinel = OAD.getThreadByUUID(OAD._INBOX_SENTINEL_UUID);
     OAD._assert(!!sentinel, 'a sentinel thread must be created when the inbox is non-empty');
     OAD._assertEqual(sentinel.priority, 'medium', 'a fresh inbox (0-1 days) must read medium priority');
-    OAD._assertEqual(sentinel.life_area, 'System', 'sentinel must use the System life_area');
+    OAD._assertEqual(sentinel.life_area, 'Personal Growth', 'sentinel uses the default life area (System was retired Oct 23 2026)');
     OAD._assertEqual(sentinel.parent_uuid, null, 'sentinel must be top-level so it is never suppressed by the bollard rule');
     OAD._assertEqual(sentinel.title, 'Inbox needs triage (1 item)', 'title must reflect the live count');
     OAD._assertEqual(sentinel.next_action_date, OAD.todayStr(), 'next_action_date must be today');
@@ -6288,6 +6314,720 @@ OAD.test('_acceptPersonaUpdate: writes the full structured trait, including evid
     OAD._pendingPersonaLesson = null;
     OAD.DB.persona.assumption_tendencies = origPersona;
   }
+});
+
+// ── Tests: js/bulk.js (bulk update, Catch Up, Park/Reactivate Bollard) ────────────────────
+function _bd(n) { var dt = new Date(); dt.setDate(dt.getDate() + n); return _localDateStr(dt); }
+
+function _withThreads(threads, fn) {
+  var orig = OAD.DB.threads;
+  var origBatch = OAD.Bulk._lastBatch;
+  OAD.DB.threads = threads;
+  try { fn(); } finally { OAD.DB.threads = orig; OAD.Bulk._lastBatch = origBatch; }
+}
+
+OAD.test('Bulk.apply shift: moves next_action_date, counts a push, logs before and after', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-1', title: 'A', status: 'open', next_action_date: _bd(-5) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['bk-1'], { type: 'shift', days: 7 });
+    OAD._assertEqual(r.changed.length, 1, 'one thread changed');
+    OAD._assertEqual(t.next_action_date, _bd(2), 'shifted 7 days from its own date, not from today');
+    OAD._assertEqual(t.date_push_count, 1, 'a later date is a push');
+    var last = t.evolution_log[t.evolution_log.length - 1].note;
+    OAD._assert(last.indexOf(_bd(-5)) !== -1 && last.indexOf(_bd(2)) !== -1, 'log names both dates: ' + last);
+  });
+});
+
+OAD.test('Bulk.apply: buffer rule skips a date on or after the deadline and leaves the thread untouched', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-buf', title: 'Due soon', status: 'open', next_action_date: _bd(-1), deadline: _bd(3) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['bk-buf'], { type: 'setDate', date: _bd(3) });
+    OAD._assertEqual(r.changed.length, 0, 'nothing changed');
+    OAD._assert(/Buffer rule/.test(r.skipped[0].reason), 'reason names the buffer rule');
+    OAD._assertEqual(t.next_action_date, _bd(-1), 'date unchanged');
+    OAD._assertEqual(OAD.Bulk._lastBatch === null || OAD.Bulk._lastBatch === undefined || OAD.Bulk._lastBatch.entries.every(e => e.uuid !== 'bk-buf'), true, 'no undo entry for a skipped thread');
+  });
+});
+
+OAD.test('Bulk.apply: bollard rule skips setting a next action date on a parent with open children', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bk-par', title: 'Parent', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'bk-chi', title: 'Child', status: 'open', parent_uuid: 'bk-par' });
+  _withThreads([p, c], function () {
+    var r = OAD.Bulk.apply(['bk-par', 'bk-chi'], { type: 'setDate', date: _bd(4) });
+    OAD._assertEqual(r.changed.join(), 'bk-chi', 'only the child gets the date');
+    OAD._assert(/Bollard rule/.test(r.skipped[0].reason), 'parent skipped with the bollard rule');
+    OAD._assertEqual(p.next_action_date || null, null, 'parent still has no next action date');
+  });
+});
+
+OAD.test('Bulk.apply: close-type ops skip threads that need the Closure Wizard', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bk-cw', title: 'Parent', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'bk-cw-c', title: 'Child', status: 'open', parent_uuid: 'bk-cw' });
+  _withThreads([p, c], function () {
+    var r = OAD.Bulk.apply(['bk-cw'], { type: 'drop' });
+    OAD._assertEqual(r.changed.length, 0, 'not closed');
+    OAD._assertEqual(p.status, 'open', 'status unchanged');
+    OAD._assert(/Closure Wizard/.test(r.skipped[0].reason), 'reason points at the Closure Wizard');
+  });
+});
+
+OAD.test('Bulk.apply: done asserts the closing condition, drop does not', function () {
+  var a = OAD.makeThread({ id: 1, uuid: 'bk-done', title: 'Did it', status: 'open' });
+  var b = OAD.makeThread({ id: 2, uuid: 'bk-drop', title: 'Not doing it', status: 'open' });
+  _withThreads([a, b], function () {
+    OAD.Bulk.apply(['bk-done'], { type: 'done' });
+    OAD.Bulk.apply(['bk-drop'], { type: 'drop' });
+    OAD._assertEqual(a.status, 'closed', 'done closes');
+    OAD._assertEqual(a.closing_condition_met, true, 'done = user confirmed the outcome');
+    OAD._assertEqual(b.status, 'closed', 'drop closes');
+    OAD._assertEqual(!!b.closing_condition_met, false, 'drop must not claim the outcome happened (EA-Confirmation Rule)');
+    OAD._assertEqual(!!a.assumption_verified, false, 'neither touches assumption_verified');
+  });
+});
+
+OAD.test('Bulk.undo: restores every changed field of the last batch and logs the undo', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'bk-undo', title: 'U', status: 'waiting', user_action_complete: true, next_action_date: _bd(-3), priority: 'high' });
+  _withThreads([t], function () {
+    OAD.Bulk.apply(['bk-undo'], { type: 'park', trigger: 'later' });
+    OAD._assertEqual(t.status, 'dormant', 'parked');
+    OAD._assertEqual(t.user_action_complete, false, 'leaving waiting resets user_action_complete, as the edit modal does');
+    var n = OAD.Bulk.undo();
+    OAD._assertEqual(n, 1, 'one thread restored');
+    OAD._assertEqual(t.status, 'waiting', 'status restored');
+    OAD._assertEqual(t.user_action_complete, true, 'ball-in-court flag restored');
+    OAD._assert(/^Undone:/.test(t.evolution_log[t.evolution_log.length - 1].note), 'undo is logged, history not erased');
+    OAD._assertEqual(OAD.Bulk._lastBatch, null, 'undo is one step');
+  });
+});
+
+OAD.test('Bulk.parkBollard: parks open descendants at any depth, honors keep-active, leaves already-dormant ones unmarked', function () {
+  var b  = OAD.makeThread({ id: 1, uuid: 'pk-b', title: 'RAG', status: 'open' });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'pk-c1', title: 'VEVRAA outreach', status: 'open', parent_uuid: 'pk-b' });
+  var g1 = OAD.makeThread({ id: 3, uuid: 'pk-g1', title: 'Grandchild', status: 'waiting', parent_uuid: 'pk-c1' });
+  var k  = OAD.makeThread({ id: 4, uuid: 'pk-k', title: 'LLC address update', status: 'open', parent_uuid: 'pk-b' });
+  var d  = OAD.makeThread({ id: 5, uuid: 'pk-d', title: 'Already dormant', status: 'dormant', dormant_trigger: 'own reason', parent_uuid: 'pk-b' });
+  var x  = OAD.makeThread({ id: 6, uuid: 'pk-x', title: 'Closed', status: 'closed', parent_uuid: 'pk-b' });
+  _withThreads([b, c1, g1, k, d, x], function () {
+    var r = OAD.Bulk.parkBollard('pk-b', { keepActive: ['pk-k'], reason: 'Focusing on W-2' });
+    OAD._assert(r.ok, 'parked');
+    OAD._assertEqual(b.status, 'dormant', 'bollard dormant');
+    OAD._assertEqual(b.dormant_trigger, 'Focusing on W-2', 'bollard carries the reason');
+    OAD._assertEqual(c1.status, 'dormant', 'child parked');
+    OAD._assertEqual(g1.status, 'dormant', 'grandchild parked');
+    OAD._assertEqual(g1.metadata.parked_prior_status, 'waiting', 'prior status remembered');
+    OAD._assertEqual(c1.metadata.parked_by, 'pk-b', 'marked with the bollard uuid');
+    OAD._assertEqual(k.status, 'open', 'kept-active child untouched');
+    OAD._assertEqual((d.metadata || {}).parked_by, undefined, 'already-dormant child is not marked');
+    OAD._assertEqual(x.status, 'closed', 'closed child untouched');
+  });
+});
+
+OAD.test('Bulk.reactivateBollard: restores exactly what it parked, nothing a human changed since', function () {
+  var b  = OAD.makeThread({ id: 1, uuid: 'ra-b', title: 'RAG', status: 'open' });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'ra-c1', title: 'One', status: 'waiting', dormant_trigger: '', parent_uuid: 'ra-b' });
+  var c2 = OAD.makeThread({ id: 3, uuid: 'ra-c2', title: 'Two', status: 'open', parent_uuid: 'ra-b' });
+  var d  = OAD.makeThread({ id: 4, uuid: 'ra-d', title: 'Already dormant', status: 'dormant', dormant_trigger: 'own reason', parent_uuid: 'ra-b' });
+  _withThreads([b, c1, c2, d], function () {
+    OAD.Bulk.parkBollard('ra-b', {});
+    // While parked, the user closes c2 by hand from the bulk bar.
+    OAD.Bulk.apply(['ra-c2'], { type: 'drop' });
+    var r = OAD.Bulk.reactivateBollard('ra-b');
+    OAD._assert(r.ok, 'reactivated');
+    OAD._assertEqual(b.status, 'open', 'bollard back to open');
+    OAD._assertEqual(c1.status, 'waiting', 'c1 back to its prior status, not just open');
+    OAD._assertEqual(c1.dormant_trigger, '', 'c1 trigger restored');
+    OAD._assertEqual(c1.metadata.parked_by, undefined, 'markers cleared');
+    OAD._assertEqual(c2.status, 'closed', 'a thread closed by hand while parked stays closed');
+    OAD._assertEqual(d.status, 'dormant', 'a thread dormant before the park stays dormant');
+    OAD._assertEqual(d.dormant_trigger, 'own reason', 'and keeps its own trigger');
+    OAD._assertEqual(r.restored.length, 1, 'only c1 restored');
+  });
+});
+
+OAD.test('Bulk.parkBollard + undo: one undo brings the whole bollard back', function () {
+  var b = OAD.makeThread({ id: 1, uuid: 'pu-b', title: 'B', status: 'open' });
+  var c = OAD.makeThread({ id: 2, uuid: 'pu-c', title: 'C', status: 'open', parent_uuid: 'pu-b' });
+  _withThreads([b, c], function () {
+    OAD.Bulk.parkBollard('pu-b', {});
+    OAD.Bulk.undo();
+    OAD._assertEqual(b.status, 'open', 'bollard restored');
+    OAD._assertEqual(c.status, 'open', 'child restored');
+    OAD._assertEqual(c.metadata.parked_by, undefined, 'marker gone');
+    OAD._assertEqual(OAD.Bulk.isParkedBollard(b), false, 'not a parked bollard anymore');
+  });
+});
+
+OAD.test('Bulk.isInStartWindow: drifted next action with the deadline inside its lead time is the buffer working', function () {
+  var now = new Date();
+  var inWindow = OAD.makeThread({ uuid: 'sw-1', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var farOff   = OAD.makeThread({ uuid: 'sw-2', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var noDl     = OAD.makeThread({ uuid: 'sw-3', status: 'open', next_action_date: _bd(-2) });
+  var past     = OAD.makeThread({ uuid: 'sw-4', status: 'open', next_action_date: _bd(-8), deadline: _bd(-5) });
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(inWindow, now), true, 'deadline tomorrow, Education lead 5: start window');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(farOff, now), false, '24 days out is real drift');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(noDl, now), false, 'no deadline, no window');
+  OAD._assertEqual(OAD.Bulk.isInStartWindow(past, now), false, 'past deadline is not a window');
+});
+
+OAD.test('Bulk.catchUpQueue: past deadlines first, real drift next, start-window/dormant/ball-in-court excluded', function () {
+  var pastDl  = OAD.makeThread({ id: 1, uuid: 'cq-pd', title: 'Missed', status: 'open', next_action_date: _bd(-9), deadline: _bd(-6) });
+  var drift   = OAD.makeThread({ id: 2, uuid: 'cq-dr', title: 'Packing', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var noDl    = OAD.makeThread({ id: 3, uuid: 'cq-nd', title: 'PO Box', status: 'open', next_action_date: _bd(-25) });
+  var window_ = OAD.makeThread({ id: 4, uuid: 'cq-sw', title: 'Quiz due tomorrow', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var dorm    = OAD.makeThread({ id: 5, uuid: 'cq-do', title: 'Parked', status: 'dormant', next_action_date: _bd(-30) });
+  var ball    = OAD.makeThread({ id: 6, uuid: 'cq-ba', title: 'Their move', status: 'waiting', user_action_complete: true, next_action_date: _bd(-10) });
+  _withThreads([pastDl, drift, noDl, window_, dorm, ball], function () {
+    var q = OAD.Bulk.catchUpQueue(new Date());
+    OAD._assertEqual(q.map(i => i.thread.uuid).join(), 'cq-pd,cq-nd,cq-dr', 'past deadline first, then oldest drift first');
+    OAD._assertEqual(q[0].reason, 'past_deadline', 'reason tagged');
+  });
+});
+
+OAD.test('card badge: start window renders "start now", far-off drift keeps "next action overdue"', function () {
+  var now = new Date();
+  var strings = OAD.Config.temporalStatusStrings;
+  var inWindow = OAD.makeThread({ uuid: 'bg-1', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-2), deadline: _bd(1) });
+  var farOff   = OAD.makeThread({ uuid: 'bg-2', status: 'open', life_area: 'Housing', next_action_date: _bd(-11), deadline: _bd(24) });
+  var a = OAD._maskedBadgeHtml(inWindow, true, now, strings);
+  var b = OAD._maskedBadgeHtml(farOff, true, now, strings);
+  OAD._assert(a.indexOf('deadline-start-now') !== -1 && a.indexOf('deadline-behind') === -1, 'start window gets the calm badge: ' + a);
+  OAD._assert(b.indexOf('deadline-behind') !== -1, 'real drift keeps the warning: ' + b);
+  OAD._assertEqual(OAD._maskedBadgeHtml(farOff, false, now, strings), '', 'no warning, no badge');
+});
+
+OAD.test('life areas: retired names migrate to the six current areas; brand-new names are left alone', function () {
+  OAD._assertEqual(OAD.migrateLifeArea('Job Search'), 'Career');
+  OAD._assertEqual(OAD.migrateLifeArea('job_search'), 'Career', 'casing/underscore variants of a retired name too');
+  OAD._assertEqual(OAD.migrateLifeArea('Education'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('App Dev'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('Relationships'), 'Family');
+  OAD._assertEqual(OAD.migrateLifeArea('Personal'), 'Family');
+  OAD._assertEqual(OAD.migrateLifeArea('Legal'), 'Finances');
+  OAD._assertEqual(OAD.migrateLifeArea('Other'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('System'), 'Personal Growth');
+  OAD._assertEqual(OAD.migrateLifeArea('Home'), 'Housing');
+  OAD._assertEqual(OAD.migrateLifeArea(''), 'Personal Growth', 'empty gets the default');
+  OAD._assertEqual(OAD.migrateLifeArea('Health'), 'Health', 'current areas unchanged');
+  OAD._assertEqual(OAD.migrateLifeArea('Woodworking'), 'Woodworking', 'a new custom area is not renamed');
+  OAD._assertEqual(OAD.normalizeLifeArea('Legal'), 'Legal', 'normalizeLifeArea (used when adding an area in Settings) never applies the retired map');
+});
+
+OAD.test('life areas: new threads default to Personal Growth, never Other', function () {
+  OAD._assertEqual(OAD.makeThread({ title: 'x' }).life_area, 'Personal Growth');
+  OAD._assertEqual(OAD.Config.lifeAreas.indexOf('Other'), -1, 'Other is not offered');
+  OAD._assertEqual(OAD.Config.lifeAreas.indexOf('System'), -1, 'System is not offered');
+  OAD._assertEqual(OAD._cheLeadDays({ life_area: 'Personal Growth' }), 5, 'coursework keeps its 5-day lead time after Education merged into Personal Growth');
+});
+
+OAD.test('life areas: _normalizeDB migrates a thread stored under a retired area', function () {
+  var orig = OAD.DB.threads;
+  try {
+    var t = OAD.makeThread({ id: 1, uuid: 'la-1', title: 'Old', life_area: 'Job Search' });
+    OAD.DB.threads = [t];
+    OAD._normalizeDB();
+    OAD._assertEqual(OAD.DB.threads[0].life_area, 'Career');
+  } finally { OAD.DB.threads = orig; }
+});
+
+OAD.test('dataHygieneWarnings: a bollard (parent with open children) is not flagged no_dates_set; a plain undated thread still is', function () {
+  var now = new Date();
+  var t = OAD.makeThread({ uuid: 'hy-1', title: 'Bollard', status: 'open' });
+  var asBollard = OAD.TemporalStatus.dataHygieneWarnings(t, now, undefined, { hasOpenChildren: true });
+  var plain = OAD.TemporalStatus.dataHygieneWarnings(t, now);
+  OAD._assert(!asBollard.some(w => w.rule === 'no_dates_set'), 'bollard rule keeps parents undated on purpose');
+  OAD._assert(plain.some(w => w.rule === 'no_dates_set'), 'without context the old behavior holds');
+});
+
+OAD.test('Bulk.needsWizard: a child whose only link is its parent\'s auto "enables" edge can close without the wizard', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'nw-p', title: 'Family Relationships', status: 'open',
+    connections: [{ uuid: 'e1', to_uuid: 'nw-c', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' }] });
+  var c = OAD.makeThread({ id: 2, uuid: 'nw-c', title: 'Letter to Aunt Shirley', status: 'open', parent_uuid: 'nw-p' });
+  var other = OAD.makeThread({ id: 3, uuid: 'nw-o', title: 'Blocked by the letter', status: 'open',
+    connections: [{ uuid: 'e2', to_uuid: 'nw-x', edge_type: 'blocked_by' }] });
+  var x = OAD.makeThread({ id: 4, uuid: 'nw-x', title: 'Has a real dependent', status: 'open' });
+  _withThreads([p, c, other, x], function () {
+    OAD._assertEqual(OAD.Bulk.needsWizard(c), false, 'structural parent edge alone does not need the wizard');
+    OAD._assertEqual(OAD.needsClosureWizard(c.id), true, 'sanity: the original check did flag it (the bug)');
+    OAD._assertEqual(OAD.Bulk.needsWizard(x), true, 'a real blocked_by dependent still needs the wizard');
+    OAD._assertEqual(OAD.Bulk.needsWizard(p), true, 'a parent with an open child still needs the wizard');
+    var r = OAD.Bulk.apply(['nw-c'], { type: 'done' });
+    OAD._assertEqual(r.changed.length, 1, 'Done works on the leaf child');
+  });
+});
+
+OAD.test('Bulk setDate on a past-deadline thread: requires a new deadline, sets both, and undo restores the old deadline', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'pd-1', title: 'Letter', status: 'open', next_action_date: _bd(-27), deadline: _bd(-26) });
+  _withThreads([t], function () {
+    var r1 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3) });
+    OAD._assertEqual(r1.changed.length, 0, 'no silent change without a new deadline');
+    OAD._assert(/has passed/.test(r1.skipped[0].reason), 'reason says the deadline passed, not a buffer-rule dead end: ' + r1.skipped[0].reason);
+    var r2 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: _bd(3) });
+    OAD._assert(/new deadline/.test(r2.skipped[0].reason), 'buffer rule applies against the NEW deadline');
+    var r3 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: _bd(8) });
+    OAD._assertEqual(r3.changed.length, 1, 'date + new deadline accepted');
+    OAD._assertEqual(t.next_action_date, _bd(3));
+    OAD._assertEqual(t.deadline, _bd(8));
+    OAD._assert(/deadline .* -> /.test(t.evolution_log[t.evolution_log.length - 1].note), 'deadline move is logged');
+    OAD.Bulk.undo();
+    OAD._assertEqual(t.deadline, _bd(-26), 'undo restores the old deadline');
+    OAD._assertEqual(t.next_action_date, _bd(-27), 'and the old date');
+    var r4 = OAD.Bulk.apply(['pd-1'], { type: 'setDate', date: _bd(3), newDeadline: '' });
+    OAD._assertEqual(r4.changed.length, 1, 'empty new deadline = no deadline');
+    OAD._assertEqual(t.deadline, null, 'deadline cleared');
+  });
+});
+
+OAD.test('Bulk setDate on a future-deadline thread: buffer rule unchanged, newDeadline ignored', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'fd-1', title: 'Quiz', status: 'open', next_action_date: _bd(-1), deadline: _bd(2) });
+  _withThreads([t], function () {
+    var r = OAD.Bulk.apply(['fd-1'], { type: 'setDate', date: _bd(5), newDeadline: _bd(9) });
+    OAD._assert(/Buffer rule/.test(r.skipped[0].reason), 'a deadline that has not passed is never moved from here');
+    OAD._assertEqual(t.deadline, _bd(2));
+  });
+});
+
+OAD.test('Bulk.dayOptions: 7 days with live load; Sunday rest note for Career only; Monday catch-up note; suggestion avoids noted days', function () {
+  var offsetOf = function (dow) { for (var i = 0; i < 7; i++) { if (new Date(_bd(i) + 'T12:00:00').getDay() === dow) return i; } };
+  var sun = offsetOf(0), mon = offsetOf(1);
+  var career = OAD.makeThread({ id: 1, uuid: 'do-c', title: 'VEVRAA outreach', status: 'open', life_area: 'Career', next_action_date: _bd(-20) });
+  var edu = OAD.makeThread({ id: 2, uuid: 'do-e', title: 'Quiz', status: 'open', life_area: 'Personal Growth', next_action_date: _bd(-20) });
+  var onMon = OAD.makeThread({ id: 3, uuid: 'do-m', title: 'Already Monday', status: 'open', life_area: 'Family', next_action_date: _bd(mon) });
+  _withThreads([career, edu, onMon], function () {
+    var oc = OAD.Bulk.dayOptions(career, new Date(), 7);
+    var oe = OAD.Bulk.dayOptions(edu, new Date(), 7);
+    OAD._assertEqual(oc.length, 7, 'a week of options');
+    OAD._assertEqual(oc[0].date, OAD.todayStr(), 'starts today');
+    OAD._assert(oc[sun].notes.indexOf('Sunday rest') !== -1, 'Career thread: Sunday carries the rest note');
+    OAD._assertEqual(oe[sun].notes.indexOf('Sunday rest'), -1, 'Personal Growth thread: Sunday is a normal day (coursework due Sunday 23:59)');
+    OAD._assert(oc[mon].notes.indexOf('catch-up day') !== -1, 'Monday is marked as the catch-up day');
+    OAD._assertEqual(oc[mon].count, 1, 'live count of next actions already on Monday');
+    var sug = oc.filter(o => o.suggested);
+    OAD._assertEqual(sug.length, 1, 'exactly one suggestion');
+    OAD._assertEqual(sug[0].notes.length, 0, 'the suggestion is never a noted day when a clean day exists');
+    OAD._assert(oc.every(o => !o.afterDeadline), 'no deadline, nothing disabled');
+  });
+});
+
+OAD.test('Bulk.dayOptions: days on or after a future deadline are marked and never suggested', function () {
+  var t = OAD.makeThread({ id: 1, uuid: 'dl-1', title: 'Due soon', status: 'open', life_area: 'Family', next_action_date: _bd(-3), deadline: _bd(2) });
+  _withThreads([t], function () {
+    var o = OAD.Bulk.dayOptions(t, new Date(), 7);
+    OAD._assertEqual(o[1].afterDeadline, false, 'tomorrow is fine');
+    OAD._assertEqual(o[2].afterDeadline, true, 'the deadline day itself is out (buffer rule)');
+    OAD._assert(o.filter(x => x.suggested).every(x => !x.afterDeadline), 'never suggested past the deadline');
+  });
+});
+
+OAD.test('Bulk.wizardReasons: unconfirmed ADE suggestions are not dependencies; confirmed ones and manual links are, with readable reasons', function () {
+  var cap = OAD.makeThread({ id: 1, uuid: 'wr-cap', title: 'AI - Week 1 video and documents', status: 'inbox',
+    connections: [{ uuid: 'w1', to_uuid: 'wr-final', edge_type: 'blocks', auto_generated: true, confirmed_by_user: false, rule: 'ADE-001' }] });
+  var fin = OAD.makeThread({ id: 2, uuid: 'wr-final', title: 'AISYS Wk15 Final', status: 'open' });
+  var conf = OAD.makeThread({ id: 3, uuid: 'wr-conf', title: 'Confirmed blocker', status: 'open',
+    connections: [{ uuid: 'w2', to_uuid: 'wr-final', edge_type: 'blocks', auto_generated: true, confirmed_by_user: true }] });
+  var man = OAD.makeThread({ id: 4, uuid: 'wr-man', title: 'Manual dependent', status: 'open',
+    connections: [{ uuid: 'w3', to_uuid: 'wr-final', edge_type: 'blocked_by' }] });
+  _withThreads([cap, fin, conf, man], function () {
+    OAD._assertEqual(OAD.Bulk.wizardReasons(cap).length, 0, 'a pending ADE guess does not force the wizard');
+    OAD._assertEqual(OAD.Bulk.needsWizard(cap), false);
+    OAD._assertEqual(OAD.Bulk.wizardReasons(conf).join(), 'Blocks: AISYS Wk15 Final', 'a confirmed suggestion counts, with its reason');
+    var r = OAD.Bulk.wizardReasons(fin);
+    OAD._assert(r.indexOf('Manual dependent blocked by this') !== -1, 'incoming manual link reads naturally: ' + r.join(' | '));
+    OAD._assert(r.indexOf('Confirmed blocker blocks this') !== -1, 'incoming confirmed link listed');
+    OAD._assertEqual(r.some(x => /AI - Week 1/.test(x)), false, 'incoming unconfirmed guess not listed');
+  });
+});
+
+OAD.test('Bulk.captureContext: shows when and how a bare capture arrived, skipping import-sync bookkeeping', function () {
+  var t = OAD.makeThread({ uuid: 'cc-1', title: 'AI - Week 1 video and documents', status: 'inbox', created_at: null,
+    evolution_log: [
+      { date: '2026-10-05', note: 'Captured via Quick Add.' },
+      { date: '2026-10-23', note: 'Life area cleanup: life area Other -> Personal Growth.' },
+      { date: '2026-10-23', note: 'Updated via import sync.' }
+    ] });
+  var c = OAD.Bulk.captureContext(t);
+  OAD._assertEqual(c.capturedOn, '2026-10-05', 'capture date from the first log entry when created_at is null');
+  OAD._assertEqual(c.how, 'via Quick Add');
+  OAD._assertEqual(c.lastNote, '', 'no meaningful later note: bookkeeping is not shown as context');
+  var t2 = OAD.makeThread({ uuid: 'cc-2', title: 'x', created_at: '2026-09-01T10:00:00Z',
+    evolution_log: [{ date: '2026-09-01', note: 'Thread created.' }, { date: '2026-09-10', note: 'Called Robin, waiting on CP3219A copy.' }] });
+  var c2 = OAD.Bulk.captureContext(t2);
+  OAD._assertEqual(c2.capturedOn, '2026-09-01');
+  OAD._assertEqual(c2.lastNote, 'Called Robin, waiting on CP3219A copy.');
+});
+
+OAD.test('Bulk done: a parent selected together with all its open children closes in one batch (children first); a parent alone is still skipped', function () {
+  var p = OAD.makeThread({ id: 1, uuid: 'bd-p', title: 'eCornell - Analyzing Data with Python', status: 'open',
+    connections: [{ uuid: 'be1', to_uuid: 'bd-c1', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' },
+                  { uuid: 'be2', to_uuid: 'bd-c2', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' }] });
+  var c1 = OAD.makeThread({ id: 2, uuid: 'bd-c1', title: 'Quiz', status: 'open', parent_uuid: 'bd-p' });
+  var c2 = OAD.makeThread({ id: 3, uuid: 'bd-c2', title: 'Codio', status: 'open', parent_uuid: 'bd-p' });
+  _withThreads([p, c1, c2], function () {
+    var alone = OAD.Bulk.apply(['bd-p', 'bd-c1'], { type: 'done' });
+    OAD._assertEqual(alone.changed.join(), 'bd-c1', 'parent with a still-open child (c2 not selected) is skipped');
+    OAD._assertEqual(p.status, 'open');
+    OAD.Bulk.undo();
+    var r = OAD.Bulk.apply(['bd-p', 'bd-c1', 'bd-c2'], { type: 'done' });
+    OAD._assertEqual(r.changed.length, 3, 'parent listed first in the selection still closes, after its children');
+    OAD._assertEqual(r.skipped.length, 0);
+    OAD._assert([p, c1, c2].every(t => t.status === 'closed' && t.closing_condition_met === true), 'all closed as done');
+    OAD.Bulk.undo();
+    OAD._assert([p, c1, c2].every(t => t.status === 'open'), 'one undo reopens all three');
+  });
+});
+
+// ── Data-safety guards: replays of the Oct 23 2026 overwrite incident ─────────────────────
+// write-safety-phase1: models the save_db RPC (db/migrations/0001_versioned_saves.sql), not
+// just the old blind upsert. Tracks its own server-side db/version pair in closure, separate
+// from whatever OAD._cloudVersion a test's "session" believes, so a test can simulate a
+// second, stale session by just resetting OAD._cloudVersion back to an older value and saving
+// again; the fake server still only has the one row it has always had. opts is kept by
+// reference (not copied) so a test can flip opts.saveError / opts.saveTimeout mid-test to
+// move from "failing" to "recovered" without constructing a new fake.
+function _fakeSupabase(row, opts) {
+  opts = opts || {};
+  var writes = [];
+  var serverDb = row ? JSON.parse(JSON.stringify(row)) : null;
+  var serverVersion = opts.version != null ? opts.version : (row ? 1 : 0);
+  return {
+    writes: writes,
+    opts: opts,
+    serverVersion: function () { return serverVersion; },
+    from: function () {
+      return {
+        select: function () { return { eq: function () { return { single: async function () {
+          if (opts.readError) return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } };
+          return serverDb ? { data: { db: JSON.parse(JSON.stringify(serverDb)), version: serverVersion }, error: null } : { data: null, error: { code: 'PGRST116' } };
+        } }; } }; }
+      };
+    },
+    rpc: function (fnName, params) {
+      if (fnName !== 'save_db') return Promise.resolve({ data: null, error: { message: 'unknown rpc ' + fnName } });
+      if (opts.saveTimeout) return new Promise(function () {}); // never settles, by design
+      if (opts.saveError) return Promise.resolve({ data: null, error: { message: opts.saveErrorMessage || 'simulated cloud save failure' } });
+      return Promise.resolve().then(function () {
+        if (serverDb === null) {
+          if (params.p_expected_version !== 0) return { data: null, error: { message: 'version_conflict' } };
+          serverDb = JSON.parse(JSON.stringify(params.p_db));
+          serverVersion = 1;
+          writes.push({ db: JSON.parse(JSON.stringify(serverDb)), version: serverVersion });
+          return { data: serverVersion, error: null };
+        }
+        if (params.p_expected_version !== serverVersion) return { data: null, error: { message: 'version_conflict' } };
+        serverDb = JSON.parse(JSON.stringify(params.p_db));
+        serverVersion += 1;
+        writes.push({ db: JSON.parse(JSON.stringify(serverDb)), version: serverVersion });
+        return { data: serverVersion, error: null };
+      });
+    }
+  };
+}
+
+async function _withBootSandbox(fn) {
+  var saved = { supabase: OAD.supabase, userId: OAD._userId, db: OAD.DB, demo: window.OAD_DEMO_DATA, demoMode: OAD.Config.demoMode,
+    finish: OAD._finishBoot, persist: OAD._DB_PERSIST, blocked: OAD._savesBlockedReason, base: OAD._cloudBaselineCount,
+    state: OAD._cloudLoadState, allow: OAD._allowShrink, cfg: OAD.DemoConfig,
+    version: OAD._cloudVersion, transientFail: OAD._transientSaveFailure, suppress: OAD._suppressSaveDB,
+    saveTimeoutMs: OAD._SAVE_TIMEOUT_MS,
+    sweeps: [OAD._runJune16DedupV2, OAD._runJune16PatchV1, OAD._runJuly2Cac102EdgeTypeFixV1] };
+  OAD._finishBoot = function () {};
+  OAD._runJune16DedupV2 = OAD._runJune16PatchV1 = OAD._runJuly2Cac102EdgeTypeFixV1 = function () {};
+  OAD._DB_PERSIST = false;
+  // Fresh per-tab save queue for every sandboxed test, so an unawaited save left over from a
+  // prior test (there should not be any, since every test awaits its own saves, but this is
+  // zero-cost insurance) can never delay or interleave with this test's own queued saves.
+  OAD._saveQueueTail = Promise.resolve();
+  // A prior test's OAD.addThread/addEvolution call can leave the debounced inbox-sentinel
+  // sweep (js/data.js, _afterSaveCallbacks, 50ms setTimeout) still pending. Left alone, it
+  // fires mid-sandbox against whatever fake Supabase THIS test just installed, an extra,
+  // uncoordinated save this test never asked for and did not account for in its own
+  // write-count assertions. Clear it on the way in and the way out.
+  clearTimeout(OAD._inboxSentinelDebounce);
+  try { await fn(); } finally {
+    clearTimeout(OAD._inboxSentinelDebounce);
+    OAD.supabase = saved.supabase; OAD._userId = saved.userId; OAD.DB = saved.db; window.OAD_DEMO_DATA = saved.demo;
+    OAD.Config.demoMode = saved.demoMode; OAD._finishBoot = saved.finish; OAD._DB_PERSIST = saved.persist;
+    OAD._savesBlockedReason = saved.blocked; OAD._cloudBaselineCount = saved.base; OAD._cloudLoadState = saved.state;
+    OAD._allowShrink = saved.allow; OAD.DemoConfig = saved.cfg;
+    OAD._cloudVersion = saved.version; OAD._transientSaveFailure = saved.transientFail; OAD._suppressSaveDB = saved.suppress;
+    OAD._SAVE_TIMEOUT_MS = saved.saveTimeoutMs;
+    OAD._runJune16DedupV2 = saved.sweeps[0]; OAD._runJune16PatchV1 = saved.sweeps[1]; OAD._runJuly2Cac102EdgeTypeFixV1 = saved.sweeps[2];
+    sessionStorage.removeItem('oad_fresh_demo_seed_required');
+    var b = document.getElementById('data-safety-banner'); if (b) b.remove();
+  }
+}
+
+function _realRow(n) {
+  var threads = [];
+  for (var i = 0; i < n; i++) threads.push(OAD.makeThread({ id: i + 1, uuid: 'real-' + i, title: 'Real thread ' + i, status: 'open' }));
+  return { threads: threads, persona: { life_context: {} } };
+}
+
+// Same shape as _realRow, but seeded with one habit/idea/cadence thread each, so boot's
+// first-time seeding (OAD._seedHabits/_seedIdeas/_seedCadences) finds existing threads and
+// does not itself trigger a save, isolating "does boot write" tests from that separate,
+// pre-existing, intentional first-account-seeding behavior.
+function _realRowSeeded(n) {
+  var row = _realRow(n);
+  row.threads.push(OAD.makeThread({ id: n + 1, uuid: 'seed-habit', title: 'Seed habit', thread_kind: 'habit', status: 'open' }));
+  row.threads.push(OAD.makeThread({ id: n + 2, uuid: 'seed-idea', title: 'Seed idea', thread_kind: 'idea', status: 'open' }));
+  row.threads.push(OAD.makeThread({ id: n + 3, uuid: 'seed-cadence', title: 'Seed cadence', thread_kind: 'cadence', status: 'open' }));
+  return row;
+}
+
+OAD.test('data safety: _isDemoIdentity is true only for demo- ids and DemoConfig role ids', function () {
+  var cfg = OAD.DemoConfig;
+  try {
+    OAD.DemoConfig = { roles: [{ role: 'Counselor', userId: 'feb508c3-demo-role' }] };
+    OAD._assertEqual(OAD._isDemoIdentity('demo-superadmin-id'), true);
+    OAD._assertEqual(OAD._isDemoIdentity('feb508c3-demo-role'), true);
+    OAD._assertEqual(OAD._isDemoIdentity('dbec4f88-9573-433a-8571-baf637049ceb'), false, 'a real account is not a demo identity');
+    OAD._assertEqual(OAD._isDemoIdentity(null), false);
+  } finally { OAD.DemoConfig = cfg; }
+});
+
+OAD.test('data safety (incident replay 1): demo fresh-seed flag + real account loads the REAL cloud data and never writes demo data', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-9573-433a-8571-baf637049ceb'; OAD.DemoConfig = null;
+    OAD.Config.demoMode = true;
+    window.OAD_DEMO_DATA = { threads: [OAD.makeThread({ uuid: 'demo-1', title: '[RA] Bed check - GenClient 62ed' })] };
+    sessionStorage.setItem('oad_fresh_demo_seed_required', 'true');
+    await OAD._bootAfterAuth();
+    OAD._assertEqual(OAD.DB.threads.filter(t => /^real-/.test(t.uuid)).length, 554, 'all 554 real threads loaded, demo seed ignored for a real account (count, ' + OAD.DB.threads.length + ' total incl. any default habit/idea seeds)');
+    OAD._assertEqual(OAD.DB.threads.filter(t => /GenClient/.test(t.title)).length, 0, 'no demo thread in memory');
+    OAD._assert(!fake.writes.some(w => (w.db.threads || []).some(t => /GenClient/.test(t.title))), 'demo data never written');
+    OAD._assertEqual(sessionStorage.getItem('oad_fresh_demo_seed_required'), null, 'flag consumed');
+  });
+});
+
+OAD.test('data safety: even if demo data is in memory, a save to a real account is refused and bannered', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(null);
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null;
+    OAD.DB = { threads: [OAD.makeThread({ title: '[RA] Bed check' })], _demo_seeded: true, persona: {} };
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, 'no write');
+    OAD._assert(/demo data/.test(document.getElementById('data-safety-banner').textContent), 'red banner explains it');
+    OAD._userId = 'demo-superadmin-id';
+    OAD._assertEqual(OAD._cloudSaveBlocker(OAD.DB, 'demo-superadmin-id'), null, 'a demo identity may still save demo data');
+  });
+});
+
+OAD.test('data safety (incident replay 2): a FAILED cloud read at boot makes the session read-only instead of saving an empty or demo DB', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554), { readError: true });
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null;
+    OAD.Config.demoMode = true;
+    window.OAD_DEMO_DATA = { threads: [OAD.makeThread({ title: '[RA] Bed check' })] };
+    await OAD._bootAfterAuth();
+    OAD._assertEqual(OAD._cloudLoadState, 'error');
+    OAD._assertEqual(fake.writes.length, 0, 'boot wrote nothing');
+    OAD.DB.threads.push(OAD.makeThread({ title: 'typed during a failed session' }));
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, 'later saves in that session are refused too');
+    OAD._assert(/read-only/.test(document.getElementById('data-safety-banner').textContent), 'banner says read-only');
+  });
+});
+
+OAD.test('data safety: shrink guard refuses a save that drops more than half the threads, until explicitly allowed once', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(554));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    await OAD._loadFromCloud();
+    OAD._assertEqual(OAD._cloudBaselineCount, 554);
+    OAD.DB.threads = OAD.DB.threads.slice(0, 46);
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 0, '554 -> 46 refused');
+    OAD._assert(/554 to 46/.test(document.getElementById('data-safety-banner').textContent), 'banner names the numbers');
+    OAD.allowShrinkOnce();
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 1, 'allowed once after explicit permission');
+    OAD._assertEqual(OAD._cloudBaselineCount, 46, 'baseline follows the successful save');
+    OAD._assertEqual(OAD._allowShrink, false, 'permission is single-use');
+    OAD.DB.threads = OAD.DB.threads.slice(0, 40);
+    await OAD._saveToCloud();
+    OAD._assertEqual(fake.writes.length, 2, 'normal small changes are unaffected');
+  });
+});
+
+// ── Write-safety-phase1: versioned saves, batched imports, honest failures, no boot writes ──
+// Replays of the 2026-11-03 incident findings in private design notes (fq-personal): a stale
+// client could overwrite newer cloud data with no warning, an import fired hundreds of
+// unbatched saves, a failed save was indistinguishable from a successful one, and boot itself
+// could write with no user action.
+
+OAD.test('write safety: a save built on a stale version is rejected, and the cloud keeps the first session that actually saved', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(10));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+
+    // Both "sessions" read the same version to start.
+    await OAD._loadFromCloud();
+    OAD._assertEqual(OAD._cloudVersion, 1, 'session starts at the row version read from the cloud');
+
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Added by session A' }));
+    var saveA = await OAD._saveToCloud();
+    OAD._assertEqual(saveA.ok, true, 'session A saves cleanly');
+    OAD._assertEqual(OAD._cloudVersion, 2, 'version advances by one');
+    OAD._assertEqual(fake.writes.length, 1);
+
+    // Session B loaded at the original version and never saw session A's save land.
+    OAD._cloudVersion = 1;
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Added by session B, should be rejected' }));
+    var saveB = await OAD._saveToCloud();
+    OAD._assertEqual(saveB.ok, false, 'session B is rejected');
+    OAD._assert(saveB.conflict, 'reported specifically as a version conflict, not a generic error');
+    OAD._assertEqual(fake.writes.length, 1, 'no second write landed');
+    OAD._assertEqual(fake.serverVersion(), 2, 'the cloud is still at session A, not session B');
+    OAD._assert(!fake.writes[0].db.threads.some(function (t) { return t.title === 'Added by session B, should be rejected'; }), 'cloud keeps session A data, not B');
+    OAD._assert(/Newer data exists in the cloud/.test(document.getElementById('data-safety-banner').textContent), 'persistent banner shown');
+    OAD._assertEqual(typeof OAD._savesBlockedReason, 'string', 'further saves this session are blocked');
+
+    var saveB2 = await OAD._saveToCloud();
+    OAD._assertEqual(saveB2.ok, false, 'blocked permanently this session, never auto-retried');
+    OAD._assertEqual(fake.writes.length, 1, 'still no second write');
+  });
+});
+
+OAD.test('write safety: an import of 100 created threads produces exactly one cloud write', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    // applyImport saves through OAD.saveDB(), which _withBootSandbox otherwise short-circuits
+    // (OAD._DB_PERSIST = false, "keeps test suite writes out of localStorage") before it ever
+    // reaches _saveToCloud. Flip it on here to exercise the real path; _withBootSandbox restores
+    // it after this test regardless of outcome.
+    OAD._DB_PERSIST = true;
+    await OAD._loadFromCloud();
+
+    var createRows = [];
+    for (var i = 0; i < 100; i++) createRows.push({ uuid: 'import-' + i, title: 'Imported ' + i });
+    var result = await OAD.applyImport({ create: createRows, close: [], deletedEdgeUuids: [], edges: [] }, [], []);
+
+    OAD._assertEqual(result.created, 100, 'all 100 rows built in memory');
+    OAD._assertEqual(result.saveOk, true, 'the one save succeeded');
+    OAD._assertEqual(fake.writes.length, 1, 'exactly one cloud write for the whole import');
+    OAD._assertEqual(fake.writes[0].db.threads.filter(function (t) { return /^import-/.test(t.uuid); }).length, 100, 'all 100 rows present in that one write');
+    OAD._assertEqual(OAD.DB.threads.filter(function (t) { return /^import-/.test(t.uuid); }).length, 100, 'all 100 rows present in memory too');
+  });
+});
+
+OAD.test('write safety: a failed cloud save shows a persistent banner, is reported honestly by the import, and clears once a later save lands', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5), { saveError: true, saveErrorMessage: 'simulated network failure' });
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true; // see the comment in the import-batching test above
+    await OAD._loadFromCloud();
+
+    var result = await OAD.applyImport({ create: [{ uuid: 'x1', title: 'New thing' }], close: [], deletedEdgeUuids: [], edges: [] }, [], []);
+    OAD._assertEqual(result.created, 1, 'the row was still built in memory');
+    OAD._assertEqual(result.saveOk, false, 'the import reports the save did not succeed');
+    OAD._assertEqual(result.saveConflict, false, 'this is a plain failure, not a version conflict');
+    OAD._assert(/could not be saved/.test(document.getElementById('data-safety-banner').textContent), 'persistent banner shown, not a silent console.warn');
+    OAD._assertEqual(fake.writes.length, 0, 'nothing actually landed in the cloud');
+
+    fake.opts.saveError = false;
+    OAD.DB.threads.push(OAD.makeThread({ title: 'retry after recovery' }));
+    var r2 = await OAD._saveToCloud();
+    OAD._assertEqual(r2.ok, true, 'a later save succeeds once the failure clears');
+    OAD._assertEqual(document.getElementById('data-safety-banner'), null, 'the banner is gone once a save actually lands');
+  });
+});
+
+OAD.test('write safety: a hung cloud save times out instead of hanging forever, and surfaces the same honest banner', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5), { saveTimeout: true });
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    await OAD._loadFromCloud();
+    OAD._SAVE_TIMEOUT_MS = 20;
+
+    OAD.DB.threads.push(OAD.makeThread({ title: 'change during a hang' }));
+    var result = await OAD._saveToCloud();
+    OAD._assertEqual(result.ok, false, 'a hung request is reported as a failure, not left pending forever');
+    OAD._assert(/timed out/.test(result.error || ''), 'the error names it as a timeout');
+    OAD._assert(/could not be saved/.test(document.getElementById('data-safety-banner').textContent), 'persistent banner shown');
+    OAD._assertEqual(OAD._pendingCloudSaves, 0, 'the pending-save counter is not left stuck above zero (the beforeunload guard)');
+  });
+});
+
+OAD.test('write safety: boot performs zero cloud writes', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRowSeeded(50));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    await OAD._bootAfterAuth();
+    OAD._assertEqual(fake.writes.length, 0, 'boot performed zero cloud writes');
+  });
+});
+
+OAD.test('write safety: closing a thread through the collapsed status+log path produces one save containing both', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true; // see the comment in the import-batching test above
+    await OAD._loadFromCloud();
+
+    var t = OAD.DB.threads[0];
+    await OAD.updateThreadAndLog(t.id, { status: 'closed', closing_condition_met: true }, 'Completed: did the thing, thread closed.');
+
+    OAD._assertEqual(fake.writes.length, 1, 'exactly one cloud write for the combined close + log action, this is the same path OAD.openClosureWizard, the Edit Thread close save, and _cawSaveClose now use');
+    var saved = fake.writes[0].db.threads.find(function (x) { return x.id === t.id; });
+    OAD._assertEqual(saved.status, 'closed', 'status change present in the single save');
+    OAD._assert(saved.evolution_log.some(function (e) { return e.note === 'Completed: did the thing, thread closed.'; }), 'log entry present in the same save');
+  });
+});
+
+// ── Write-safety-phase1 follow-up: self-conflict from two unawaited saves in one tab ───────
+// Production report: a single-tab Quick Add did not persist, and the row's version advanced
+// by 2. OAD.quickAddThread fires OAD.addThread then OAD.addEvolution, each saving on its own
+// without awaiting the other, so both read OAD._cloudVersion before either one's result came
+// back and updated it. Both saves then sent the SAME p_expected_version, so the server can
+// only accept one of the two as a match; the other is rejected as version_conflict, which also
+// sets OAD._savesBlockedReason and blocks every later save this session, a self-inflicted
+// lockout with no other writer involved at all.
+
+OAD.test('write safety: two unawaited saves fired back to back from one session both succeed, no self-conflict', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true;
+    await OAD._loadFromCloud();
+
+    OAD.DB.threads.push(OAD.makeThread({ uuid: 'qa-1', title: 'First change' }));
+    var p1 = OAD.saveDB(); // not awaited, same shape as the old OAD.quickAddThread's two calls
+    OAD.DB.threads.push(OAD.makeThread({ uuid: 'qa-2', title: 'Second change' }));
+    var p2 = OAD.saveDB(); // fired immediately after, also not awaited
+
+    var r1 = await p1;
+    var r2 = await p2;
+
+    OAD._assertEqual(r1.ok, true, 'first save succeeds');
+    OAD._assertEqual(r2.ok, true, 'second save succeeds too, not rejected as a self-inflicted conflict');
+    OAD._assertEqual(fake.writes.length, 2, 'both saves actually landed, one after the other');
+    OAD._assertEqual(fake.serverVersion(), 3, 'version advanced by exactly 2, one per real save, no lockout');
+    OAD._assertEqual(OAD._savesBlockedReason, null, 'this session is not blocked afterward');
+    var last = fake.writes[fake.writes.length - 1];
+    OAD._assert(last.db.threads.some(function (t) { return t.uuid === 'qa-1'; }) && last.db.threads.some(function (t) { return t.uuid === 'qa-2'; }), 'the final state carries both changes');
+  });
+});
+
+OAD.test('write safety: serializing same-session saves does not weaken cross-session conflict detection', async function () {
+  await _withBootSandbox(async function () {
+    var fake = _fakeSupabase(_realRow(5));
+    OAD.supabase = fake; OAD._userId = 'dbec4f88-real'; OAD.DemoConfig = null; OAD.Config.demoMode = false;
+    OAD._DB_PERSIST = true;
+    await OAD._loadFromCloud();
+
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Session A change' }));
+    var saveA = await OAD.saveDB();
+    OAD._assertEqual(saveA.ok, true, 'session A saves cleanly');
+
+    // A genuinely separate, stale session: loaded before session A's save, never refreshed.
+    OAD._cloudVersion = 1;
+    OAD.DB.threads.push(OAD.makeThread({ title: 'Stale session change, should be rejected' }));
+    var saveB = await OAD.saveDB();
+    OAD._assertEqual(saveB.ok, false, 'a genuinely stale session is still rejected');
+    OAD._assert(saveB.conflict, 'still reported as a version conflict, serialization only orders this tab\'s own saves');
+  });
 });
 
 OAD.boot = async function () {
