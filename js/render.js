@@ -162,6 +162,7 @@ OAD.renderHeaderActions = function () {
           <button onclick="OAD.renderCadencePanel()" data-i18n="cadences">Cadences</button>
           <button onclick="OAD.renderProposalsPanel()" data-i18n="proposals">Proposals</button>
           <button onclick="OAD.openMailroomModal()" style="color:var(--accent);font-weight:600" data-i18n="scanMail">📥 Scan Mail</button>
+          ${typeof OAD.Crm !== 'undefined' && typeof OAD.Crm.openPoolView === 'function' ? '<button onclick="OAD.Crm.openPoolView()">Pool</button>' : ''}
         </div>
       </div>
 
