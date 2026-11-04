@@ -10,3 +10,6 @@
 [submodule "modules/personal"]
 	path = modules/personal
 	url = https://github.com/tjrandall/fq-personal.git
+[submodule "modules/crm"]
+	path = modules/crm
+	url = https://github.com/tjrandall/fq-crm.git
