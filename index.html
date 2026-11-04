@@ -71,6 +71,11 @@
 <!-- Demo role visibility rules register into core's OAD.register*VisibilityFilter hooks
      (js/data.js) — must load after data.js defines them, before anything renders. -->
 <script src="modules/demo/roles.js" onerror="void 0"></script>
+<!-- fq-crm (private submodule, B1: Pool table, LinkedIn importer, manual add, Pool view).
+     pool.js uses OAD.esc, defined in js/data.js above, so it loads after it. Silent no-op if
+     the submodule is not checked out, same pattern as every other optional module here. -->
+<script src="modules/crm/js/crm.config.js" onerror="void 0"></script>
+<script src="modules/crm/js/pool.js" onerror="void 0"></script>
 <!-- Pure, DOM-free, zero-dependency temporal-status module (ticket-flowqueue-temporal-and-schema.md)
      — loads before engine.js because OAD.isActionOverdue/isDeadlineOverdue now delegate to it. -->
 <script src="js/threadTemporalStatus.js?v=2"></script>
