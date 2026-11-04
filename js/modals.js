@@ -313,8 +313,7 @@ OAD._saveEditThread = function (id) {
     OAD.closeModal();
     OAD.openClosureWizard(id, data, notes.length ? notes.join('; ') : '');
   } else {
-    OAD.updateThread(id, data);
-    if (notes.length) OAD.addEvolution(id, notes.join('; '));
+    OAD.updateThreadAndLog(id, data, notes.length ? notes.join('; ') : null);
     OAD.closeModal();
     OAD.refreshActiveView();
     if (isClosing) {
@@ -1365,7 +1364,13 @@ OAD._diffImportItem = function (item) {
   return diffs;
 };
 
-OAD._confirmImport = function () {
+// applyImport now makes exactly one awaited cloud save for the whole import (see its own
+// comment in js/data.js) instead of one per row, so this handler has to wait for that save
+// and report honestly on whether it actually landed, rather than declaring success the moment
+// the in-memory mutations finish. On failure or conflict, nothing further runs (no ADE/CHE
+// pass on data that was not confirmed to have saved), and the message says plainly that the
+// cloud was not updated.
+OAD._confirmImport = async function () {
   if (!OAD._pendingImport) return;
   const checkboxes = document.querySelectorAll('.import-confirm-cb');
   const confirmedUpdates = [];
@@ -1378,19 +1383,29 @@ OAD._confirmImport = function () {
       confirmedUpdates.push(OAD._pendingImport.update[parseInt(cb.dataset.idx, 10)]);
     }
   });
-  const result = OAD.applyImport(OAD._pendingImport, confirmedUpdates, confirmedDeleteIds);
+  const result = await OAD.applyImport(OAD._pendingImport, confirmedUpdates, confirmedDeleteIds);
   OAD._pendingImport = null;
+  OAD.closeModal();
+  OAD.refreshActiveView();
+
+  if (!result.saveOk) {
+    var failMsg = 'Import built ' + result.created + ' created, ' + result.updated + ' updated, ' +
+      result.closed + ' closed, ' + result.deleted + ' deleted in memory, but the cloud save ' +
+      (result.saveConflict ? 'was rejected: newer data exists in the cloud.' : 'failed: ' + (result.saveError || 'unknown error') + '.') +
+      ' The cloud was NOT updated. Reload before making further changes.';
+    alert(failMsg);
+    return;
+  }
+
   const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
   const cheCount = typeof OAD.runCHE === 'function' ? OAD.runCHE() : 0;
   OAD._updateCHEBadge();
-  OAD.closeModal();
-  OAD.refreshActiveView();
   var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
   if (result.closed > 0) msg += ', ' + result.closed + ' closed';
   if (result.deleted > 0) msg += ', ' + result.deleted + ' deleted';
   if (result.edges_merged > 0) msg += ', ' + result.edges_merged + ' edges restored';
   if (adeCount > 0) msg += ', ' + adeCount + ' AI edges inferred';
-  if (cheCount > 0) msg += '. ⚠ ' + cheCount + ' configuration issue' + (cheCount === 1 ? '' : 's') + ' found — review in Health Panel';
+  if (cheCount > 0) msg += '. ' + cheCount + ' configuration issue' + (cheCount === 1 ? '' : 's') + ' found, review in Health Panel';
   alert(msg + '.');
 };
 
@@ -1980,8 +1995,7 @@ OAD._cawSaveClose = function () {
   if (OAD.needsClosureWizard(t.id)) {
     OAD.openClosureWizard(t.id, patch, logNote);
   } else {
-    OAD.updateThread(t.id, patch);
-    OAD.addEvolution(t.id, logNote);
+    OAD.updateThreadAndLog(t.id, patch, logNote);
     OAD.refreshActiveView();
     const panel = document.getElementById('detail-content');
     if (panel) panel.innerHTML = '<div class="detail-empty">Select a thread to view details</div>';
@@ -2186,8 +2200,7 @@ OAD.openClosureWizard = function (id, pendingPatch, logNote) {
     });
 
     // Close the parent thread
-    OAD.updateThread(id, pendingPatch);
-    if (logNote) OAD.addEvolution(id, logNote);
+    OAD.updateThreadAndLog(id, pendingPatch, logNote || null);
 
     OAD.closeModal();
     OAD.refreshActiveView();
