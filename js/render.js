@@ -1389,12 +1389,15 @@ OAD.renderTodayView = function () {
     focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
+  var capacityHtml = (OAD.Capacity && OAD.Capacity.bannerHtml) ? OAD.Capacity.bannerHtml() : '';
+
   panel.innerHTML =
     '<div class="ds-panel" role="main" style="max-width: 900px;">' +
       '<header class="ds-header">' +
         '<h2>Today</h2>' +
         '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
       '</header>' +
+      capacityHtml +
       focusCardHtml +
       bottomBucketsHtml +
     '</div>';
@@ -1447,6 +1450,78 @@ OAD.renderDailyInterceptContent = function() {
     '</div>';
 };
 
+OAD.weekLoadHtml = function (selectedDate) {
+  var todayDt = new Date();
+  todayDt.setHours(0, 0, 0, 0);
+  var todayStr = todayDt.toISOString().slice(0, 10);
+  var in7Dt = new Date(todayDt);
+  in7Dt.setDate(in7Dt.getDate() + 7);
+  var due = OAD.Due.dashboardData(todayStr, in7Dt.toISOString().slice(0, 10));
+  var cads = OAD.getVisibleCadences() || [];
+  var selected = selectedDate || '';
+  var rows = '';
+  var di;
+  for (di = 0; di < 7; di++) {
+    var dayDt = new Date(todayDt);
+    dayDt.setDate(dayDt.getDate() + di);
+    var dayStr = dayDt.toISOString().slice(0, 10);
+    var threadCount = due.active.filter(function (t) { return OAD.TemporalStatus.isDueToday(t, dayDt); }).length;
+    var cadenceCount = cads.filter(function (c) { return OAD.Due.isCadenceDueOn(c, dayStr); }).length;
+    var total = threadCount + cadenceCount;
+    var loadScore = OAD.calculateDayLoadScore(dayStr);
+    var labelKey = OAD.getDayLoadLabel(loadScore);
+    var label = labelKey === 'heavy' ? OAD.t('heavy', 'Heavy') : labelKey === 'busy' ? OAD.t('busy', 'Busy') : OAD.t('clear', 'Clear');
+    var labelCls = labelKey === 'heavy' ? 'load-row-heavy' : labelKey === 'busy' ? 'load-row-busy' : 'load-row-clear';
+    var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    var shiftStr = '';
+    var isOffDay = false;
+    if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay) {
+      isOffDay = OAD.isOffDay(dayStr, OAD._demoRole);
+      if (OAD._demoRole.includes('Counselor')) {
+        shiftStr = isOffDay ? ' (OFF)' : ' (8-4:30pm)';
+      } else if (OAD._demoRole.includes('Director') || OAD._demoRole.includes('Case Manager')) {
+        shiftStr = isOffDay ? ' (OFF)' : ' (9-5pm)';
+      } else if (OAD._demoRole === 'Medical' || OAD._demoRole === 'RA') {
+        shiftStr = ' (12hr Shift)';
+      }
+    }
+    if (isOffDay && total > 0) {
+      labelCls = 'load-row-danger';
+      label = OAD.t('shiftCollision', '⚠ Shift Collision');
+    }
+    var heavyThreshold = ((OAD.Config && OAD.Config.weekLoadWeights && OAD.Config.weekLoadWeights.heavyThreshold) != null)
+      ? OAD.Config.weekLoadWeights.heavyThreshold : 150;
+    var pct = Math.min((loadScore / heavyThreshold) * 100, 100);
+    var picked = dayStr === selected ? ' load-row-selected' : '';
+    rows +=
+      '<button type="button" class="load-row ' + labelCls + picked + '" data-date="' + dayStr + '" ' +
+        'onclick="OAD._pickLoadDay(\'' + dayStr + '\')" aria-label="' +
+        OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + OAD.esc(label) + '">' +
+        '<div class="load-row-details">' +
+          '<span class="load-day">' + OAD.esc(dayLabel) +
+            '<span style="color:var(--text-muted);font-weight:400;font-size:11px;margin-left:4px">' + shiftStr + '</span></span>' +
+          '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
+          '<span class="load-label">' + OAD.esc(label) + '</span>' +
+        '</div>' +
+        '<div class="load-progress-bar">' +
+          '<div class="load-progress-fill" style="width: ' + pct + '%"></div>' +
+        '</div>' +
+      '</button>';
+  }
+  return '<section class="ds-week-load ds-week-load-form" aria-label="This week\'s load">' +
+    '<h3 class="ds-bucket-header"><span class="ds-bucket-label">This Week\'s Load</span></h3>' +
+    '<div class="ds-week-load-body">' + rows + '</div>' +
+  '</section>';
+};
+
+OAD._pickLoadDay = function (iso) {
+  var input = document.getElementById('f-next-date');
+  if (input) input.value = iso || '';
+  document.querySelectorAll('#modal-overlay .load-row[data-date]').forEach(function (row) {
+    row.classList.toggle('load-row-selected', row.getAttribute('data-date') === iso);
+  });
+};
+
 OAD.renderDailyView = function () {
   OAD._lastView = 'Daily';
   OAD.highlightNav('renderDailyView');
@@ -1466,15 +1541,11 @@ OAD.renderDailyView = function () {
   // ── Threads ────────────────────────────────────────────────────────
   const due = OAD.Due.dashboardData(todayStr, in7Str);
   const childrenByParentUUID = due.childrenByParentUUID;
-  const filteredActive = due.visibleThreads;
-
-  const dormantThreads = (OAD.getVisibleThreads() || []).filter(function (t) { return t.status === 'dormant'; });
 
   // Filter threads into the standard buckets
   const overdueThreads = due.overdue;
   const todayThreads   = due.today;
   const weekThreads    = due.week;
-  const activeThreads  = due.noDate;
 
   // Cycle detection
   const cycles = OAD.detectCycles();
@@ -1641,7 +1712,6 @@ OAD.renderDailyView = function () {
   const overdueItems = overdueThreads.map(t => threadRow(t, 'overdue'));
   const todayItems   = todayThreads.map(t => threadRow(t, 'today'));
   const weekItems    = weekThreads.map(t => threadRow(t, 'week'));
-  const activeItems  = activeThreads.map(t => threadRow(t, 'active'));
 
   // Real, browsable section for OAD.Due.stalledThreads() -- not just the "Stalled: N" stat card.
   // Per user report: a thread whose next_action_date has drifted into the past but whose
@@ -1738,115 +1808,16 @@ OAD.renderDailyView = function () {
     focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
-  // ── Life-area heat map ──────────────────────────────────────────────
-  const areaHeat = OAD.getLifeAreaHeat();
-  var heatMapHtml = '';
-  if (areaHeat.length) {
-    heatMapHtml = '<section class="ds-area-heat-section" aria-label="Life Area Status">' +
-      '<h3 class="ds-bucket-header"><span class="ds-bucket-icon" aria-hidden="true">🗂</span><span class="ds-bucket-label">Life Areas Heat</span></h3>' +
-      '<div class="area-heat-map" role="list" aria-label="Life area heat">' +
-        areaHeat.map(function (a) {
-          const heat = a.avgPressure >= 60 ? 'hot' : a.avgPressure >= 30 ? 'warm' : 'cool';
-          const stalledTag = a.stalled ? '<span class="area-stalled">' + a.stalled + ' stalled</span>' : '';
-          return '<div class="area-chip area-chip-' + heat + '" role="listitem" ' +
-            'aria-label="' + OAD.esc(a.name) + ' ' + a.count + ' threads avg pressure ' + a.avgPressure + '">' +
-            '<span class="area-chip-name">' + OAD.esc(a.name) + '</span>' +
-            '<div class="area-chip-stats">' +
-              '<span class="area-chip-score">' + a.avgPressure + '</span>' +
-              stalledTag +
-            '</div>' +
-          '</div>';
-        }).join('') +
-      '</div>' +
-    '</section>';
-  }
-
-  // ── This Week's Load ───────────────────────────────────────────────
-  const weekLoadHtml = (function () {
-    var rows = '';
-    for (var di = 0; di < 7; di++) {
-      var dayDt = new Date(todayDt);
-      dayDt.setDate(dayDt.getDate() + di);
-      var dayStr = dayDt.toISOString().slice(0, 10);
-      var threadCount  = due.active.filter(function (t) { return OAD.TemporalStatus.isDueToday(t, dayDt); }).length;
-      var cadenceCount = cads.filter(function (c)  { return OAD.Due.isCadenceDueOn(c, dayStr); }).length;
-      var total = threadCount + cadenceCount; // still shown as "N items" — the label below no longer comes from this raw count
-      var loadScore = OAD.calculateDayLoadScore(dayStr);
-      var labelKey = OAD.getDayLoadLabel(loadScore);
-      var label    = labelKey === 'heavy' ? OAD.t('heavy', 'Heavy') : labelKey === 'busy' ? OAD.t('busy', 'Busy') : OAD.t('clear', 'Clear');
-      var labelCls = labelKey === 'heavy' ? 'load-row-heavy' : labelKey === 'busy' ? 'load-row-busy' : 'load-row-clear';
-      var dayLabel = di === 0 ? 'Today' : dayDt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-      
-      var shiftStr = '';
-      var isOffDay = false;
-      if (window.OAD && OAD.Config && OAD.Config.demoMode && OAD._demoRole && OAD.isOffDay) {
-        isOffDay = OAD.isOffDay(dayStr, OAD._demoRole);
-        if (OAD._demoRole.includes('Counselor')) {
-          if (isOffDay) shiftStr = ' (OFF)';
-          else shiftStr = ' (8-4:30pm)';
-        } else if (OAD._demoRole.includes('Director') || OAD._demoRole.includes('Case Manager')) {
-          if (isOffDay) shiftStr = ' (OFF)';
-          else shiftStr = ' (9-5pm)';
-        } else if (OAD._demoRole === 'Medical' || OAD._demoRole === 'RA') {
-          shiftStr = ' (12hr Shift)';
-        }
-      }
-      
-      if (isOffDay && total > 0) {
-        labelCls = 'load-row-danger';
-        label = OAD.t('shiftCollision', '⚠ Shift Collision');
-      }
-      
-      const heavyThreshold = ((OAD.Config && OAD.Config.weekLoadWeights && OAD.Config.weekLoadWeights.heavyThreshold) != null)
-        ? OAD.Config.weekLoadWeights.heavyThreshold : 150;
-      const pct = Math.min((loadScore / heavyThreshold) * 100, 100);
-      rows +=
-        '<div class="load-row ' + labelCls + '" aria-label="' +
-            OAD.esc(dayLabel) + ': ' + total + ' item' + (total !== 1 ? 's' : '') + ', ' + label + '">' +
-          '<div class="load-row-details">' +
-            '<span class="load-day">'   + OAD.esc(dayLabel) + '<span style="color:var(--text-muted);font-weight:400;font-size:11px;margin-left:4px">' + shiftStr + '</span></span>' +
-            '<span class="load-count">' + total + (total === 1 ? ' item' : ' items') + '</span>' +
-            '<span class="load-label">' + OAD.esc(label) + '</span>' +
-          '</div>' +
-          '<div class="load-progress-bar">' +
-            '<div class="load-progress-fill" style="width: ' + pct + '%"></div>' +
-          '</div>' +
-        '</div>';
-    }
-    return '<section class="ds-week-load" aria-label="This week\'s load">' +
-      '<h3 class="ds-bucket-header">' +
-        '<span class="ds-bucket-icon" aria-hidden="true">▤</span>' +
-        '<span class="ds-bucket-label">This Week\'s Load</span>' +
-      '</h3>' +
-      '<div class="ds-week-load-body">' + rows + '</div>' +
-    '</section>';
-  }());
-
-  // ── Salutation & Metrics calculation ──────────────────────────────
   const hours = new Date().getHours();
   const salutationKey = hours < 12 ? 'goodMorning' : hours < 18 ? 'goodAfternoon' : 'goodEvening';
   const salutation = OAD.t(salutationKey);
   const persona = OAD.DB.persona;
   const userName = OAD.Config.userGreetingTitle || (window.OAD && OAD.Config.demoMode && OAD._demoRole) || (persona && persona.name) || 'Chief';
-  
-  // Load Overview replaces the old single "Critical Load" number (pressureDist['80+'] +
-  // pressureDist['50-79']) with four distinct counts — see OAD.Due.loadOverview (js/due.js) for
-  // why these can't drift from each other or from the Overdue/Stalled/This Week lists rendered
-  // elsewhere on this same dashboard. Per ticket-enterprise-mode-and-load-overview.md Part 2.
-  const overview = OAD.Due.loadOverview();
-  const criticalCls = overview.criticalPressure.count > 0 ? 'p-high' : 'p-low';
-  let hardDeadlineStr = (persona && persona.life_context && persona.life_context.hard_deadline)
-    ? OAD.formatDate(persona.life_context.hard_deadline) 
-    : '—';
-    
-  if (hardDeadlineStr === '—' && window.OAD && OAD.Config.demoMode && OAD._demoRole) {
-    const endOfQuarter = new Date();
-    endOfQuarter.setHours(0, 0, 0, 0);
-    endOfQuarter.setMonth(Math.floor(endOfQuarter.getMonth() / 3) * 3 + 3, 0); // Last day of current quarter
-    hardDeadlineStr = OAD.formatDate(endOfQuarter.toISOString().slice(0,10));
-  }
 
-  // ── Render HTML to panel ──────────────────────────────────────────
+  var capacityHtml = (OAD.Capacity && OAD.Capacity.bannerHtml) ? OAD.Capacity.bannerHtml() : '';
+  var showDayBrief = OAD.DayBrief && (OAD.DayBrief.expanded || OAD.DayBrief.pending);
+  var dayBriefHtml = showDayBrief ? OAD.DayBrief.boxHtml() : '';
+
   panel.innerHTML =
     '<div class="ds-dashboard" role="main">' +
       '<header class="ds-hero">' +
@@ -1855,89 +1826,25 @@ OAD.renderDailyView = function () {
           '<p class="ds-subtitle">' + OAD.esc(dateLabel) + '</p>' +
         '</div>' +
         '<div class="ds-quick-actions">' +
-          '<button class="success" onclick="OAD.openNewThreadModal()">+ New Task</button>' +
+          '<button class="success" type="button" onclick="OAD.openNewThreadModal()">+ New Task</button>' +
+          '<button class="secondary" type="button" id="day-brief-open" onclick="OAD.DayBrief.toggle()">Tell me about a day</button>' +
         '</div>' +
       '</header>' +
-      
-      '<div id="daily-intercept-content" style="margin-bottom:20px;"></div>' +
-
-      '<div class="ds-metrics-grid">' +
-        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
-          '<div class="ds-metric-title">Active Tasks</div>' +
-          '<div class="ds-metric-value">' + due.active.length + '</div>' +
-          '<div class="ds-metric-desc">In progress</div>' +
-        '</div>' +
-        ((window.OAD && window.OAD.Config && window.OAD.Config.demoMode && window.OAD._demoRole && !['CCO', 'Director Alpha', 'Director Beta'].includes(window.OAD._demoRole)) ? '' :
-        '<div class="ds-metric-card">' +
-          '<div class="ds-metric-title">Hard Deadline</div>' +
-          '<div class="ds-metric-value deadline">' + OAD.esc(hardDeadlineStr) + '</div>' +
-          '<div class="ds-metric-desc">Target milestone</div>' +
-        '</div>') +
-      '</div>' +
-
-      '<h2 class="ds-section-label">Load Overview</h2>' +
-      '<div class="ds-metrics-grid">' +
-        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
-          '<div class="ds-metric-title">Overdue</div>' +
-          '<div class="ds-metric-value ' + (overview.overdue.count > 0 ? 'p-high' : '') + '">' + overview.overdue.count + '</div>' +
-          '<div class="ds-metric-desc">Deadline breached</div>' +
-        '</div>' +
-        '<div class="ds-metric-card" role="button" onclick="OAD._activeListStatus=\'stalled\'; OAD.renderListView();">' +
-          '<div class="ds-metric-title">Stalled</div>' +
-          '<div class="ds-metric-value stalled">' + overview.stalled.count + '</div>' +
-          '<div class="ds-metric-desc">Drifted, no deadline breach</div>' +
-        '</div>' +
-        '<div class="ds-metric-card" role="button" onclick="OAD.renderListView()">' +
-          '<div class="ds-metric-title">Due This Week</div>' +
-          '<div class="ds-metric-value">' + overview.dueThisWeek.count + '</div>' +
-          '<div class="ds-metric-desc">Upcoming deadlines</div>' +
-        '</div>' +
-        '<div class="ds-metric-card" role="button" title="Threads at pressure 80 or above" onclick="OAD._activeListStatus=\'not-closed\'; OAD.renderListView();">' +
-          '<div class="ds-metric-title">Critical Pressure</div>' +
-          '<div class="ds-metric-value ' + criticalCls + '">' + overview.criticalPressure.count + '</div>' +
-          '<div class="ds-metric-desc">Pressure 80+, right now</div>' +
-        '</div>' +
-      '</div>' +
-
-      '<div class="ds-main-grid">' +
-        '<div class="ds-col-left">' +
-          toatWidgetHtml +
-          focusCardHtml +
-          weekLoadHtml +
-          heatMapHtml +
-        '</div>' +
-        '<div class="ds-col-right">' +
-          bucket('overdue', '⚠', 'Overdue Tasks', overdueItems) +
-          bucket('today',   '▶', 'Due Today',   todayItems)   +
-          bucket('stalled', '⏸', 'Stalled', stalledItems) +
-          bucket('habits',  '✦', 'Active Habits', habitItems)   +
-          bucket('cadences','📅', 'Upcoming Cadences', cadenceItems) +
-          bucket('week',    '○', 'This Week', weekItems)   +
-          bucket('active',  '◇', 'Active — no date set', activeItems) +
-          (!overdueItems.length && !todayItems.length && !weekItems.length && !activeItems.length && !habitItems.length && !cadenceItems.length && !stalledItems.length
-            ? '<div class="ds-all-clear" role="status">✓ All clear — nothing overdue, due today, or active.</div>'
-            : '') +
-          (dormantThreads.length
-            ? '<section class="ds-bucket ds-bucket-dormant" aria-label="Dormant" style="opacity:0.7">' +
-                '<h3 class="ds-bucket-header">' +
-                  '<span class="ds-bucket-icon" aria-hidden="true">💤</span>' +
-                  '<span class="ds-bucket-label">Dormant — Parked Until Trigger</span>' +
-                  '<span class="ds-bucket-count">' + dormantThreads.length + '</span>' +
-                '</h3>' +
-                dormantThreads.map(function(t) {
-                  return '<div class="ds-row ds-thread ds-row-dormant" role="button" onclick="OAD.selectThread(' + t.id + ')">' +
-                    '<div class="ds-row-main">' +
-                      '<span class="pill dormant" style="font-size:10px;padding:2px 6px;flex-shrink:0">dormant</span>' +
-                      '<div class="ds-row-text">' +
-                        '<div class="ds-row-title">' + OAD.esc(t.title) + '</div>' +
-                        (t.dormant_trigger ? '<div class="ds-row-sub" style="color:#8855dd">' + OAD.esc(t.dormant_trigger) + '</div>' : '') +
-                      '</div>' +
-                    '</div>' +
-                  '</div>';
-                }).join('') +
-              '</section>'
-            : '') +
-        '</div>' +
+      dayBriefHtml +
+      capacityHtml +
+      '<div id="daily-intercept-content"></div>' +
+      '<div class="ds-work">' +
+        toatWidgetHtml +
+        focusCardHtml +
+        bucket('overdue', '⚠', 'Overdue Tasks', overdueItems) +
+        bucket('today',   '▶', 'Due Today',   todayItems) +
+        bucket('stalled', '⏸', 'Stalled', stalledItems) +
+        bucket('habits',  '✦', 'Active Habits', habitItems) +
+        bucket('cadences','📅', 'Upcoming Cadences', cadenceItems) +
+        bucket('week',    '○', 'This Week', weekItems) +
+        (!overdueItems.length && !todayItems.length && !weekItems.length && !habitItems.length && !cadenceItems.length && !stalledItems.length
+          ? '<div class="ds-all-clear" role="status">All clear. Nothing overdue or due today.</div>'
+          : '') +
       '</div>' +
     '</div>';
     
@@ -2156,6 +2063,11 @@ OAD.renderMatrixView = function () {
     quadrantHtml('q4', 'Inbox', q4Items, 'Needs triage into a real thread or archive') +
   '</div>';
 
+  if (OAD.DayNote) {
+    OAD.DayNote.recordSnapshot(todayStr, OAD.DayNote.askedFromQuadrants(q1Threads, q2Threads, in7Str));
+  }
+  var dayNoteHtml = (OAD.DayNote && OAD.DayNote.barHtml) ? OAD.DayNote.barHtml() : '';
+
   const habitItems = overdueHabits.concat(todayHabits).concat(weekHabits).map(habitRow);
   const cadenceItems = overdueCadences.concat(todayCadences).concat(weekCadences).map(cadenceRow);
   
@@ -2193,12 +2105,16 @@ OAD.renderMatrixView = function () {
     focusCardHtml = OAD._renderFocusNowEmptyState();
   }
 
+  var capacityHtml = (OAD.Capacity && OAD.Capacity.bannerHtml) ? OAD.Capacity.bannerHtml() : '';
+
   panel.innerHTML =
     '<div class="ds-panel" role="main" style="max-width: 1000px;">' +
       '<header class="ds-header">' +
         '<h2>Eisenhower Matrix</h2>' +
         '<p class="ds-date">' + OAD.esc(dateLabel) + '</p>' +
       '</header>' +
+      capacityHtml +
+      dayNoteHtml +
       focusCardHtml +
       matrixHtml +
       '<div style="margin-top: 32px;">' +

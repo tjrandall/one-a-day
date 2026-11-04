@@ -247,6 +247,10 @@ OAD.updateThread = function (id, patch) {
   if (patch.parent_uuid && patch.status === undefined && t.status === 'inbox') {
     patch.status = 'open';
   }
+  if (patch.day_impact !== undefined) patch.day_impact = OAD._dayImpact(patch.day_impact);
+  if (patch.day_fit !== undefined) patch.day_fit = OAD._dayFit(patch.day_fit);
+  if (patch.travel_miles !== undefined) patch.travel_miles = OAD._travelNumber(patch.travel_miles);
+  if (patch.travel_minutes !== undefined) patch.travel_minutes = OAD._travelNumber(patch.travel_minutes);
   Object.assign(t, patch);
   OAD.saveDB();
   OAD._runAfterSave(t);
@@ -546,6 +550,18 @@ OAD.makeThread = function (overrides) {
     contingency_escalation: '',
     deadline: null,
     deadline_time: null, // optional 'HH:MM' (24h) — null means date-only, no specific time
+    // '' | 'partial' | 'full' | 'windshield'. The day this thread occupies
+    // (next action, or the deadline when next action is empty) is lost desk
+    // time. windshield still allows calls. OAD.Capacity reads it. Pressure
+    // does not. ADE-004 relates that day to the week's deliverables.
+    day_impact: '',
+    // Measured loop for a windshield day, copied onto each appointment from
+    // that day brief. Null unless a route lookup produced them.
+    travel_miles: null,
+    travel_minutes: null,
+    // 'windshield' marks ordinary work that is allowed to sit on a windshield
+    // day (a call, dictation, audio). Empty for everything else.
+    day_fit: '',
     effortEstimate: null,
     weeklyCommitment: null,
     effortLogged: 0,
@@ -606,7 +622,27 @@ OAD.makeThread = function (overrides) {
     next_due: null,
     consequences: ''
   }, overrides);
+  data.day_impact = OAD._dayImpact(data.day_impact);
+  data.travel_miles = OAD._travelNumber(data.travel_miles);
+  data.travel_minutes = OAD._travelNumber(data.travel_minutes);
+  data.day_fit = OAD._dayFit(data.day_fit);
   return (window.OAD.Models && window.OAD.Models.Thread) ? new window.OAD.Models.Thread(data) : data;
+};
+
+// Day impact is a closed set. Anything else is a normal day.
+OAD._dayImpact = function (value) {
+  return (value === 'full' || value === 'partial' || value === 'windshield') ? value : '';
+};
+
+OAD._dayFit = function (value) {
+  return value === 'windshield' ? 'windshield' : '';
+};
+
+OAD._travelNumber = function (value) {
+  if (value == null || value === '') return null;
+  var n = Number(value);
+  if (!isFinite(n) || n < 0) return null;
+  return Math.round(n);
 };
 
 // Cadences are Threads with thread_kind:'cadence' (ARCHITECTURE_RULES.md Rule 1, migrated per
@@ -878,7 +914,7 @@ OAD._IMPORT_FIELDS = [
   'current_assumption', 'assumption_verified',
   'next_action', 'next_action_date', 'next_action_time', 'next_action_channel', 'next_action_contact',
   'contingency_trigger_date', 'contingency_action', 'contingency_escalation',
-  'deadline', 'deadline_time', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
+  'deadline', 'deadline_time', 'day_impact', 'travel_miles', 'travel_minutes', 'day_fit', 'effortEstimate', 'weeklyCommitment', 'effortLogged',
   'lead_time_days', 'connections', 'parent_uuid', 'date_push_count', 'metadata',
   'dormant_trigger', 'user_action_complete',
   // thread_kind + Habit/Idea fields — ARCHITECTURE_RULES.md Rule 4.
@@ -953,6 +989,10 @@ OAD.applyImport = async function (results, confirmedUpdates, confirmedDeleteIds)
       contingency_escalation:   row.contingency_escalation   || '',
       deadline:                 row.deadline                 || null,
       deadline_time:            row.deadline_time             || null,
+      day_impact:               OAD._dayImpact(row.day_impact),
+      travel_miles:             OAD._travelNumber(row.travel_miles),
+      travel_minutes:           OAD._travelNumber(row.travel_minutes),
+      day_fit:                  OAD._dayFit(row.day_fit),
       effortEstimate:           row.effortEstimate           || null,
       weeklyCommitment:         row.weeklyCommitment         || null,
       effortLogged:             row.effortLogged             || 0,
@@ -1182,6 +1222,10 @@ OAD.exportThreads = function () {
       contingency_trigger_date: t.contingency_trigger_date || '',
       deadline:                 t.deadline                 || null,
       deadline_time:            t.deadline_time             || null,
+      day_impact:               OAD._dayImpact(t.day_impact),
+      travel_miles:             OAD._travelNumber(t.travel_miles),
+      travel_minutes:           OAD._travelNumber(t.travel_minutes),
+      day_fit:                  OAD._dayFit(t.day_fit),
       effortEstimate:           t.effortEstimate           || null,
       weeklyCommitment:         t.weeklyCommitment         || null,
       effortLogged:             t.effortLogged             || 0,
@@ -1525,6 +1569,13 @@ OAD._normalizeDB = function () {
   OAD.DB.ade_suppressions = OAD.DB.ade_suppressions || [];
   OAD.DB.health_alerts    = OAD.DB.health_alerts    || [];
   OAD.DB.saved_views      = OAD.DB.saved_views      || [];
+  // Day notes are not threads. matrix_days is the first Matrix open of a local
+  // date (the work that day asked for). day_notes is the one sentence, or a skip.
+  // Promoting a note is a separate explicit act. See OAD.DayNote in js/due.js.
+  if (!OAD.DB.matrix_days || typeof OAD.DB.matrix_days !== 'object' || Array.isArray(OAD.DB.matrix_days)) {
+    OAD.DB.matrix_days = {};
+  }
+  if (!Array.isArray(OAD.DB.day_notes)) OAD.DB.day_notes = [];
   OAD.DB.persona          = OAD.DB.persona          || {};
   OAD.DB.persona.life_context = OAD.DB.persona.life_context || {};
   if (!Array.isArray(OAD.DB.persona.what_is_not_working)) OAD.DB.persona.what_is_not_working = [];

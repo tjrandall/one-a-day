@@ -4,6 +4,9 @@ OAD.TranslationCache = {};
 OAD.Config = {
   currentLocale: localStorage.getItem('oad_locale') || 'en',
   userGreetingTitle: localStorage.getItem('oad_greeting_title') || '',
+  // Where a described day starts and ends. The day brief adds this to the
+  // route. It is not guessed from the sentence.
+  homeLabel: localStorage.getItem('oad_home_label') || 'Plymouth, MA',
   gmailSearchFilter: localStorage.getItem('oad_gmail_filter') || 'is:unread (subject:Notice OR subject:Bill OR subject:Statement OR subject:Register OR subject:Enrollment)',
   ocrLanguage: 'eng',
   defaultPriority: 'medium',
@@ -36,6 +39,9 @@ OAD.Config = {
     defaultGeminiModel: 'gemini-2.5-pro',
     deprecatedGeminiModels: ['gemini-1.5-pro-latest'],
     availableGeminiModels: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-pro-latest'],
+    defaultXaiModel: 'grok-4.7',
+    availableXaiModels: ['grok-4.7'],
+    xaiBaseUrl: 'https://api.x.ai/v1',
     anthropicBaseUrl: 'https://api.anthropic.com',
     anthropicApiVersion: 'v1',
     anthropicVersion: '2023-06-01',

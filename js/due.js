@@ -271,3 +271,217 @@ OAD.Due.selfCheck = function () {
 
   return { ok: issues.length === 0, issues: issues };
 };
+
+// One sentence for a day whose log does not cover what the Matrix asked.
+// Stored on the database blob, never as a thread. A thread exists only after
+// an explicit promote. The snapshot is the first Matrix open of that local
+// date, and only the work that was actually asked: Q1, plus Q2 rows whose
+// next action falls inside the same 7-day horizon the Matrix already uses.
+// Q2 is also the catch-all for every other open thread, and those rows are
+// not part of the ask. An empty first open is not stored, so a later open
+// the same day can still record a real board.
+OAD.DayNote = {
+  _systemNote: function (note) {
+    if (!note) return true;
+    return note.indexOf('via import sync.') !== -1
+      || note.indexOf('Status auto-corrected from inbox') === 0;
+  },
+
+  _ensure: function () {
+    if (!OAD.DB.matrix_days || typeof OAD.DB.matrix_days !== 'object' || Array.isArray(OAD.DB.matrix_days)) {
+      OAD.DB.matrix_days = {};
+    }
+    if (!Array.isArray(OAD.DB.day_notes)) OAD.DB.day_notes = [];
+  },
+
+  _uniq: function (xs) {
+    var seen = {};
+    var out = [];
+    (xs || []).forEach(function (x) {
+      if (!x || seen[x]) return;
+      seen[x] = true;
+      out.push(x);
+    });
+    return out;
+  },
+
+  // Uuids the Matrix asked for that day. q1 and q2 are the visible quadrant rows.
+  askedFromQuadrants: function (q1, q2, horizonStr) {
+    var ids = [];
+    (q1 || []).forEach(function (t) { if (t && t.uuid) ids.push(t.uuid); });
+    (q2 || []).forEach(function (t) {
+      if (t && t.uuid && t.next_action_date && horizonStr && t.next_action_date <= horizonStr) ids.push(t.uuid);
+    });
+    return OAD.DayNote._uniq(ids);
+  },
+
+  // Asked rows with no user-written evolution entry on that date.
+  uncovered: function (planned, logged) {
+    var p = OAD.DayNote._uniq(planned);
+    var have = {};
+    OAD.DayNote._uniq(logged).forEach(function (x) { have[x] = true; });
+    return p.filter(function (x) { return !have[x]; });
+  },
+
+  loggedUuids: function (date, threads) {
+    var list = threads || (OAD.DB && OAD.DB.threads) || [];
+    var out = [];
+    list.forEach(function (t) {
+      if (!t || !t.uuid) return;
+      var hit = (t.evolution_log || []).some(function (e) {
+        return e && e.date === date && !OAD.DayNote._systemNote(e.note);
+      });
+      if (hit) out.push(t.uuid);
+    });
+    return out;
+  },
+
+  noteFor: function (date) {
+    OAD.DayNote._ensure();
+    for (var i = 0; i < OAD.DB.day_notes.length; i++) {
+      if (OAD.DB.day_notes[i] && OAD.DB.day_notes[i].date === date) return OAD.DB.day_notes[i];
+    }
+    return null;
+  },
+
+  recordSnapshot: function (date, uuids) {
+    if (!date) return;
+    OAD.DayNote._ensure();
+    if (OAD.DB.matrix_days[date]) return;
+    var asked = OAD.DayNote._uniq(uuids);
+    if (!asked.length) return;
+    OAD.DB.matrix_days[date] = { asked: asked, recorded_at: new Date().toISOString() };
+    if (typeof OAD.saveDB === 'function') OAD.saveDB();
+  },
+
+  // The latest earlier day that has a snapshot, no note, and uncovered work.
+  // Older gaps stay quiet so a missed week does not stack into a pile of prompts.
+  pending: function (today) {
+    OAD.DayNote._ensure();
+    var todayStr = today || (typeof OAD.todayStr === 'function' ? OAD.todayStr() : '');
+    if (!todayStr) return null;
+    var dates = Object.keys(OAD.DB.matrix_days).filter(function (d) { return d < todayStr; }).sort();
+    if (!dates.length) return null;
+    var date = dates[dates.length - 1];
+    if (OAD.DayNote.noteFor(date)) return null;
+    var asked = OAD.DB.matrix_days[date].asked || [];
+    var missing = OAD.DayNote.uncovered(asked, OAD.DayNote.loggedUuids(date));
+    if (!missing.length) return null;
+    return { date: date, missing: missing };
+  },
+
+  // Newest saved sentence that has not been promoted. Skips are not shown.
+  unpromoted: function () {
+    OAD.DayNote._ensure();
+    for (var i = OAD.DB.day_notes.length - 1; i >= 0; i--) {
+      var row = OAD.DB.day_notes[i];
+      if (row && row.note && !row.skipped && !row.promoted_thread_uuid) return row;
+    }
+    return null;
+  },
+
+  save: function (date, text) {
+    var note = (text || '').trim();
+    if (!date || !note) return null;
+    if (OAD.DayNote.noteFor(date)) return OAD.DayNote.noteFor(date);
+    OAD.DayNote._ensure();
+    var row = {
+      date: date,
+      note: note,
+      skipped: false,
+      created_at: new Date().toISOString(),
+      promoted_thread_uuid: null
+    };
+    OAD.DB.day_notes.push(row);
+    if (typeof OAD.saveDB === 'function') OAD.saveDB();
+    return row;
+  },
+
+  skip: function (date) {
+    if (!date || OAD.DayNote.noteFor(date)) return OAD.DayNote.noteFor(date);
+    OAD.DayNote._ensure();
+    var row = {
+      date: date,
+      note: '',
+      skipped: true,
+      created_at: new Date().toISOString(),
+      promoted_thread_uuid: null
+    };
+    OAD.DB.day_notes.push(row);
+    if (typeof OAD.saveDB === 'function') OAD.saveDB();
+    return row;
+  },
+
+  promote: function (date) {
+    var row = OAD.DayNote.noteFor(date);
+    if (!row || !row.note || row.skipped || row.promoted_thread_uuid) return null;
+    OAD._suppressSaveDB = true;
+    var thread;
+    try {
+      thread = OAD.addThread(OAD.makeThread({
+        title: row.note,
+        status: 'open',
+        priority: 'medium',
+        life_area: (OAD.Config && OAD.Config.defaultLifeArea) || 'Personal Growth',
+        next_action: row.note,
+        next_action_date: typeof OAD.todayStr === 'function' ? OAD.todayStr() : '',
+        closing_condition: 'Done'
+      }));
+      OAD.addEvolution(thread.id, 'Promoted from the day note for ' + date + '.');
+      row.promoted_thread_uuid = thread.uuid;
+    } finally {
+      OAD._suppressSaveDB = false;
+    }
+    if (typeof OAD.saveDB === 'function') OAD.saveDB();
+    return thread;
+  },
+
+  barHtml: function () {
+    var pending = OAD.DayNote.pending();
+    var saved = OAD.DayNote.unpromoted();
+    if (pending && saved && saved.date === pending.date) saved = null;
+    if (!pending && !saved) return '';
+    var html = '<div class="day-note-bar" id="day-note-bar">';
+    if (pending) {
+      var label = typeof OAD.formatDate === 'function' ? OAD.formatDate(pending.date) : pending.date;
+      html += '<p>The log for ' + OAD.esc(label) + ' does not cover what the Matrix asked. One sentence on what you actually did.</p>';
+      html += '<form onsubmit="return OAD.DayNote._submit(event)">' +
+        '<input id="day-note-input" type="text" maxlength="280" data-date="' + OAD.esc(pending.date) + '" ' +
+          'placeholder="One sentence" aria-label="What you actually did on ' + OAD.esc(label) + '" required>' +
+        '<button type="submit">Save note</button>' +
+        '<button type="button" class="ghost" onclick="OAD.DayNote._skipClick()">No note</button>' +
+      '</form>';
+    }
+    if (saved) {
+      var savedLabel = typeof OAD.formatDate === 'function' ? OAD.formatDate(saved.date) : saved.date;
+      html += '<p class="day-note-saved">' + OAD.esc(savedLabel) + ': ' + OAD.esc(saved.note) +
+        ' <button type="button" data-date="' + OAD.esc(saved.date) + '" onclick="OAD.DayNote._promoteClick(this)">Make this a thread</button></p>';
+    }
+    html += '</div>';
+    return html;
+  },
+
+  _submit: function (event) {
+    if (event && event.preventDefault) event.preventDefault();
+    var input = document.getElementById('day-note-input');
+    if (!input) return false;
+    var text = (input.value || '').trim();
+    if (!text) return false;
+    OAD.DayNote.save(input.getAttribute('data-date'), text);
+    if (typeof OAD.renderMatrixView === 'function') OAD.renderMatrixView();
+    return false;
+  },
+
+  _skipClick: function () {
+    var input = document.getElementById('day-note-input');
+    if (!input) return;
+    OAD.DayNote.skip(input.getAttribute('data-date'));
+    if (typeof OAD.renderMatrixView === 'function') OAD.renderMatrixView();
+  },
+
+  _promoteClick: function (btn) {
+    if (!btn) return;
+    OAD.DayNote.promote(btn.getAttribute('data-date'));
+    if (typeof OAD.renderMatrixView === 'function') OAD.renderMatrixView();
+  }
+};

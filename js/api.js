@@ -3,19 +3,25 @@ window.OAD = window.OAD || {};
 OAD.AI_PROVIDER = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultProvider) || 'anthropic';
 OAD.API_KEY = '';
 OAD.GEMINI_API_KEY = '';
+OAD.XAI_API_KEY = '';
+OAD.XAI_MODEL = 'grok-4.7';
 OAD.MODEL = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultClaudeModel) || 'claude-3-5-sonnet-latest';
 OAD.GEMINI_MODEL = (window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.defaultGeminiModel) || 'gemini-2.5-pro';
 
-OAD.setAiSettings = function (provider, claudeKey, geminiKey, geminiModel) {
+OAD.setAiSettings = function (provider, claudeKey, geminiKey, geminiModel, xaiKey, xaiModel) {
   OAD.AI_PROVIDER = provider;
   OAD.API_KEY = claudeKey;
   OAD.GEMINI_API_KEY = geminiKey;
   if (geminiModel) OAD.GEMINI_MODEL = geminiModel;
+  if (xaiKey !== undefined) OAD.XAI_API_KEY = xaiKey || '';
+  if (xaiModel) OAD.XAI_MODEL = xaiModel;
   try {
     localStorage.setItem('oad_ai_provider', provider);
     localStorage.setItem('oad_api_key', claudeKey);
     localStorage.setItem('oad_gemini_api_key', geminiKey);
     if (geminiModel) localStorage.setItem('oad_gemini_model', geminiModel);
+    if (xaiKey !== undefined) localStorage.setItem('oad_xai_api_key', OAD.XAI_API_KEY);
+    if (xaiModel) localStorage.setItem('oad_xai_model', xaiModel);
   } catch (_) { }
 };
 
@@ -27,6 +33,10 @@ OAD.loadApiKey = function () {
     if (ck) OAD.API_KEY = ck;
     const gk = localStorage.getItem('oad_gemini_api_key');
     if (gk) OAD.GEMINI_API_KEY = gk;
+    const xk = localStorage.getItem('oad_xai_api_key');
+    if (xk) OAD.XAI_API_KEY = xk;
+    const xm = localStorage.getItem('oad_xai_model');
+    if (xm) OAD.XAI_MODEL = xm;
     const gm = localStorage.getItem('oad_gemini_model');
     if (gm) {
       const aiCfg = (window.OAD && OAD.Config && OAD.Config.aiConfig) || {};
@@ -42,11 +52,58 @@ OAD.loadApiKey = function () {
 };
 
 OAD._llmCall = async function (messages, systemPrompt) {
-  if (OAD.AI_PROVIDER === 'gemini') {
-    return await OAD._geminiCall(messages, systemPrompt);
-  } else {
-    return await OAD._claudeCall(messages, systemPrompt);
+  if (OAD.AI_PROVIDER === 'gemini') return await OAD._geminiCall(messages, systemPrompt);
+  if (OAD.AI_PROVIDER === 'xai') return await OAD._xaiCall(messages, systemPrompt);
+  return await OAD._claudeCall(messages, systemPrompt);
+};
+
+OAD._xaiText = function (data) {
+  if (!data) return '';
+  if (typeof data.output_text === 'string' && data.output_text) return data.output_text;
+  var chunks = [];
+  (data.output || []).forEach(function (item) {
+    if (!item || item.type === 'reasoning') return;
+    (item.content || []).forEach(function (part) {
+      if (!part || part.type === 'reasoning_text') return;
+      if (typeof part.text === 'string' && part.text) chunks.push(part.text);
+    });
+  });
+  if (chunks.length) return chunks.join('\n');
+  var choice = data.choices && data.choices[0] && data.choices[0].message;
+  return (choice && choice.content) || '';
+};
+
+OAD._xaiCall = async function (messages, systemPrompt) {
+  if (!OAD.XAI_API_KEY) throw new Error(OAD.t('err_no_xai_key'));
+
+  const aiCfg = (window.OAD && OAD.Config && OAD.Config.aiConfig) || {};
+  const baseUrl = (aiCfg.xaiBaseUrl || 'https://api.x.ai/v1').replace(/\/$/, '');
+  const input = [];
+  if (systemPrompt) input.push({ role: 'system', content: systemPrompt });
+  (messages || []).forEach(function (message) {
+    input.push({ role: message.role || 'user', content: message.content || '' });
+  });
+
+  const res = await fetch(baseUrl + '/responses', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + OAD.XAI_API_KEY
+    },
+    body: JSON.stringify({
+      model: OAD.XAI_MODEL || aiCfg.defaultXaiModel || 'grok-4.7',
+      input: input,
+      store: false
+    })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error((data.error && data.error.message) || (OAD.t('err_xai_status') + ' ' + res.status));
   }
+  const text = OAD._xaiText(data);
+  if (!text) throw new Error(OAD.t('err_parse_xai'));
+  return text;
 };
 
 OAD._claudeCall = async function (messages, systemPrompt) {

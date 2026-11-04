@@ -155,6 +155,11 @@ OAD.TemporalStatus.cardDateLabel = function (thread, today, ownerId) {
 // just `hasOpenChildren`: a parent thread with open children is a bollard, and the bollard rule
 // says it must NOT carry its own next_action_date, so "no dates set" is the correct state for it,
 // not a hygiene problem. Callers that omit context get the old behavior.
+//
+// thread_kind habit, idea, and cadence are the same kind of exemption. On the 2026-11-04
+// export, 31 of 33 no_dates_set warnings were those kinds. A missing date is their normal
+// shape, and warning on it trained the operator to ignore the list. A plain thread
+// (thread_kind null) with no dates still warns.
 OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId, context) {
   var warnings = [];
   if (!thread || thread.status === 'closed' || _ownerMismatch(thread, ownerId)) return warnings;
@@ -193,8 +198,10 @@ OAD.TemporalStatus.dataHygieneWarnings = function (thread, today, ownerId, conte
     });
   }
 
+  var kind = thread.thread_kind;
+  var datelessByDesign = kind === 'habit' || kind === 'idea' || kind === 'cadence';
   if ((thread.status === 'open' || thread.status === 'waiting') && !thread.next_action_date && !thread.deadline &&
-      !(context && context.hasOpenChildren)) {
+      !(context && context.hasOpenChildren) && !datelessByDesign) {
     warnings.push({
       thread_id: thread.id,
       thread_uuid: thread.uuid,

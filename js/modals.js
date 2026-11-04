@@ -108,7 +108,7 @@ OAD._threadForm = function (t) {
     <div class="field-row">
       <div class="field">
         <label>By Date</label>
-        <input id="f-next-date" type="date" value="${OAD.esc(t.next_action_date)}">
+        <input id="f-next-date" type="date" value="${OAD.esc(t.next_action_date)}" onchange="OAD._pickLoadDay(this.value)">
       </div>
       <div class="field">
         <label>By Time <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
@@ -119,6 +119,7 @@ OAD._threadForm = function (t) {
         <input id="f-next-channel" type="text" value="${OAD.esc(t.next_action_channel)}" placeholder="email, phone, in-person…">
       </div>
     </div>
+    ${(typeof OAD.weekLoadHtml === 'function') ? OAD.weekLoadHtml(t.next_action_date || '') : ''}
     <div class="field">
       <label>Contact</label>
       <input id="f-next-contact" type="text" value="${OAD.esc(t.next_action_contact)}" placeholder="Who are you acting with?">
@@ -172,6 +173,16 @@ OAD._threadForm = function (t) {
         <label>Sessions/week required</label>
         <input id="f-weekly-commitment" type="number" min="1" step="1" value="${t.weeklyCommitment != null ? t.weeklyCommitment : ''}" placeholder="e.g. 1">
       </div>
+    </div>
+    <div class="field">
+      <label>Day impact <span class="text-muted" style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></label>
+      <select id="f-day-impact">
+        <option value=""${OAD._dayImpact(t.day_impact) === '' ? ' selected' : ''}>Normal work day</option>
+        <option value="partial"${t.day_impact === 'partial' ? ' selected' : ''}>Part of this day is gone</option>
+        <option value="full"${t.day_impact === 'full' ? ' selected' : ''}>This whole day is gone</option>
+        <option value="windshield"${t.day_impact === 'windshield' ? ' selected' : ''}>Driving day. Calls fit, desk work does not</option>
+      </select>
+      <div class="text-muted text-sm">Uses the next action date, or the deadline when that is empty. The assistant relates that day to the work due the same week. It does not block that work. A driving day still allows calls.</div>
     </div>`;
 };
 
@@ -198,6 +209,9 @@ OAD._readThreadForm = function (base) {
     contingency_escalation:  document.getElementById('f-ctg-escalation')?.value.trim() || '',
     deadline:          document.getElementById('f-deadline')?.value || null,
     deadline_time:     document.getElementById('f-deadline-time')?.value || null,
+    day_impact:        OAD._dayImpact(document.getElementById('f-day-impact')?.value || ''),
+    travel_miles:      OAD._dayImpact(document.getElementById('f-day-impact')?.value || '') === 'windshield' ? (base.travel_miles != null ? base.travel_miles : null) : null,
+    travel_minutes:    OAD._dayImpact(document.getElementById('f-day-impact')?.value || '') === 'windshield' ? (base.travel_minutes != null ? base.travel_minutes : null) : null,
     effortEstimate:    document.getElementById('f-effort-estimate')?.value !== ''
                          ? parseInt(document.getElementById('f-effort-estimate').value, 10) : null,
     weeklyCommitment:  document.getElementById('f-weekly-commitment')?.value !== ''
@@ -231,6 +245,7 @@ OAD._savePromotedThread = function () {
   const data = OAD._readThreadForm(OAD.makeThread());
   if (!data) return;
   const thread = OAD.addThread(data);
+  if (OAD.Capacity && OAD.Capacity.syncEdges) OAD.Capacity.syncEdges();
   OAD.addEvolution(thread.id, 'Thread promoted from idea incubation.');
   OAD.closeModal();
   OAD.refreshActiveView();
@@ -252,6 +267,7 @@ OAD._saveNewThread = function () {
   const data = OAD._readThreadForm(OAD.makeThread());
   if (!data) return;
   const thread = OAD.addThread(data);
+  if (OAD.Capacity && OAD.Capacity.syncEdges) OAD.Capacity.syncEdges();
   OAD.addEvolution(thread.id, 'Thread created.');
   OAD.closeModal();
   OAD.refreshActiveView();
@@ -314,6 +330,7 @@ OAD._saveEditThread = function (id) {
     OAD.openClosureWizard(id, data, notes.length ? notes.join('; ') : '');
   } else {
     OAD.updateThreadAndLog(id, data, notes.length ? notes.join('; ') : null);
+    if (OAD.Capacity && OAD.Capacity.syncEdges) OAD.Capacity.syncEdges();
     OAD.closeModal();
     OAD.refreshActiveView();
     if (isClosing) {
@@ -1352,7 +1369,7 @@ OAD._previewImport = function (jsonString) {
 };
 
 OAD._diffImportItem = function (item) {
-  const fields = ['title', 'status', 'priority', 'closing_condition', 'next_action', 'next_action_date'];
+  const fields = ['title', 'status', 'priority', 'closing_condition', 'next_action', 'next_action_date', 'day_impact', 'day_fit'];
   const diffs = [];
   fields.forEach(function (f) {
     const incoming = item.incoming[f] != null ? String(item.incoming[f]) : '';
@@ -1400,6 +1417,7 @@ OAD._confirmImport = async function () {
   const adeCount = typeof OAD.runADE === 'function' ? OAD.runADE() : 0;
   const cheCount = typeof OAD.runCHE === 'function' ? OAD.runCHE() : 0;
   OAD._updateCHEBadge();
+  if (adeCount > 0 && typeof OAD.refreshActiveView === 'function') OAD.refreshActiveView();
   var msg = 'Import complete: ' + result.created + ' created, ' + result.updated + ' updated';
   if (result.closed > 0) msg += ', ' + result.closed + ' closed';
   if (result.deleted > 0) msg += ', ' + result.deleted + ' deleted';
@@ -1494,9 +1512,10 @@ OAD.openSettingsModal = function () {
     </div>
     <div class="field">
       <label>AI Provider</label>
-      <select id="f-ai-provider" onchange="document.getElementById('f-gemini-key-container').style.display = this.value === 'gemini' ? 'block' : 'none'; document.getElementById('f-claude-key-container').style.display = this.value === 'anthropic' ? 'block' : 'none';">
+      <select id="f-ai-provider" onchange="OAD._toggleAiProviderFields(this.value)">
         <option value="anthropic" ${OAD.AI_PROVIDER === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option>
         <option value="gemini" ${OAD.AI_PROVIDER === 'gemini' ? 'selected' : ''}>Google (Gemini)</option>
+        <option value="xai" ${OAD.AI_PROVIDER === 'xai' ? 'selected' : ''}>xAI (Grok)</option>
       </select>
     </div>
     <div class="field" id="f-claude-key-container" style="display: ${OAD.AI_PROVIDER === 'anthropic' ? 'block' : 'none'}">
@@ -1510,6 +1529,16 @@ OAD.openSettingsModal = function () {
       <select id="f-gemini-model">
         ${(window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.availableGeminiModels || []).map(m => 
           `<option value="${m}" ${OAD.GEMINI_MODEL === m ? 'selected' : ''}>${m}</option>`
+        ).join('')}
+      </select>
+    </div>
+    <div class="field" id="f-xai-key-container" style="display: ${OAD.AI_PROVIDER === 'xai' ? 'block' : 'none'}">
+      <label>xAI API Key</label>
+      <input id="f-xai-api-key" type="password" value="${OAD.esc(OAD.XAI_API_KEY || '')}" placeholder="xai-..." style="margin-bottom:8px">
+      <label>Grok Model</label>
+      <select id="f-xai-model">
+        ${((window.OAD && OAD.Config && OAD.Config.aiConfig && OAD.Config.aiConfig.availableXaiModels) || ['grok-4.7']).map(m =>
+          `<option value="${m}" ${OAD.XAI_MODEL === m ? 'selected' : ''}>${m}</option>`
         ).join('')}
       </select>
     </div>
@@ -1629,12 +1658,26 @@ OAD.openSettingsModal = function () {
   }
 };
 
+OAD._toggleAiProviderFields = function (provider) {
+  var fields = {
+    anthropic: 'f-claude-key-container',
+    gemini: 'f-gemini-key-container',
+    xai: 'f-xai-key-container'
+  };
+  Object.keys(fields).forEach(function (name) {
+    var el = document.getElementById(fields[name]);
+    if (el) el.style.display = name === provider ? 'block' : 'none';
+  });
+};
+
 OAD._saveSettings = async function () {
   const provider = document.getElementById('f-ai-provider')?.value || 'anthropic';
   const claudeKey = document.getElementById('f-api-key')?.value.trim() || '';
   const geminiKey = document.getElementById('f-gemini-api-key')?.value.trim() || '';
   const geminiModel = document.getElementById('f-gemini-model')?.value.trim() || 'gemini-1.5-pro-latest';
-  OAD.setAiSettings(provider, claudeKey, geminiKey, geminiModel);
+  const xaiKey = document.getElementById('f-xai-api-key')?.value.trim() || '';
+  const xaiModel = document.getElementById('f-xai-model')?.value.trim() || 'grok-4.7';
+  OAD.setAiSettings(provider, claudeKey, geminiKey, geminiModel, xaiKey, xaiModel);
   
   const theme = document.getElementById('f-theme')?.value || 'dark';
   if (OAD.DB.persona) {

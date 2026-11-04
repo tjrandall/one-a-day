@@ -287,6 +287,45 @@ OAD.test('pressure: contingency adds more pressure when closer (quadratic curve)
   OAD._assert(sNear > 0,     'contingency tomorrow adds nonzero pressure');
 });
 
+// 2026-11-04 loan discharge: waiting + critical + unverified assumption is 65.
+// The 30 October trigger was left behind after the check moved to 10 November,
+// and that leftover added the full 25. Side effects are suppressed so day-load
+// and cycle detection cannot move the number.
+OAD.test('pressure: a past contingency does not score once a later next action is scheduled', function () {
+  var d = function (offset) {
+    var dt = new Date();
+    dt.setDate(dt.getDate() + offset);
+    return _localDateStr(dt);
+  };
+  var base = {
+    status: 'waiting',
+    priority: 'critical',
+    current_assumption: 'Still monitoring',
+    assumption_verified: false,
+    connections: []
+  };
+  var rescheduled = OAD.makeThread(Object.assign({}, base, {
+    contingency_trigger_date: d(-5),
+    next_action_date: d(6)
+  }));
+  var forgotten = OAD.makeThread(Object.assign({}, base, {
+    contingency_trigger_date: d(-5)
+  }));
+  var missed = OAD.makeThread(Object.assign({}, base, {
+    contingency_trigger_date: d(-10),
+    next_action_date: d(-2)
+  }));
+  var stillAhead = OAD.makeThread(Object.assign({}, base, {
+    contingency_trigger_date: d(3),
+    next_action_date: d(6)
+  }));
+
+  OAD._assertEqual(OAD.pressure(rescheduled, true), 65, 'past trigger with a future next action adds no contingency points');
+  OAD._assertEqual(OAD.pressure(forgotten, true), 90, 'past trigger with no later plan still adds the full 25');
+  OAD._assert(OAD.pressure(missed, true) > 65, 'an overdue replacement action still carries the contingency');
+  OAD._assert(OAD.pressure(stillAhead, true) > 65, 'a trigger that has not arrived yet still scores, even when a next action sits after it');
+});
+
 // ── Tests: exportThreads ─────────────────────────────────────────────
 
 OAD.test('exportThreads: includes full thread data, excludes ai_insights and persona', function () {
@@ -3061,8 +3100,8 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
     const dashboard = panel.querySelector('.ds-dashboard');
     OAD._assert(dashboard !== null, 'Should render .ds-dashboard container');
 
-    const metricsGrid = panel.querySelector('.ds-metrics-grid');
-    OAD._assert(metricsGrid !== null, 'Should render .ds-metrics-grid');
+    OAD._assert(panel.querySelector('.ds-metrics-grid') === null, 'Daily does not render the counter cards');
+    OAD._assert(panel.querySelector('#day-brief-open') !== null, 'Daily offers Tell me about a day');
 
     const usernameSpan = panel.querySelector('.ds-username');
     OAD._assert(usernameSpan !== null, 'Should render .ds-username');
@@ -3080,6 +3119,61 @@ OAD.test('daily summary rendering validates correct elements and no exceptions',
     OAD.DB.cadences = originalCadences;
     OAD.DB.persona = originalPersona;
     OAD.Config.userGreetingTitle = originalGreeting;
+  }
+});
+
+OAD.test('Daily is the work list: day box opens on demand, and the week load rides the date field', function () {
+  var origThreads = OAD.DB.threads;
+  var origExpanded = OAD.DayBrief.expanded;
+  var origPending = OAD.DayBrief.pending;
+  var panel = document.getElementById('detail-content');
+  var originalHTML = panel ? panel.innerHTML : '';
+  try {
+    OAD.DB.threads = [];
+    var today = OAD.todayStr();
+    OAD.addThread(OAD.makeThread({ title: 'Dated work', status: 'open', next_action: 'Do the work', next_action_date: today }));
+    OAD.addThread(OAD.makeThread({ title: 'Undated pile', status: 'open', next_action: 'Someday' }));
+    OAD.addThread(OAD.makeThread({ title: 'Parked thing', status: 'dormant', dormant_trigger: 'later' }));
+    OAD.DayBrief.expanded = false;
+    OAD.DayBrief.pending = null;
+    OAD.renderDailyView();
+    OAD._assert(panel.querySelector('#day-brief') === null, 'the day box stays closed');
+    OAD._assert(panel.querySelector('#day-brief-open') !== null, 'the greeting line has the day button');
+    OAD._assert(panel.textContent.indexOf('Dated work') !== -1, 'dated work stays on Daily');
+    OAD._assert(panel.textContent.indexOf('Undated pile') === -1, 'undated threads stay off Daily');
+    OAD._assert(panel.textContent.indexOf('Parked thing') === -1, 'dormant threads stay off Daily');
+    OAD._assert(panel.textContent.indexOf('Life Areas Heat') === -1, 'heat stays off Daily');
+    OAD._assert(panel.textContent.indexOf("This Week's Load") === -1, 'the week load stays off Daily');
+    OAD._assert(panel.querySelector('.toat-widget') !== null, 'TOAT stays');
+    OAD._assert(panel.querySelector('#daily-intercept-content') !== null, 'Morning Brief stays');
+    OAD.DayBrief.toggle();
+    OAD._assert(panel.querySelector('#day-brief') !== null, 'the button opens the day box');
+    OAD.DayBrief.toggle();
+    OAD._assert(panel.querySelector('#day-brief') === null, 'the button closes the day box');
+    OAD.DayBrief.pending = { canApply: false, reply: 'Waiting.', question: 'What time?', changes: [], parsed: {} };
+    OAD.DayBrief.expanded = false;
+    OAD.renderDailyView();
+    OAD._assert(panel.querySelector('#day-brief') !== null, 'a proposal stays on screen');
+    OAD.DayBrief.pending = null;
+    OAD.DayBrief.expanded = false;
+    var dated = OAD.DB.threads.find(function (t) { return t.title === 'Dated work'; });
+    OAD.openEditModal(dated.id);
+    var modal = document.getElementById('modal-overlay');
+    OAD._assert(modal.textContent.indexOf("This Week's Load") !== -1, 'edit shows the week load beside the date');
+    var rows = modal.querySelectorAll('.load-row[data-date]');
+    OAD._assertEqual(rows.length, 7, 'the load covers seven days');
+    var row = rows[1];
+    var iso = row.getAttribute('data-date');
+    row.click();
+    OAD._assertEqual(document.getElementById('f-next-date').value, iso, 'a load day sets By Date');
+    OAD._assert(row.classList.contains('load-row-selected'), 'the chosen day is marked');
+    OAD.closeModal();
+  } finally {
+    OAD.closeModal();
+    OAD.DayBrief.expanded = origExpanded;
+    OAD.DayBrief.pending = origPending;
+    OAD.DB.threads = origThreads;
+    if (panel) panel.innerHTML = originalHTML;
   }
 });
 
@@ -5372,7 +5466,7 @@ OAD.test('Due.loadOverview: four counts each match their own single-purpose sour
   }
 });
 
-OAD.test('renderPersonaBar/renderListView/renderDailyView: Load Overview renders Overdue, Stalled, Due This Week, and Critical Pressure together, each matching Due.loadOverview()', function () {
+OAD.test('renderPersonaBar/renderListView keep Load Overview; Daily leaves those cards off', function () {
   const origThreads = OAD.DB.threads;
   const origPersona = OAD.DB.persona;
   const panel = document.getElementById('detail-content');
@@ -5410,14 +5504,8 @@ OAD.test('renderPersonaBar/renderListView/renderDailyView: Load Overview renders
       OAD._assertEqual(findStat(panel, 'Critical Pressure').querySelector('.val').textContent, String(overview.criticalPressure.count), 'renderListView Critical Pressure must equal loadOverview.criticalPressure.count exactly');
 
       OAD.renderDailyView();
-      const findCard = function (label) {
-        return Array.from(panel.querySelectorAll('.ds-metric-card')).find(function (el) { return el.textContent.indexOf(label) !== -1; });
-      };
-      OAD._assert(panel.querySelector('.ds-section-label') !== null && panel.querySelector('.ds-section-label').textContent.indexOf('Load Overview') !== -1, 'renderDailyView should label the section "Load Overview"');
-      ['Overdue', 'Stalled', 'Due This Week', 'Critical Pressure'].forEach(function (label) {
-        OAD._assert(findCard(label) !== undefined, 'renderDailyView should render a "' + label + '" metric card');
-      });
-      OAD._assertEqual(findCard('Critical Pressure').querySelector('.ds-metric-value').textContent, String(overview.criticalPressure.count), 'renderDailyView Critical Pressure must equal loadOverview.criticalPressure.count exactly');
+      OAD._assert(panel.querySelector('.ds-metric-card') === null, 'Daily does not render the counter cards');
+      OAD._assert(panel.textContent.indexOf('Load Overview') === -1, 'Daily does not render Load Overview');
     }
   } finally {
     OAD.DB.threads = origThreads;
@@ -6538,6 +6626,80 @@ OAD.test('dataHygieneWarnings: a bollard (parent with open children) is not flag
   OAD._assert(plain.some(w => w.rule === 'no_dates_set'), 'without context the old behavior holds');
 });
 
+OAD.test('dataHygieneWarnings: habit, idea, and cadence threads are not flagged no_dates_set; a plain thread still is', function () {
+  var now = new Date();
+  ['habit', 'idea', 'cadence'].forEach(function (kind) {
+    var t = OAD.makeThread({ uuid: 'hy-' + kind, title: kind, status: 'open', thread_kind: kind });
+    var warnings = OAD.TemporalStatus.dataHygieneWarnings(t, now);
+    OAD._assert(!warnings.some(function (w) { return w.rule === 'no_dates_set'; }), kind + ' has no dates by design');
+  });
+  var plain = OAD.makeThread({ uuid: 'hy-plain', title: 'Write safety', status: 'open', thread_kind: null });
+  var plainWarnings = OAD.TemporalStatus.dataHygieneWarnings(plain, now);
+  OAD._assert(plainWarnings.some(function (w) { return w.rule === 'no_dates_set'; }), 'a real undated thread still warns');
+});
+
+OAD.test('DayNote: a day prompts only when the Matrix ask has no user log, and promote is explicit', function () {
+  var savedDays = OAD.DB.matrix_days;
+  var savedNotes = OAD.DB.day_notes;
+  var savedThreads = OAD.DB.threads;
+  OAD.DB.matrix_days = {};
+  OAD.DB.day_notes = [];
+  try {
+
+  var asked = OAD.DayNote.askedFromQuadrants(
+    [{ uuid: 'urgent-1', next_action_date: '2026-11-04' }],
+    [
+      { uuid: 'do-soon', next_action_date: '2026-11-08' },
+      { uuid: 'do-later', next_action_date: '2026-12-01' },
+      { uuid: 'bollard', next_action_date: '' }
+    ],
+    '2026-11-11'
+  );
+  OAD._assert(asked.indexOf('urgent-1') !== -1, 'Q1 is part of the ask');
+  OAD._assert(asked.indexOf('do-soon') !== -1, 'Q2 inside the horizon is part of the ask');
+  OAD._assert(asked.indexOf('do-later') === -1, 'Q2 past the horizon is not part of the ask');
+  OAD._assert(asked.indexOf('bollard') === -1, 'an undated Q2 row is not part of the ask');
+
+  var threads = [
+    { uuid: 'urgent-1', evolution_log: [{ date: '2026-11-04', note: 'Updated via import sync.' }] },
+    { uuid: 'do-soon', evolution_log: [{ date: '2026-11-04', note: 'Submitted the quiz.' }] }
+  ];
+  OAD._assertEqual(OAD.DayNote.uncovered(['urgent-1', 'do-soon'], OAD.DayNote.loggedUuids('2026-11-04', threads)).length, 1, 'an import sync line is not doing the work');
+  OAD._assertEqual(OAD.DayNote.uncovered(['do-soon'], OAD.DayNote.loggedUuids('2026-11-04', threads)).length, 0, 'a real evolution line covers that row');
+
+  OAD.DayNote.recordSnapshot('2026-11-04', []);
+  OAD._assert(!OAD.DB.matrix_days['2026-11-04'], 'an empty board is not frozen');
+  OAD.DayNote.recordSnapshot('2026-11-04', ['urgent-1', 'do-soon']);
+  OAD.DayNote.recordSnapshot('2026-11-04', ['urgent-1']);
+  OAD._assertEqual(OAD.DB.matrix_days['2026-11-04'].asked.length, 2, 'the first Matrix open of the day is the one that sticks');
+
+  OAD.DB.threads = threads;
+  var pending = OAD.DayNote.pending('2026-11-05');
+  OAD._assert(pending && pending.date === '2026-11-04', 'the next day asks about the uncovered row');
+  OAD._assertEqual(pending.missing.length, 1, 'only the uncovered row is missing');
+
+  OAD.DayNote.skip('2026-11-04');
+  OAD._assertEqual(OAD.DayNote.pending('2026-11-05'), null, 'a skip is a note, so the prompt does not return');
+  OAD._assertEqual(OAD.DB.threads.length, 2, 'skip does not create a thread');
+
+  OAD.DB.day_notes = [];
+  var row = OAD.DayNote.save('2026-11-04', 'Called the recruiter instead.');
+  OAD._assert(row && row.note === 'Called the recruiter instead.', 'the sentence is stored on the day');
+  OAD._assertEqual(OAD.DayNote.pending('2026-11-05'), null, 'a saved sentence clears the prompt');
+  var before = OAD.DB.threads.length;
+  var created = OAD.DayNote.promote('2026-11-04');
+  OAD._assert(created && created.thread_kind == null, 'promote creates an ordinary thread');
+  OAD._assertEqual(created.priority, 'medium', 'a promoted note does not arrive as high or critical');
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'promote creates one thread');
+  OAD._assertEqual(OAD.DayNote.promote('2026-11-04'), null, 'a second promote does nothing');
+  OAD._assertEqual(OAD.DB.threads.length, before + 1, 'the second promote does not add another thread');
+  } finally {
+    OAD.DB.threads = savedThreads;
+    OAD.DB.matrix_days = savedDays;
+    OAD.DB.day_notes = savedNotes;
+  }
+});
+
 OAD.test('Bulk.needsWizard: a child whose only link is its parent\'s auto "enables" edge can close without the wizard', function () {
   var p = OAD.makeThread({ id: 1, uuid: 'nw-p', title: 'Family Relationships', status: 'open',
     connections: [{ uuid: 'e1', to_uuid: 'nw-c', edge_type: 'enables', auto_generated: true, rule: 'ADE-002' }] });
@@ -7075,3 +7237,371 @@ OAD.boot = async function () {
     if (typeof OAD._updateDemoIndicator === 'function') OAD._updateDemoIndicator();
   }
 };
+
+OAD.test('Capacity: a lost Friday and Saturday pull Sunday work back to Wednesday, and a Wednesday start stays quiet', function () {
+  var dentist = OAD.makeThread({ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' });
+  var maine = OAD.makeThread({ title: 'Maine trip to move Cydney', status: 'open', day_impact: 'full', next_action_date: '2026-11-07' });
+  var cloud = OAD.makeThread({ title: 'CCFAM Wk09 Milestone 4', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' });
+  var cornell = OAD.makeThread({ title: 'CAC 107 quiz', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' });
+  var early = OAD.makeThread({ title: 'AISYS Wk09', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-04' });
+  var analysis = OAD.Capacity.analyze([dentist, maine, cloud, cornell, early], '2026-11-04');
+  OAD._assertEqual(analysis.clusters.length, 1, 'one Sunday cluster');
+  OAD._assertEqual(analysis.clusters[0].loadDays.join(','), '2026-11-04,2026-11-05', 'last two clear days are Wednesday and Thursday');
+  var late = analysis.clusters[0].late.map(function (t) { return t.title; }).sort();
+  OAD._assertEqual(late.join('|'), 'CAC 107 quiz|CCFAM Wk09 Milestone 4', 'Thursday starts are late, including Cornell');
+  var html = OAD.Capacity.bannerHtml([dentist, maine, cloud, cornell, early], '2026-11-04');
+  OAD._assert(html.indexOf('Hey T.J.') !== -1, 'addresses T.J.');
+  OAD._assert(html.indexOf('Maine trip to move Cydney') !== -1, 'names the Saturday loss');
+  OAD._assert(html.indexOf('Dentist appointment') !== -1, 'names the Friday cut');
+  OAD._assert(html.indexOf('Wednesday 11/4') !== -1, 'tells him to load Wednesday');
+  OAD._assert(html.indexOf('<li>CCFAM Wk09 Milestone 4</li>') !== -1, 'late work is a list, not a sentence');
+  OAD._assert(html.indexOf('AISYS Wk09') === -1, 'a Wednesday start is not called late');
+  var quiet = OAD.Capacity.analyze([dentist, maine, early], '2026-11-04');
+  OAD._assertEqual(quiet.clusters.length, 0, 'already starting Wednesday produces no cluster');
+  OAD._assertEqual(OAD.Capacity.bannerHtml([dentist, maine, early], '2026-11-04'), '', 'the banner goes quiet once the start is early enough');
+});
+
+OAD.test('Capacity banner: lost days are named once, then each deadline is its own list', function () {
+  var dentist = OAD.makeThread({ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' });
+  var maine = OAD.makeThread({ title: 'Maine trip to move Cydney', status: 'open', day_impact: 'full', next_action_date: '2026-11-07' });
+  var cloud = OAD.makeThread({ title: 'CCFAM Wk09 Milestone 4 (due 2026-11-08)', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' });
+  var panel = OAD.makeThread({ title: 'Evergreen panel interview', status: 'open', deadline: '2026-11-10', next_action_date: '2026-11-10' });
+  var endoscopy = OAD.makeThread({ title: 'Schedule endoscopy', status: 'open', next_action_date: '2026-11-07' });
+  var html = OAD.Capacity.bannerHtml([dentist, maine, cloud, panel, endoscopy], '2026-11-04');
+  OAD._assertEqual(html.split('Maine trip to move Cydney').length - 1, 1, 'Saturday is named once');
+  OAD._assertEqual(html.split('Dentist appointment').length - 1, 1, 'Friday is named once');
+  OAD._assert(html.indexOf('<h3>Due Sunday 11/8</h3>') !== -1, 'Sunday deadline is a heading');
+  OAD._assert(html.indexOf('<h3>Due Tuesday 11/10</h3>') !== -1, 'Tuesday deadline is a heading');
+  OAD._assert(html.indexOf('(due 2026-11-08)') === -1, 'the due date is not repeated on the row');
+  OAD._assert(html.indexOf('<li>CCFAM Wk09 Milestone 4</li>') !== -1, 'the row keeps the short title');
+  OAD._assert(html.indexOf('Still on a lost day') !== -1, 'a task parked on Saturday is its own section');
+  OAD._assert(html.indexOf('Schedule endoscopy') !== -1, 'endoscopy is listed');
+  OAD._assert(html.indexOf('<p>Hey') === -1, 'the recommendation is not one paragraph');
+  OAD._assert(html.indexOf('T.J..') === -1, 'the greeting does not add a second period');
+  OAD._assert(html.indexOf('Saturday 11/7:</span> Schedule endoscopy') !== -1, 'a parked task names its day');
+});
+
+OAD.test('Capacity: a normal Saturday task is not a lost day, and a habit on a lost day is not tweaked', function () {
+  var endoscopy = OAD.makeThread({ title: 'Schedule endoscopy', status: 'open', next_action_date: '2026-11-07' });
+  var school = OAD.makeThread({ title: 'Cloud lab', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' });
+  var plain = OAD.Capacity.analyze([endoscopy, school], '2026-11-04');
+  OAD._assertEqual(plain.clusters.length, 0, 'without day_impact, Thursday is still early enough');
+  var dentist = OAD.makeThread({ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' });
+  var habit = OAD.makeThread({ title: 'Morning Offering', status: 'open', thread_kind: 'habit', next_action_date: '2026-11-06' });
+  var ssi = OAD.makeThread({ title: 'SSI paperwork', status: 'open', next_action_date: '2026-11-06' });
+  var started = OAD.makeThread({ title: 'Cloud lab', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-04' });
+  var tweaks = OAD.Capacity.analyze([dentist, habit, ssi, started], '2026-11-04');
+  OAD._assertEqual(tweaks.clusters.length, 0, 'school that already starts Wednesday is quiet');
+  OAD._assertEqual(tweaks.onLostDays.length, 1, 'only the real Friday task is flagged');
+  OAD._assertEqual(tweaks.onLostDays[0].title, 'SSI paperwork', 'the habit is not a task to move');
+});
+
+OAD.test('Capacity: surgery and the move leave Wednesday 11/11 early enough, and December stays quiet', function () {
+  var surgery = OAD.makeThread({ title: 'Wisdom teeth extraction', status: 'open', day_impact: 'full', next_action_date: '2026-11-13' });
+  var abby = OAD.makeThread({ title: 'Abigail move', status: 'open', day_impact: 'full', deadline: '2026-11-15' });
+  var onTime = OAD.makeThread({ title: 'CCFAM Wk10', status: 'open', deadline: '2026-11-15', next_action_date: '2026-11-11' });
+  var late = OAD.makeThread({ title: 'CCFAM Wk10 Quiz', status: 'open', deadline: '2026-11-15', next_action_date: '2026-11-14' });
+  var earlyEnough = OAD.Capacity.analyze([surgery, abby, onTime], '2026-11-04');
+  OAD._assertEqual(earlyEnough.clusters.length, 0, 'a Wednesday 11/11 start passes');
+  var behind = OAD.Capacity.analyze([surgery, abby, late], '2026-11-04');
+  OAD._assertEqual(behind.clusters.length, 1, 'a Saturday start is later than Thursday');
+  OAD._assertEqual(behind.clusters[0].loadDays.join(','), '2026-11-12,2026-11-14', 'clear days skip Friday surgery and Sunday');
+  var travel = OAD.makeThread({ title: 'December travel', status: 'open', day_impact: 'full', next_action_date: '2026-12-19' });
+  var finalExam = OAD.makeThread({ title: 'Final exam', status: 'open', deadline: '2026-12-20', next_action_date: '2026-12-19' });
+  var far = OAD.Capacity.analyze([travel, finalExam], '2026-11-04');
+  OAD._assertEqual(far.clusters.length, 0, 'a December deadline is outside the 21-day banner');
+  OAD._assertEqual(OAD.Capacity.relatedPairs([travel, finalExam]).length, 1, 'the graph connection is not delayed until the banner speaks');
+});
+
+OAD.test('ADE-004: a lost day relates to the deliverables in its window, does not block, and does not move pressure', function () {
+  var orig = OAD.DB.threads;
+  var origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.ade_suppressions = [];
+    var maine = OAD.addThread(OAD.makeThread({ title: 'Maine trip to move Cydney', status: 'open', day_impact: 'full', next_action_date: '2026-11-07' }));
+    var dentist = OAD.addThread(OAD.makeThread({ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' }));
+    var cloud = OAD.addThread(OAD.makeThread({ title: 'CCFAM Wk09 Milestone 4', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' }));
+    var cornell = OAD.addThread(OAD.makeThread({ title: 'CAC 107 quiz', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' }));
+    var later = OAD.addThread(OAD.makeThread({ title: 'CCFAM Wk10', status: 'open', deadline: '2026-11-15', next_action_date: '2026-11-11' }));
+    var before = OAD.pressure(cloud);
+    var created = OAD._ade004_capacity();
+    OAD._assertEqual(created, 4, 'dentist and Maine each relate to the two Sunday items');
+    OAD._assertEqual(OAD.pressure(cloud), before, 'a relates edge does not change pressure');
+    function types(thread) {
+      return (thread.connections || []).map(function (c) { return c.edge_type + ':' + c.rule; }).sort();
+    }
+    OAD._assertEqual(types(maine).join(','), 'relates:ADE-004,relates:ADE-004', 'Maine relates, and only to the Sunday window');
+    OAD._assert(!(maine.connections || []).some(function (c) { return c.to_uuid === later.uuid; }), 'Maine does not relate to the Nov 15 week');
+    OAD._assert(!(dentist.connections || []).some(function (c) { return c.edge_type === 'blocks'; }), 'the day does not block the work');
+    OAD._assertEqual(OAD._ade004_capacity(), 0, 'a second pass adds nothing');
+    cornell.status = 'closed';
+    OAD._assertEqual(OAD._ade004_capacity(), 0, 'closing the quiz does not strip the link');
+    OAD._assert((maine.connections || []).some(function (c) { return c.to_uuid === cornell.uuid; }), 'Maine stays connected after the deliverable closes');
+    cloud.deadline = '2026-12-20';
+    var pruned = OAD._ade004_capacity();
+    OAD._assert(pruned >= 1, 'an open deliverable that leaves the window loses the auto edge');
+    OAD._assert(!(maine.connections || []).some(function (c) { return c.to_uuid === cloud.uuid && c.rule === 'ADE-004'; }), 'Maine no longer relates to the moved deadline');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('ADE-004: a user-set edge to the same deliverable is left alone', function () {
+  var orig = OAD.DB.threads;
+  var origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.ade_suppressions = [];
+    var maine = OAD.addThread(OAD.makeThread({ title: 'Maine trip to move Cydney', status: 'open', day_impact: 'full', next_action_date: '2026-11-07' }));
+    var cloud = OAD.addThread(OAD.makeThread({ title: 'CCFAM Wk09', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-04' }));
+    maine.connections = [{ uuid: 'kept', to_uuid: cloud.uuid, edge_type: 'enables', rule: 'user', confirmed_by_user: true }];
+    OAD._assertEqual(OAD._ade004_capacity(), 0, 'an existing relationship blocks a second edge');
+    OAD._assertEqual(maine.connections.length, 1, 'the user edge is the only edge');
+    OAD._assertEqual(maine.connections[0].edge_type, 'enables', 'the user type survives');
+  } finally {
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('day_impact round-trips through makeThread, import, export, and the import diff', async function () {
+  var orig = OAD.DB.threads;
+  try {
+    OAD._assertEqual(OAD.makeThread({}).day_impact, '', 'a normal thread has no day impact');
+    OAD._assert(OAD._IMPORT_FIELDS.indexOf('day_impact') !== -1, 'import updates can set day_impact');
+    OAD.DB.threads = [];
+    var created = await OAD.applyImport({
+      create: [{ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' }],
+      update: [],
+      close: []
+    }, []);
+    OAD._assertEqual(created.created, 1, 'create applied');
+    OAD._assertEqual(OAD.DB.threads[0].day_impact, 'partial', 'create copies day_impact');
+    var existing = OAD.DB.threads[0];
+    var updated = await OAD.applyImport({ create: [], update: [], close: [] }, [{
+      incoming: { uuid: existing.uuid, day_impact: 'full' },
+      existing: existing
+    }]);
+    OAD._assertEqual(updated.updated, 1, 'update applied');
+    OAD._assertEqual(existing.day_impact, 'full', 'update copies day_impact');
+    var exported = JSON.parse(OAD.exportThreads());
+    OAD._assertEqual(exported.threads[0].day_impact, 'full', 'export keeps day_impact');
+    var diffs = OAD._diffImportItem({
+      incoming: { title: 'Abigail move', day_impact: 'full' },
+      existing: { title: 'Abigail move', day_impact: '' }
+    });
+    OAD._assert(diffs.some(function (d) { return d.field === 'day_impact' && d.new_ === 'full'; }), 'the import preview shows day_impact');
+    var html = OAD.Capacity.bannerHtml([
+      OAD.makeThread({ title: 'Dentist appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-06' }),
+      OAD.makeThread({ title: 'Maine <trip>', status: 'open', day_impact: 'full', next_action_date: '2026-11-07' }),
+      OAD.makeThread({ title: 'Cloud lab', status: 'open', deadline: '2026-11-08', next_action_date: '2026-11-05' })
+    ], '2026-11-04');
+    OAD._assert(html.indexOf('capacity-banner') !== -1, 'banner markup is present');
+    OAD._assert(html.indexOf('<trip>') === -1, 'thread titles are escaped');
+  } finally {
+    OAD.DB.threads = orig;
+  }
+});
+
+OAD.test('Day brief: a described loop becomes two appointments, measured miles, and a windshield day', async function () {
+  var orig = OAD.DB.threads;
+  var origSupp = OAD.DB.ade_suppressions;
+  try {
+    OAD.DB.threads = [];
+    OAD.DB.ade_suppressions = [];
+    var call = OAD.addThread(OAD.makeThread({
+      title: 'Follow up with M&T', status: 'open', next_action: 'Call the bank',
+      next_action_date: '2026-11-10'
+    }));
+    var lab = OAD.addThread(OAD.makeThread({
+      title: 'VPC lab', status: 'open', next_action: 'Build the lab',
+      next_action_date: '2026-11-09', deadline: '2026-11-15'
+    }));
+    OAD.addThread(OAD.makeThread({
+      title: 'Wisdom teeth extraction', status: 'open', day_impact: 'full', next_action_date: '2026-11-13'
+    }));
+    OAD.addThread(OAD.makeThread({
+      title: 'Abigail move', status: 'open', day_impact: 'full', deadline: '2026-11-15'
+    }));
+    var proposal = await OAD.DayBrief.propose('On Monday, Nov 9th, drive the loop.', {
+      today: '2026-11-04',
+      threads: OAD.DB.threads,
+      complete: async function () {
+        return {
+          date: '2025-11-09',
+          kind: 'windshield',
+          stops: ['Norwood, MA', 'Newton, MA', 'Norwood, MA', 'Brockton, MA'],
+          question: null,
+          creates: [
+            { title: 'Abigail - pickup OSA test', life_area: 'Family' },
+            { title: 'VA - Dermatology appointment', life_area: 'Health' }
+          ],
+          schedule: [call.uuid, 'not-a-thread'],
+          keep_off: [lab.uuid],
+          because: 'That is 250 miles. The desk is gone. Calls fit in the car.'
+        };
+      },
+      measure: async function () {
+        return { miles: 110, minutes: 180 };
+      }
+    });
+    OAD._assertEqual(proposal.stops[0], 'Norwood, MA', 'the first stop is Norwood');
+    OAD._assert(proposal.stops.indexOf('Plymouth, MA') === -1, 'home stays out of the stop list');
+    OAD._assertEqual(proposal.date, '2026-11-09', 'a past year rolls forward to this year');
+    OAD._assertEqual(proposal.miles, 110, 'miles come from the route lookup');
+    OAD._assert(proposal.reply.indexOf('110 miles') !== -1, 'the reply states the measured miles');
+    OAD._assert(proposal.reply.indexOf('250') === -1, 'a mileage claim from the model is dropped');
+    OAD._assert(proposal.reply.indexOf('windshield') !== -1, 'the reply names the kind of day');
+    OAD._assert(proposal.canApply, 'Yes can save');
+    OAD._assertEqual(proposal.changes.filter(function (change) { return change.op === 'create'; }).length, 2, 'two appointments');
+    OAD._assert(proposal.changes.some(function (change) { return change.op === 'schedule' && change.uuid === call.uuid; }), 'the call is parked on Monday');
+    OAD._assert(proposal.changes.some(function (change) { return change.op === 'move' && change.uuid === lab.uuid && change.patch.next_action_date === '2026-11-12'; }), 'the lab leaves Monday for Thursday');
+    OAD._assert(!proposal.changes.some(function (change) { return change.uuid === 'not-a-thread'; }), 'an unknown uuid is ignored');
+    var asked = OAD.DayBrief.assemble(OAD.DayBrief.parse({
+      date: '2026-11-09', kind: 'windshield', stops: [], question: 'What time is Brockton?',
+      creates: [{ title: 'VA - Dermatology appointment', life_area: 'Health' }],
+      schedule: [], keep_off: [], because: 'Need the time.'
+    }, '2026-11-04'), { miles: null, minutes: null }, []);
+    OAD._assert(!asked.canApply, 'a question blocks Yes');
+    var result = OAD.DayBrief.apply(proposal);
+    OAD._assertEqual(result.created.length, 2, 'Yes creates both appointments');
+    var abigail = result.created[0];
+    OAD._assertEqual(abigail.day_impact, 'windshield', 'the appointment is a windshield day');
+    OAD._assertEqual(abigail.deadline, null, 'an appointment does not get a deadline');
+    OAD._assertEqual(abigail.next_action_date, '2026-11-09', 'the appointment is Monday');
+    OAD._assertEqual(abigail.travel_miles, 110, 'the measured miles are stored on the thread');
+    OAD._assertEqual(call.day_fit, 'windshield', 'the call is allowed on a windshield day');
+    OAD._assertEqual(call.next_action_date, '2026-11-09', 'the call moves to Monday');
+    OAD._assertEqual(lab.next_action_date, '2026-11-12', 'the lab moves to Thursday');
+    var banner = OAD.Capacity.bannerHtml([
+      OAD.makeThread({ title: 'Abigail - pickup OSA test', status: 'open', day_impact: 'windshield', next_action_date: '2026-11-09', travel_miles: 110, travel_minutes: 180 }),
+      OAD.makeThread({ title: 'Follow up with M&T', status: 'open', next_action: 'Call the bank', next_action_date: '2026-11-09', day_fit: 'windshield' }),
+      OAD.makeThread({ title: 'VPC lab', status: 'open', next_action: 'Build the lab', next_action_date: '2026-11-09', deadline: '2026-11-15' }),
+      OAD.makeThread({ title: 'Wisdom teeth extraction', status: 'open', day_impact: 'full', next_action_date: '2026-11-13' }),
+      OAD.makeThread({ title: 'Abigail move', status: 'open', day_impact: 'full', deadline: '2026-11-15' })
+    ], '2026-11-04');
+    OAD._assert(banner.indexOf('windshield') !== -1, 'the banner names a windshield day');
+    OAD._assert(banner.indexOf('110 miles') !== -1, 'the banner uses the measured miles');
+    OAD._assert(banner.indexOf('VPC lab') !== -1, 'a lab left on Monday is still the mistake');
+    OAD._assert(banner.indexOf('Follow up with M&amp;T') === -1, 'a call on Monday is not scolded');
+    OAD._assert(banner.indexOf('Thursday 11/12') !== -1, 'Sunday work still loads Thursday, not Monday');
+    var again = await OAD.DayBrief.propose('same appointments', {
+      today: '2026-11-04',
+      threads: OAD.DB.threads,
+      complete: async function () {
+        return {
+          date: '2026-11-09', kind: 'windshield', stops: ['Brockton, MA'], question: null,
+          creates: [{ title: 'Abigail - pickup OSA test', life_area: 'Family' }],
+          schedule: [], keep_off: [], because: 'Already there.'
+        };
+      },
+      measure: async function () { return { miles: 110, minutes: 180 }; }
+    });
+    OAD._assert(again.changes.some(function (change) { return change.op === 'update'; }), 'a second brief updates the open appointment');
+    OAD._assert(!again.changes.some(function (change) { return change.op === 'create' && change.title === 'Abigail - pickup OSA test'; }), 'a second brief does not duplicate it');
+    var box = OAD.DayBrief.boxHtml();
+    OAD.DayBrief.pending = asked;
+    var askedBox = OAD.DayBrief.boxHtml();
+    OAD._assert(box.indexOf('Tell me about a day') !== -1, 'Daily gets the box');
+    OAD._assert(askedBox.indexOf('disabled') !== -1, 'Yes stays disabled while a question is open');
+    OAD.DayBrief.pending = null;
+  } finally {
+    OAD.DayBrief.pending = null;
+    OAD.DB.threads = orig;
+    OAD.DB.ade_suppressions = origSupp;
+  }
+});
+
+OAD.test('Day brief uses whichever AI provider is selected', async function () {
+  var orig = {
+    provider: OAD.AI_PROVIDER,
+    claudeCall: OAD._claudeCall,
+    geminiCall: OAD._geminiCall,
+    xaiCall: OAD._xaiCall,
+    claudeKey: OAD.API_KEY,
+    geminiKey: OAD.GEMINI_API_KEY,
+    geminiModel: OAD.GEMINI_MODEL,
+    xaiKey: OAD.XAI_API_KEY,
+    xaiModel: OAD.XAI_MODEL
+  };
+  var storageKeys = ['oad_ai_provider', 'oad_api_key', 'oad_gemini_api_key', 'oad_gemini_model', 'oad_xai_api_key', 'oad_xai_model'];
+  var stored = {};
+  storageKeys.forEach(function (key) { stored[key] = localStorage.getItem(key); });
+  var seen = [];
+  function payload(kind) {
+    return JSON.stringify({
+      date: '2026-11-09',
+      kind: kind,
+      stops: [],
+      question: null,
+      creates: [{ title: 'VA - Dermatology appointment', life_area: 'Health' }],
+      schedule: [],
+      keep_off: [],
+      because: 'The desk is gone.'
+    });
+  }
+  try {
+    OAD._claudeCall = async function () { seen.push('anthropic'); return payload('chipped'); };
+    OAD._geminiCall = async function () { seen.push('gemini'); return '```json\n' + payload('chipped') + '\n```'; };
+    OAD._xaiCall = async function () { seen.push('xai'); return payload('windshield'); };
+    OAD.AI_PROVIDER = 'gemini';
+    var gemini = await OAD.DayBrief.propose('dentist Friday', {
+      today: '2026-11-04',
+      threads: [],
+      measure: async function () { return { miles: null, minutes: null }; }
+    });
+    OAD._assertEqual(seen.join(','), 'gemini', 'Gemini is the provider that runs');
+    OAD._assertEqual(gemini.kind, 'chipped', 'a fenced Gemini reply still parses');
+    OAD.AI_PROVIDER = 'xai';
+    var grok = await OAD.DayBrief.propose('Monday loop', {
+      today: '2026-11-04',
+      threads: [],
+      measure: async function () { return { miles: null, minutes: null }; }
+    });
+    OAD._assertEqual(seen[1], 'xai', 'xAI is the provider that runs');
+    OAD._assertEqual(grok.kind, 'windshield', 'the xAI reply is the brief');
+    OAD.AI_PROVIDER = 'anthropic';
+    await OAD.DayBrief.propose('a chipped day', {
+      today: '2026-11-04',
+      threads: [],
+      measure: async function () { return { miles: null, minutes: null }; }
+    });
+    OAD._assertEqual(seen[2], 'anthropic', 'Claude is the provider that runs');
+    var box = OAD.DayBrief.boxHtml();
+    OAD._assert(box.indexOf('API key') === -1, 'the day box does not mention a key');
+    OAD._assert(box.indexOf('localStorage') === -1, 'the day box does not mention storage');
+    OAD._assert(box.indexOf('Nothing is sent') === -1, 'the day box does not lecture about sending');
+    OAD._assertEqual(OAD._xaiText({ output_text: '{"ok":1}' }), '{"ok":1}', 'output_text is the reply');
+    OAD._assertEqual(OAD._xaiText({
+      output: [
+        { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'thinking {not this}' }] },
+        { type: 'message', content: [{ type: 'output_text', text: '{"ok":2}' }] }
+      ]
+    }), '{"ok":2}', 'reasoning is not the reply');
+    OAD._assertEqual(OAD._xaiText({ choices: [{ message: { content: '{"ok":3}' } }] }), '{"ok":3}', 'chat completions text is the reply');
+    OAD.setAiSettings('xai', 'sk-ant-keep', 'AIza-keep', 'gemini-2.5-pro', 'xai-test-key', 'grok-4.7');
+    OAD._assertEqual(OAD.AI_PROVIDER, 'xai', 'settings select the provider');
+    OAD._assertEqual(OAD.XAI_API_KEY, 'xai-test-key', 'settings store the xAI key');
+    OAD._assertEqual(OAD.XAI_MODEL, 'grok-4.7', 'settings store the Grok model');
+    OAD._assertEqual(localStorage.getItem('oad_ai_provider'), 'xai', 'the provider is the same setting Claude and Gemini use');
+    OAD._assertEqual(localStorage.getItem('oad_api_key'), 'sk-ant-keep', 'saving xAI does not drop the Claude key');
+    OAD._assertEqual(localStorage.getItem('oad_gemini_api_key'), 'AIza-keep', 'saving xAI does not drop the Gemini key');
+  } finally {
+    OAD.AI_PROVIDER = orig.provider;
+    OAD._claudeCall = orig.claudeCall;
+    OAD._geminiCall = orig.geminiCall;
+    OAD._xaiCall = orig.xaiCall;
+    OAD.API_KEY = orig.claudeKey;
+    OAD.GEMINI_API_KEY = orig.geminiKey;
+    OAD.GEMINI_MODEL = orig.geminiModel;
+    OAD.XAI_API_KEY = orig.xaiKey;
+    OAD.XAI_MODEL = orig.xaiModel;
+    OAD.DayBrief.pending = null;
+    storageKeys.forEach(function (key) {
+      if (stored[key] == null) localStorage.removeItem(key);
+      else localStorage.setItem(key, stored[key]);
+    });
+  }
+});

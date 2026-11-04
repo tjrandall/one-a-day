@@ -1,6 +1,18 @@
 window.OAD = window.OAD || {};
 OAD.Models = OAD.Models || {};
 
+// A past contingency trigger stops adding pressure once a later next action is on
+// the calendar and that next action is not itself overdue. The 2026-11-04 loan
+// discharge is the case: the 30 October trigger was left behind when the check
+// moved to 10 November, and the leftover kept a monitoring thread at 100.
+// A trigger that has not arrived, or that passed with no later plan, still scores.
+function _contingencySuperseded(thread, todayStr) {
+  var trigger = thread && thread.contingency_trigger_date;
+  var next = thread && thread.next_action_date;
+  if (!trigger || !next || !todayStr) return false;
+  return trigger < todayStr && next > trigger && next >= todayStr;
+}
+
 // Pressure-propagation walk used by Thread.getPressure() below. A dormant (or inbox) blocker
 // must still show 0 for its OWN pressure everywhere it's read (dashboard row, TOAT, Focus Now —
 // a real, deliberate, pre-existing invariant) — but must NOT act as a full propagation dead end.
@@ -150,14 +162,20 @@ class Thread {
       }
     }
 
-    // Contingency proximity
+    // Contingency proximity. A superseded trigger adds nothing: the next action
+    // already replaced it. See _contingencySuperseded.
     if (this.contingency_trigger_date) {
       var ctgToday = new Date();
       ctgToday.setHours(0, 0, 0, 0);
-      var ctg = new Date(this.contingency_trigger_date + 'T00:00:00');
-      var ctgDays = Math.ceil((ctg - ctgToday) / 86400000);
-      var ctgRatio = Math.max(0, Math.min(1, 1 - ctgDays / 14));
-      score += Math.round(ctgRatio * ctgRatio * 25);
+      var todayStr = ctgToday.getFullYear() + '-'
+        + String(ctgToday.getMonth() + 1).padStart(2, '0') + '-'
+        + String(ctgToday.getDate()).padStart(2, '0');
+      if (!_contingencySuperseded(this, todayStr)) {
+        var ctg = new Date(this.contingency_trigger_date + 'T00:00:00');
+        var ctgDays = Math.ceil((ctg - ctgToday) / 86400000);
+        var ctgRatio = Math.max(0, Math.min(1, 1 - ctgDays / 14));
+        score += Math.round(ctgRatio * ctgRatio * 25);
+      }
     }
 
     // Deadline proximity

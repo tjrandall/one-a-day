@@ -662,6 +662,344 @@ OAD.calculateCriticalPath = function (threadId, visited) {
   return graph.calculateCriticalPath(threadId, visited);
 };
 
+// ── Capacity assistant ────────────────────────────────────────────────
+// A thread with day_impact 'full', 'partial', or 'windshield' occupies one
+// day (its next action date, or its deadline when the next action is empty).
+// That day is lost desk time. It is not a block. Pressure does not follow it.
+// windshield still allows a call, dictation, or audio. Deliverables due
+// inside the following 6 days relate back to that day, and the banner says
+// when the lost day means the work has to start earlier. The last two clear
+// desk days before a deadline are the load days. A start later than the
+// first of those is late. Partial and windshield days are not clear desk
+// days. The banner stays quiet past 21 days so a far deadline is not this
+// week's advice. Edges are not horizon-limited: a marked day connects to
+// whatever open deliverable actually falls in its window.
+
+OAD.Capacity = {
+  HORIZON_DAYS: 21,
+  WINDOW_DAYS: 6,
+  LOAD_DAYS: 2
+};
+
+OAD.Capacity._addDays = function (iso, n) {
+  var p = String(iso || '').split('-');
+  if (p.length < 3) return '';
+  var dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  if (isNaN(dt.getTime())) return '';
+  dt.setDate(dt.getDate() + n);
+  var m = dt.getMonth() + 1;
+  var d = dt.getDate();
+  return dt.getFullYear() + '-' + (m < 10 ? '0' : '') + m + '-' + (d < 10 ? '0' : '') + d;
+};
+
+OAD.Capacity._isDate = function (iso) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(iso || '');
+};
+
+OAD.Capacity._label = function (iso) {
+  var p = String(iso || '').split('-');
+  var dt = new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]));
+  var days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  return days[dt.getDay()] + ' ' + (dt.getMonth() + 1) + '/' + dt.getDate();
+};
+
+OAD.Capacity._occupied = function (thread) {
+  var date = (thread && thread.next_action_date) || (thread && thread.deadline) || '';
+  return OAD.Capacity._isDate(date) ? date : '';
+};
+
+OAD.Capacity._isLostImpact = function (impact) {
+  return impact === 'full' || impact === 'partial' || impact === 'windshield';
+};
+
+// A call, dictation, or audio task can sit on a windshield day. The day brief
+// stamps day_fit when it parks one there. The channel and the next action
+// are the same signal when someone dates the thread by hand.
+OAD.Capacity._fitsWindshield = function (thread) {
+  if (!thread) return false;
+  if (thread.day_fit === 'windshield') return true;
+  var channel = String(thread.next_action_channel || '').toLowerCase();
+  if (channel === 'phone' || channel === 'call' || channel === 'voice' || channel === 'audio') return true;
+  return /\b(call|phone|dial|dictate)\b/i.test(thread.next_action || '');
+};
+
+OAD.Capacity._isCapacity = function (thread) {
+  if (!thread || thread.status !== 'open') return false;
+  if (!OAD.Capacity._isLostImpact(thread.day_impact)) return false;
+  return !!OAD.Capacity._occupied(thread);
+};
+
+OAD.Capacity._isDeliverable = function (thread) {
+  if (!thread || thread.status !== 'open') return false;
+  if (OAD.Capacity._isLostImpact(thread.day_impact)) return false;
+  var kind = thread.thread_kind;
+  if (kind === 'habit' || kind === 'idea' || kind === 'cadence') return false;
+  return OAD.Capacity._isDate(thread.deadline);
+};
+
+OAD.Capacity._lostDays = function (threads) {
+  var byDate = {};
+  (threads || []).forEach(function (thread) {
+    if (!OAD.Capacity._isCapacity(thread)) return;
+    var date = OAD.Capacity._occupied(thread);
+    if (!byDate[date]) byDate[date] = { date: date, impact: thread.day_impact, threads: [] };
+    if (thread.day_impact === 'full') byDate[date].impact = 'full';
+    else if (thread.day_impact === 'windshield' && byDate[date].impact !== 'full') byDate[date].impact = 'windshield';
+    byDate[date].threads.push(thread);
+  });
+  return byDate;
+};
+
+OAD.Capacity._loadDays = function (deadline, lostByDate) {
+  var found = [];
+  var i;
+  for (i = 1; i <= OAD.Capacity.WINDOW_DAYS; i++) {
+    var date = OAD.Capacity._addDays(deadline, -i);
+    var lost = lostByDate[date];
+    if (lost && OAD.Capacity._isLostImpact(lost.impact)) continue;
+    found.push(date);
+    if (found.length === OAD.Capacity.LOAD_DAYS) break;
+  }
+  found.reverse();
+  return found;
+};
+
+OAD.Capacity._isLate = function (thread, deadline, loadDays, lostByDate) {
+  var next = thread.next_action_date || '';
+  if (!OAD.Capacity._isDate(next)) return true;
+  var onLost = lostByDate[next];
+  if (onLost && !(onLost.impact === 'windshield' && OAD.Capacity._fitsWindshield(thread))) return true;
+  if (next === deadline) return true;
+  if (!loadDays.length) return true;
+  return next > loadDays[0];
+};
+
+OAD.Capacity.analyze = function (threads, todayStr) {
+  var list = threads || [];
+  var today = todayStr || '';
+  var horizon = today ? OAD.Capacity._addDays(today, OAD.Capacity.HORIZON_DAYS) : '';
+  var lost = OAD.Capacity._lostDays(list);
+  var byDeadline = {};
+  list.forEach(function (thread) {
+    if (!OAD.Capacity._isDeliverable(thread)) return;
+    var deadline = thread.deadline;
+    if (today && (deadline < today || (horizon && deadline > horizon))) return;
+    if (!byDeadline[deadline]) {
+      var windowStart = OAD.Capacity._addDays(deadline, -OAD.Capacity.WINDOW_DAYS);
+      var capacity = [];
+      Object.keys(lost).forEach(function (date) {
+        if (date >= windowStart && date <= deadline) {
+          lost[date].threads.forEach(function (cap) { capacity.push(cap); });
+        }
+      });
+      byDeadline[deadline] = {
+        deadline: deadline,
+        loadDays: OAD.Capacity._loadDays(deadline, lost),
+        capacity: capacity,
+        late: []
+      };
+    }
+    var cluster = byDeadline[deadline];
+    if (cluster.capacity.length && OAD.Capacity._isLate(thread, deadline, cluster.loadDays, lost)) {
+      cluster.late.push(thread);
+    }
+  });
+  var clusters = Object.keys(byDeadline).sort().map(function (date) { return byDeadline[date]; })
+    .filter(function (cluster) { return cluster.late.length > 0; });
+  var lateIds = {};
+  clusters.forEach(function (cluster) {
+    cluster.late.forEach(function (thread) { if (thread.uuid) lateIds[thread.uuid] = true; });
+  });
+  var onLostDays = [];
+  if (today) {
+    list.forEach(function (thread) {
+      if (!thread || thread.status !== 'open') return;
+      if (OAD.Capacity._isLostImpact(thread.day_impact)) return;
+      var kind = thread.thread_kind;
+      if (kind === 'habit' || kind === 'idea' || kind === 'cadence') return;
+      var next = thread.next_action_date || '';
+      if (!lost[next]) return;
+      if (lost[next].impact === 'windshield' && OAD.Capacity._fitsWindshield(thread)) return;
+      if (next < today || (horizon && next > horizon)) return;
+      if (thread.uuid && lateIds[thread.uuid]) return;
+      onLostDays.push(thread);
+    });
+  }
+  return { clusters: clusters, onLostDays: onLostDays, lostDays: lost };
+};
+
+OAD.Capacity.relatedPairs = function (threads) {
+  var list = threads || [];
+  var lost = OAD.Capacity._lostDays(list);
+  var deliverables = list.filter(OAD.Capacity._isDeliverable);
+  var pairs = [];
+  var seen = {};
+  Object.keys(lost).forEach(function (date) {
+    lost[date].threads.forEach(function (cap) {
+      deliverables.forEach(function (deliverable) {
+        if (!cap.uuid || !deliverable.uuid || cap.uuid === deliverable.uuid) return;
+        var start = OAD.Capacity._addDays(deliverable.deadline, -OAD.Capacity.WINDOW_DAYS);
+        if (date < start || date > deliverable.deadline) return;
+        var key = cap.uuid + '|' + deliverable.uuid;
+        if (seen[key]) return;
+        seen[key] = true;
+        pairs.push({ from: cap, to: deliverable });
+      });
+    });
+  });
+  return pairs;
+};
+
+OAD.Capacity._displayTitle = function (thread) {
+  var title = (thread && thread.title) || 'Untitled';
+  title = String(title).replace(/\s+\(due \d{4}-\d{2}-\d{2}\)\s*$/i, '').trim();
+  return title || 'Untitled';
+};
+
+OAD.Capacity._dayFacts = function (capacity) {
+  var byDate = {};
+  (capacity || []).forEach(function (thread) {
+    var date = OAD.Capacity._occupied(thread);
+    if (!date) return;
+    if (!byDate[date]) byDate[date] = [];
+    if (!byDate[date].some(function (item) { return item.uuid && item.uuid === thread.uuid; })) {
+      byDate[date].push(thread);
+    }
+  });
+  return Object.keys(byDate).sort().map(function (date) {
+    var group = byDate[date];
+    var full = group.some(function (thread) { return thread.day_impact === 'full'; });
+    var miles = null;
+    var minutes = null;
+    group.forEach(function (thread) {
+      if (miles == null && thread.travel_miles != null) miles = thread.travel_miles;
+      if (minutes == null && thread.travel_minutes != null) minutes = thread.travel_minutes;
+    });
+    return {
+      date: date,
+      label: OAD.Capacity._label(date),
+      full: full,
+      windshield: !full && group.some(function (thread) { return thread.day_impact === 'windshield'; }),
+      miles: miles,
+      minutes: minutes,
+      titles: group.map(OAD.Capacity._displayTitle)
+    };
+  });
+};
+
+OAD.Capacity._relevantCapacity = function (analysis) {
+  var seen = {};
+  var caps = [];
+  function add(thread) {
+    if (!thread) return;
+    if (thread.uuid && seen[thread.uuid]) return;
+    if (thread.uuid) seen[thread.uuid] = true;
+    caps.push(thread);
+  }
+  (analysis.clusters || []).forEach(function (cluster) {
+    (cluster.capacity || []).forEach(add);
+  });
+  (analysis.onLostDays || []).forEach(function (thread) {
+    var bucket = analysis.lostDays && analysis.lostDays[thread.next_action_date];
+    if (bucket) bucket.threads.forEach(add);
+  });
+  return caps;
+};
+
+OAD.Capacity._leadText = function (capacity, name) {
+  var who = name || 'T.J.';
+  var greeting = 'Hey ' + who;
+  if (!/[.!?]$/.test(greeting)) greeting += '.';
+  var facts = OAD.Capacity._dayFacts(capacity);
+  if (!facts.length) return greeting;
+  var lines = facts.map(function (fact) {
+    var titles = fact.titles.join(' and ');
+    if (fact.full) return fact.label + ' is gone to ' + titles + '.';
+    if (fact.windshield) {
+      var travel = '';
+      if (fact.miles != null) {
+        travel = ', ' + fact.miles + ' miles';
+        var phrase = OAD.Capacity._drivePhrase(fact.minutes);
+        if (phrase) travel += ', about ' + phrase + ' of driving';
+      }
+      return fact.label + ' is a windshield day' + travel + '. ' + titles + '.';
+    }
+    return fact.label + ' is partly ' + titles + '.';
+  });
+  return greeting + ' ' + lines.join(' ');
+};
+
+OAD.Capacity._drivePhrase = function (minutes) {
+  if (minutes == null || !isFinite(Number(minutes))) return '';
+  var total = Math.round(Number(minutes));
+  if (total < 60) return total + (total === 1 ? ' minute' : ' minutes');
+  var hours = Math.floor(total / 60);
+  var rem = total % 60;
+  var hourWord = hours + (hours === 1 ? ' hour' : ' hours');
+  if (rem < 8) return hourWord;
+  return hourWord + ' ' + rem + ' minutes';
+};
+
+OAD.Capacity._planText = function (loadDays) {
+  if (!loadDays || !loadDays.length) return 'No clear day left before this deadline.';
+  var labels = loadDays.map(OAD.Capacity._label);
+  return 'Start ' + labels[0] + '. Load ' + labels.join(' and ') + '.';
+};
+
+OAD.Capacity._name = function () {
+  var title = OAD.Config && OAD.Config.userGreetingTitle;
+  if (title && String(title).trim()) return String(title).trim();
+  return 'T.J.';
+};
+
+OAD.Capacity.bannerHtml = function (threads, todayStr) {
+  var list = threads || (OAD.DB && OAD.DB.threads) || [];
+  var today = todayStr || (typeof OAD.todayStr === 'function' ? OAD.todayStr() : '');
+  if (!today) return '';
+  var analysis = OAD.Capacity.analyze(list, today);
+  if (!analysis.clusters.length && !(analysis.onLostDays || []).length) return '';
+  var html = '<div class="capacity-banner" role="status">';
+  html += '<p class="capacity-banner-lead">' +
+    OAD.esc(OAD.Capacity._leadText(OAD.Capacity._relevantCapacity(analysis), OAD.Capacity._name())) +
+    '</p>';
+  analysis.clusters.forEach(function (cluster) {
+    html += '<section class="capacity-banner-block">';
+    html += '<h3>Due ' + OAD.esc(OAD.Capacity._label(cluster.deadline)) + '</h3>';
+    html += '<p>' + OAD.esc(OAD.Capacity._planText(cluster.loadDays)) + '</p>';
+    html += '<ul>';
+    cluster.late.forEach(function (thread) {
+      html += '<li>' + OAD.esc(OAD.Capacity._displayTitle(thread)) + '</li>';
+    });
+    html += '</ul></section>';
+  });
+  if ((analysis.onLostDays || []).length) {
+    var grouped = {};
+    analysis.onLostDays.forEach(function (thread) {
+      var date = thread.next_action_date;
+      if (!grouped[date]) grouped[date] = [];
+      grouped[date].push(thread);
+    });
+    html += '<section class="capacity-banner-block">';
+    html += '<h3>Still on a lost day</h3><ul>';
+    Object.keys(grouped).sort().forEach(function (date) {
+      grouped[date].forEach(function (thread) {
+        html += '<li><span class="capacity-banner-when">' + OAD.esc(OAD.Capacity._label(date)) +
+          ':</span> ' + OAD.esc(OAD.Capacity._displayTitle(thread)) + '</li>';
+      });
+    });
+    html += '</ul></section>';
+  }
+  html += '</div>';
+  return html;
+};
+
+OAD.Capacity.syncEdges = function () {
+  if (typeof OAD._ade004_capacity !== 'function') return 0;
+  var changed = OAD._ade004_capacity();
+  if (changed > 0 && typeof OAD.saveDB === 'function') OAD.saveDB();
+  return changed;
+};
+
 // ── Auto-Dependency Engine (ADE) ──────────────────────────────────────
 // Infers graph edges from thread data. Rules run in order; each checks
 // the suppression list and skips duplicate edges before writing.
@@ -797,11 +1135,51 @@ OAD._ade003_sharedIdentifier = function () {
   return created;
 };
 
+// ADE-004: a lost day relates to each open deliverable whose deadline window
+// contains that day. Relates, never blocks. An existing edge of any type to
+// the same target is left alone. A stale auto edge is removed only while the
+// target is still open. A link to work that has since closed stays, so the
+// day does not become an unconnected thread the morning after.
+OAD._ade004_capacity = function () {
+  var changed = 0;
+  var threads = OAD.DB.threads || [];
+  var pairs = OAD.Capacity.relatedPairs(threads);
+  var wanted = {};
+  var byUuid = {};
+  threads.forEach(function (thread) { if (thread.uuid) byUuid[thread.uuid] = thread; });
+  pairs.forEach(function (pair) { wanted[pair.from.uuid + '|' + pair.to.uuid] = pair; });
+
+  threads.forEach(function (thread) {
+    if (!thread.connections || !thread.connections.length) return;
+    var next = [];
+    thread.connections.forEach(function (conn) {
+      var auto = conn.rule === 'ADE-004' && conn.edge_type === 'relates' && !conn.confirmed_by_user;
+      if (!auto || wanted[thread.uuid + '|' + conn.to_uuid]) {
+        next.push(conn);
+        return;
+      }
+      var target = byUuid[conn.to_uuid];
+      if (target && target.status !== 'closed') {
+        changed++;
+        return;
+      }
+      next.push(conn);
+    });
+    if (next.length !== thread.connections.length) thread.connections = next;
+  });
+
+  pairs.forEach(function (pair) {
+    if (OAD._adeAddEdge(pair.from, pair.to, 'relates', 'ADE-004', 0.9)) changed++;
+  });
+  return changed;
+};
+
 OAD.runADE = function () {
   var created = 0;
   created += OAD._ade001_sequential();
   created += OAD._ade002_parentChild();
   created += OAD._ade003_sharedIdentifier();
+  created += OAD._ade004_capacity();
   if (created > 0) OAD.saveDB();
   return created;
 };
