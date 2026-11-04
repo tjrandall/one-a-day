@@ -2139,7 +2139,9 @@ OAD._dailyCheckIn = function (id, done) {
 OAD._updateCHEBadge = function () {
   var badge = document.getElementById('che-badge');
   if (!badge) return;
-  var alerts = (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
+  var alerts = (typeof OAD.visibleHealthAlerts === 'function')
+    ? OAD.visibleHealthAlerts()
+    : (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
   var criticals = alerts.filter(function (a) { return a.severity === 'CRITICAL'; });
   if (!alerts.length) {
     badge.style.display = 'none';

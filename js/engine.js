@@ -1242,21 +1242,37 @@ OAD._che001_nullDeadline = function (thread) {
   );
 };
 
-// CHE-002: next_action_date equals deadline — zero lead time.
+// CHE-002: work whose next action sits on the deadline has no time before it is due.
+// A calendar day (day_impact full, partial, or windshield) is the appointment, so the
+// same date is correct. Habits, ideas, and cadences are not this kind of work.
+// lead_time_days 0 is an explicit opt-out on that thread. Life area is not the switch:
+// Health paperwork still needs lead time, and a Health appointment does not.
+OAD._che002_needsLeadTime = function (thread) {
+  if (!thread) return false;
+  if (thread.status === 'closed' || thread.status === 'dormant') return false;
+  if (!thread.deadline || !thread.next_action_date) return false;
+  if (thread.next_action_date !== thread.deadline) return false;
+  if (thread.lead_time_days === 0) return false;
+  if (OAD.Capacity && OAD.Capacity._isLostImpact(thread.day_impact)) return false;
+  var kind = thread.thread_kind;
+  if (kind === 'habit' || kind === 'idea' || kind === 'cadence') return false;
+  return true;
+};
+
 OAD._che002_noLeadTime = function (thread) {
-  if (!thread.deadline || thread.status === 'closed') return null;
-  if (!thread.next_action_date) return null;
-  if (thread.next_action_date !== thread.deadline) return null;
+  if (!OAD._che002_needsLeadTime(thread)) return null;
   var leadDays = OAD._cheLeadDays(thread);
-  var dl = new Date(thread.deadline);
-  dl.setDate(dl.getDate() - leadDays);
-  var suggested = dl.toISOString().slice(0, 10);
-  return OAD._makeHealthAlert(
+  var suggested = (OAD.Capacity && OAD.Capacity._addDays)
+    ? OAD.Capacity._addDays(thread.deadline, -leadDays)
+    : thread.deadline;
+  var alert = OAD._makeHealthAlert(
     thread, 'CRITICAL', 'CHE-002',
-    'No lead time — next action is set to the deadline itself (' + thread.deadline + '). Thread will surface the day it\'s due with zero working time.',
+    'No lead time. Next action is set to the deadline itself (' + thread.deadline + '). This work will surface the day it is due.',
     true,
     { uuid: thread.uuid, fields: { next_action_date: suggested }, patch_source: 'CHE_AUTO_FIX', patch_rule: 'CHE-002', patch_applied_at: null }
   );
+  alert.fingerprint = thread.deadline + '|' + thread.next_action_date;
+  return alert;
 };
 
 // CHE-006: Stale next_action_date on an open/waiting thread whose overall deadline status
@@ -1374,12 +1390,14 @@ OAD._che010_duplicateTitles = function (threads) {
         var key = [a.uuid, b.uuid].sort().join('|');
         if (seen[key]) continue;
         seen[key] = true;
-        alerts.push(OAD._makeHealthAlert(
+        var alert = OAD._makeHealthAlert(
           a, 'INFO', 'CHE-010',
-          'Possible duplicate — "' + a.title + '" and "' + b.title + '" are ' +
-            Math.round(OAD._cheTitleSimilarity(a.title, b.title) * 100) + '% similar. Review both: ' + b.uuid,
+          'Possible duplicate. "' + a.title + '" and "' + b.title + '" are ' +
+            Math.round(OAD._cheTitleSimilarity(a.title, b.title) * 100) + '% similar.',
           false, null
-        ));
+        );
+        alert.related_uuid = b.uuid;
+        alerts.push(alert);
       }
     }
   }
@@ -1419,15 +1437,9 @@ OAD._che011_conflictingEdges = function (thread) {
   return alerts;
 };
 
-OAD.runCHE = function () {
-  var threads = OAD.DB.threads || [];
-  var today = new Date(); today.setHours(0, 0, 0, 0);
-
-  // Keep existing dismissed alerts; replace non-dismissed ones fresh each run.
-  var dismissed = (OAD.DB.health_alerts || []).filter(function (a) { return a.dismissed; });
+OAD._collectHealthAlerts = function (threads, today) {
   var fresh = [];
-
-  threads.forEach(function (t) {
+  (threads || []).forEach(function (t) {
     var a;
     a = OAD._che001_nullDeadline(t);  if (a) fresh.push(a);
     a = OAD._che002_noLeadTime(t);    if (a) fresh.push(a);
@@ -1437,8 +1449,53 @@ OAD.runCHE = function () {
     a = OAD._che013_missingActionStep(t); if (a) fresh.push(a);
     a = OAD._che014_urgencyContradiction(t); if (a) fresh.push(a);
   });
+  OAD._che010_duplicateTitles(threads || []).forEach(function (a) { fresh.push(a); });
+  return fresh;
+};
 
-  OAD._che010_duplicateTitles(threads).forEach(function (a) { fresh.push(a); });
+// Dismiss survives the next runCHE, which mints a new id every pass.
+// CHE-002 includes the two dates, so a later day that is still equal comes back.
+// CHE-010 is the pair. Everything else is the rule plus the thread.
+OAD._healthAlertKey = function (alert) {
+  if (!alert) return '';
+  var type = alert.type || '';
+  var uuid = alert.thread_uuid || '';
+  if (type === 'CHE-010') {
+    return type + '|' + [uuid, alert.related_uuid || ''].sort().join('|');
+  }
+  if (type === 'CHE-002') {
+    return type + '|' + uuid + '|' + (alert.fingerprint || '');
+  }
+  return type + '|' + uuid;
+};
+
+OAD.visibleHealthAlerts = function () {
+  var today = new Date();
+  today.setHours(0, 0, 0, 0);
+  var dismissed = {};
+  var storedByKey = {};
+  (OAD.DB.health_alerts || []).forEach(function (a) {
+    var key = OAD._healthAlertKey(a);
+    if (a.dismissed) dismissed[key] = true;
+    else if (!storedByKey[key]) storedByKey[key] = a;
+  });
+  return OAD._collectHealthAlerts(OAD.DB.threads || [], today).filter(function (a) {
+    return !dismissed[OAD._healthAlertKey(a)];
+  }).map(function (a) {
+    return storedByKey[OAD._healthAlertKey(a)] || a;
+  });
+};
+
+OAD.runCHE = function () {
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+
+  // Keep dismissed alerts, and do not mint a fresh copy of the same finding.
+  var dismissed = (OAD.DB.health_alerts || []).filter(function (a) { return a.dismissed; });
+  var dismissedKeys = {};
+  dismissed.forEach(function (a) { dismissedKeys[OAD._healthAlertKey(a)] = true; });
+  var fresh = OAD._collectHealthAlerts(OAD.DB.threads || [], today).filter(function (a) {
+    return !dismissedKeys[OAD._healthAlertKey(a)];
+  });
 
   OAD.DB.health_alerts = dismissed.concat(fresh);
   OAD.saveDB();

@@ -585,29 +585,77 @@ OAD._acceptPersonaUpdate = function () {
   OAD.closeModal();
 };
 
+OAD.openHealthThread = function (uuid) {
+  var t = OAD.getThreadByUUID(uuid);
+  if (!t) return;
+  OAD.closeModal();
+  OAD.selectThread(t.id);
+};
+
 OAD.openHealthPanel = function () {
-  // Phase 1 stub — UI design TBD. Badge is live; panel opens here.
-  var alerts = (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
+  var alerts = (typeof OAD.visibleHealthAlerts === 'function')
+    ? OAD.visibleHealthAlerts()
+    : (OAD.DB.health_alerts || []).filter(function (a) { return !a.dismissed; });
   if (!alerts.length) {
     OAD.openModal('<h2>Health</h2><p class="text-muted text-sm" style="margin-top:16px">No configuration issues detected.</p><div class="modal-footer"><button class="secondary" onclick="OAD.closeModal()">Close</button></div>');
     return;
   }
-  // Temporary list view until full Health Panel UI is designed
-  var rows = alerts.map(function (a) {
-    var color = a.severity === 'CRITICAL' ? 'var(--danger,#e53e3e)' : a.severity === 'WARNING' ? '#d97706' : 'var(--text-muted)';
-    return '<div style="padding:10px 0;border-bottom:1px solid var(--border)">' +
-      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;color:' + color + ';margin-bottom:4px">' + OAD.esc(a.severity) + ' · ' + OAD.esc(a.type) + '</div>' +
-      '<div style="font-size:13px;font-weight:600;margin-bottom:2px">' + OAD.esc(a.thread_title) + '</div>' +
-      '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px">' + OAD.esc(a.description) + '</div>' +
-      '<div style="display:flex;gap:8px">' +
-        '<button class="ghost" style="font-size:11px;padding:3px 10px" onclick="OAD.dismissHealthAlert(\'' + a.id + '\');OAD._updateCHEBadge();OAD.openHealthPanel()">Dismiss</button>' +
-      '</div>' +
-    '</div>';
+
+  var groups = [];
+  var byUuid = {};
+  alerts.forEach(function (a) {
+    var key = a.thread_uuid || '';
+    if (!byUuid[key]) {
+      byUuid[key] = { uuid: key, title: a.thread_title || 'Untitled', alerts: [], critical: false };
+      groups.push(byUuid[key]);
+    }
+    byUuid[key].alerts.push(a);
+    if (a.severity === 'CRITICAL') byUuid[key].critical = true;
+  });
+  var severityRank = { CRITICAL: 0, WARNING: 1, INFO: 2 };
+  groups.forEach(function (group) {
+    group.alerts.sort(function (a, b) {
+      return (severityRank[a.severity] == null ? 9 : severityRank[a.severity]) -
+        (severityRank[b.severity] == null ? 9 : severityRank[b.severity]);
+    });
+  });
+  groups.sort(function (a, b) {
+    if (a.critical !== b.critical) return a.critical ? -1 : 1;
+    return String(a.title).localeCompare(String(b.title));
+  });
+
+  var cards = groups.map(function (group) {
+    var findings = group.alerts.map(function (a) {
+      var sevClass = a.severity === 'CRITICAL' ? 'health-sev-critical' : a.severity === 'WARNING' ? 'health-sev-warning' : 'health-sev-info';
+      var other = '';
+      if (a.type === 'CHE-010' && a.related_uuid) {
+        var otherThread = OAD.getThreadByUUID(a.related_uuid);
+        var otherLabel = (otherThread && otherThread.title && otherThread.title !== a.thread_title)
+          ? otherThread.title
+          : 'the other copy';
+        other = '<button type="button" class="ghost" onclick="OAD.openHealthThread(\'' + a.related_uuid + '\')">Open ' + OAD.esc(otherLabel) + '</button>';
+      }
+      return '<div class="health-finding">' +
+        '<div class="health-sev ' + sevClass + '">' + OAD.esc(a.severity) + ' · ' + OAD.esc(a.type) + '</div>' +
+        '<div class="health-desc">' + OAD.esc(a.description) + '</div>' +
+        '<div class="health-actions">' +
+          other +
+          '<button type="button" class="ghost" onclick="OAD.dismissHealthAlert(\'' + a.id + '\');OAD._updateCHEBadge();OAD.openHealthPanel()">Dismiss</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    var titleBtn = group.uuid
+      ? '<button type="button" class="health-title" onclick="OAD.openHealthThread(\'' + group.uuid + '\')">' + OAD.esc(group.title) + '</button>'
+      : '<div class="health-title">' + OAD.esc(group.title) + '</div>';
+    return '<div class="health-card">' + titleBtn + findings + '</div>';
   }).join('');
+
+  var issueWord = alerts.length === 1 ? 'issue' : 'issues';
+  var threadWord = groups.length === 1 ? 'thread' : 'threads';
   OAD.openModal(
     '<h2>Health</h2>' +
-    '<p class="text-muted text-sm" style="margin-bottom:12px">' + alerts.length + ' active issue' + (alerts.length === 1 ? '' : 's') + ' — full Health Panel UI coming in Phase 1.</p>' +
-    rows +
+    '<p class="text-muted text-sm">' + alerts.length + ' ' + issueWord + ' across ' + groups.length + ' ' + threadWord + '. Open a thread to fix it.</p>' +
+    cards +
     '<div class="modal-footer"><button class="secondary" onclick="OAD.closeModal()">Close</button></div>'
   );
 };

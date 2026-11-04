@@ -5073,6 +5073,122 @@ OAD.test('OAD.runCHE(): CHE-006 fires correctly end-to-end for a real thread mix
   }
 });
 
+// ── Tests: CHE-002 lead time is for work, not for a calendar day ───────────────────────────
+
+OAD.test('CHE-002: a calendar day does not need lead time', function () {
+  ['partial', 'full', 'windshield'].forEach(function (impact) {
+    var t = OAD.makeThread({
+      uuid: 'che002-' + impact,
+      title: 'Cap appointment',
+      status: 'open',
+      day_impact: impact,
+      next_action_date: '2026-11-24',
+      deadline: '2026-11-24'
+    });
+    OAD._assert(!OAD._che002_noLeadTime(t), impact + ' day is the appointment');
+  });
+});
+
+OAD.test('CHE-002: work dated on its deadline still needs lead time', function () {
+  var t = OAD.makeThread({
+    uuid: 'che002-capstone',
+    title: 'Capstone milestone',
+    status: 'open',
+    day_impact: '',
+    next_action_date: '2026-12-15',
+    deadline: '2026-12-15',
+    life_area: 'Personal Growth'
+  });
+  var alert = OAD._che002_noLeadTime(t);
+  var expected = OAD.Capacity._addDays(t.deadline, -OAD._cheLeadDays(t));
+  OAD._assert(!!alert, 'a deliverable on its deadline must fire CHE-002');
+  OAD._assertEqual(alert.type, 'CHE-002', 'alert type is CHE-002');
+  OAD._assertEqual(alert.fingerprint, '2026-12-15|2026-12-15', 'fingerprint is the two dates');
+  OAD._assertEqual(alert.suggested_fix.fields.next_action_date, expected, 'suggestion uses the local calendar');
+  OAD._assert(expected < t.deadline, 'the suggested day is before the deadline');
+});
+
+OAD.test('CHE-002: explicit zero lead time, a habit, unequal dates, and closed threads stay quiet', function () {
+  var zero = OAD.makeThread({ uuid: 'che002-zero', status: 'open', next_action_date: '2026-12-15', deadline: '2026-12-15', lead_time_days: 0 });
+  var habit = OAD.makeThread({ uuid: 'che002-habit', status: 'open', thread_kind: 'habit', next_action_date: '2026-12-15', deadline: '2026-12-15' });
+  var idea = OAD.makeThread({ uuid: 'che002-idea', status: 'open', thread_kind: 'idea', next_action_date: '2026-12-15', deadline: '2026-12-15' });
+  var cadence = OAD.makeThread({ uuid: 'che002-cadence', status: 'open', thread_kind: 'cadence', next_action_date: '2026-12-15', deadline: '2026-12-15' });
+  var ahead = OAD.makeThread({ uuid: 'che002-ahead', status: 'open', next_action_date: '2026-12-10', deadline: '2026-12-15' });
+  var closed = OAD.makeThread({ uuid: 'che002-closed', status: 'closed', next_action_date: '2026-12-15', deadline: '2026-12-15' });
+  var dormant = OAD.makeThread({ uuid: 'che002-dormant', status: 'dormant', next_action_date: '2026-12-15', deadline: '2026-12-15' });
+  OAD._assert(!OAD._che002_noLeadTime(zero), 'lead_time_days 0 is an explicit opt-out');
+  OAD._assert(!OAD._che002_noLeadTime(habit), 'a habit is not this kind of work');
+  OAD._assert(!OAD._che002_noLeadTime(idea), 'an idea is not this kind of work');
+  OAD._assert(!OAD._che002_noLeadTime(cadence), 'a cadence is not this kind of work');
+  OAD._assert(!OAD._che002_noLeadTime(ahead), 'a next action before the deadline already has lead time');
+  OAD._assert(!OAD._che002_noLeadTime(closed), 'a closed thread stays quiet');
+  OAD._assert(!OAD._che002_noLeadTime(dormant), 'a dormant thread stays quiet');
+});
+
+OAD.test('CHE-002: a dismissed finding stays dismissed until the dates change', function () {
+  var origThreads = OAD.DB.threads;
+  var origAlerts = OAD.DB.health_alerts;
+  var origSuppress = OAD._suppressSaveDB;
+  try {
+    OAD._suppressSaveDB = true;
+    var t = OAD.makeThread({
+      id: 1,
+      uuid: 'che002-dismiss',
+      title: 'Letter',
+      status: 'open',
+      next_action_date: '2026-11-06',
+      deadline: '2026-11-06'
+    });
+    OAD.DB.threads = [t];
+    OAD.DB.health_alerts = [];
+    OAD.runCHE();
+    var first = OAD.DB.health_alerts.filter(function (a) { return a.type === 'CHE-002'; });
+    OAD._assertEqual(first.length, 1, 'the letter fires once');
+    OAD.dismissHealthAlert(first[0].id);
+    OAD.runCHE();
+    var again = OAD.DB.health_alerts.filter(function (a) { return a.type === 'CHE-002' && !a.dismissed; });
+    OAD._assertEqual(again.length, 0, 'the same dates stay dismissed');
+    t.next_action_date = '2026-11-10';
+    t.deadline = '2026-11-10';
+    OAD.runCHE();
+    var moved = OAD.DB.health_alerts.filter(function (a) { return a.type === 'CHE-002' && !a.dismissed; });
+    OAD._assertEqual(moved.length, 1, 'equal dates on a new day fire again');
+    OAD._assertEqual(moved[0].fingerprint, '2026-11-10|2026-11-10', 'the new finding carries the new dates');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.health_alerts = origAlerts;
+    OAD._suppressSaveDB = origSuppress;
+  }
+});
+
+OAD.test('visibleHealthAlerts: a partial-day appointment is absent and the capstone is present', function () {
+  var origThreads = OAD.DB.threads;
+  var origAlerts = OAD.DB.health_alerts;
+  try {
+    OAD.DB.health_alerts = [];
+    OAD.DB.threads = [
+      OAD.makeThread({ id: 1, uuid: 'vis-cap', title: 'Cap appointment', status: 'open', day_impact: 'partial', next_action_date: '2026-11-24', deadline: '2026-11-24' }),
+      OAD.makeThread({ id: 2, uuid: 'vis-work', title: 'Capstone milestone', status: 'open', next_action_date: '2026-12-15', deadline: '2026-12-15' })
+    ];
+    var che002 = OAD.visibleHealthAlerts().filter(function (a) { return a.type === 'CHE-002'; });
+    OAD._assertEqual(che002.length, 1, 'only the capstone is missing lead time');
+    OAD._assertEqual(che002[0].thread_uuid, 'vis-work', 'the alert points at the capstone');
+  } finally {
+    OAD.DB.threads = origThreads;
+    OAD.DB.health_alerts = origAlerts;
+  }
+});
+
+OAD.test('CHE-010: names the other thread on related_uuid', function () {
+  var a = OAD.makeThread({ uuid: 'dup-a', title: 'Dentist Appointment Cap prep', status: 'open' });
+  var b = OAD.makeThread({ uuid: 'dup-b', title: 'Dentist Appointment Cap prep', status: 'open' });
+  var alerts = OAD._che010_duplicateTitles([a, b]);
+  OAD._assertEqual(alerts.length, 1, 'one pair produces one alert');
+  OAD._assertEqual(alerts[0].related_uuid, 'dup-b', 'the other uuid is a field');
+  var key = OAD._healthAlertKey(alerts[0]);
+  OAD._assert(key.indexOf('dup-a') !== -1 && key.indexOf('dup-b') !== -1, 'the dismiss key includes both threads');
+});
+
 // ── Tests: CHE-012/013/014 (Next Action staleness/contradiction detector) ───────────────────
 
 OAD.test('CHE-012: fires when next_action_updated_at predates current_assumption_updated_at', function () {

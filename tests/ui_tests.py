@@ -139,6 +139,92 @@ def test_day_brief_box(page):
     _assert(result["pendingCleared"], "Yes clears the proposal")
 
 
+def test_health_panel_opens_the_thread(page):
+    """A calendar appointment stays off the lead-time list, and the title opens the thread."""
+    print("\ntest_health_panel_opens_the_thread")
+    result = page.evaluate("""() => {
+        const origThreads = OAD.DB.threads;
+        const origAlerts = OAD.DB.health_alerts;
+        const origSuppress = OAD._suppressSaveDB;
+        const origPersist = OAD._DB_PERSIST;
+        const origActive = OAD._activeId;
+        OAD._suppressSaveDB = true;
+        OAD._DB_PERSIST = false;
+        try {
+            const cap = OAD.makeThread({
+                id: 9001,
+                uuid: 'ui-cap-appt',
+                title: 'UI Cap Appointment',
+                status: 'open',
+                day_impact: 'partial',
+                next_action_date: '2026-11-24',
+                deadline: '2026-11-24'
+            });
+            const work = OAD.makeThread({
+                id: 9002,
+                uuid: 'ui-capstone',
+                title: 'UI Capstone Milestone',
+                status: 'open',
+                day_impact: '',
+                next_action_date: '2026-12-15',
+                deadline: '2026-12-15'
+            });
+            const dupA = OAD.makeThread({
+                id: 9003,
+                uuid: 'ui-dup-a',
+                title: 'UI Dentist Appointment Cap prep',
+                status: 'open',
+                day_impact: 'partial',
+                next_action_date: '2026-11-24',
+                deadline: '2026-11-24'
+            });
+            const dupB = OAD.makeThread({
+                id: 9004,
+                uuid: 'ui-dup-b',
+                title: 'UI Dentist Appointment Cap prep',
+                status: 'open',
+                day_impact: 'partial',
+                next_action_date: '2026-12-08',
+                deadline: '2026-12-08'
+            });
+            OAD.DB.threads = [cap, work, dupA, dupB];
+            OAD.DB.health_alerts = [];
+            const alerts = OAD.visibleHealthAlerts();
+            const che002Titles = alerts.filter(a => a.type === 'CHE-002').map(a => a.thread_title);
+            OAD.openHealthPanel();
+            const modal = document.querySelector('#modal-overlay .modal');
+            const text = modal ? modal.innerText : '';
+            const buttons = modal ? Array.from(modal.querySelectorAll('button')) : [];
+            const capstoneBtn = buttons.find(b => b.textContent.indexOf('UI Capstone Milestone') !== -1);
+            if (capstoneBtn) capstoneBtn.click();
+            const opened = OAD.getThread(OAD._activeId);
+            const overlay = document.getElementById('modal-overlay');
+            const modalHidden = !overlay || overlay.classList.contains('hidden');
+            return {
+                che002Titles: che002Titles,
+                textHasCapstone: text.indexOf('UI Capstone Milestone') !== -1,
+                textHasCapAppt: text.indexOf('UI Cap Appointment') !== -1,
+                textHasOther: text.indexOf('Open the other copy') !== -1,
+                openedTitle: opened ? opened.title : null,
+                modalHidden: modalHidden
+            };
+        } finally {
+            OAD.DB.threads = origThreads;
+            OAD.DB.health_alerts = origAlerts;
+            OAD._suppressSaveDB = origSuppress;
+            OAD._DB_PERSIST = origPersist;
+            OAD._activeId = origActive;
+            OAD.closeModal();
+        }
+    }""")
+    _assert_eq(result["che002Titles"], ["UI Capstone Milestone"], "only the capstone is missing lead time")
+    _assert(result["textHasCapstone"], "the panel names the capstone")
+    _assert(result["textHasCapAppt"] is False, "the panel leaves the cap appointment off the lead-time list")
+    _assert(result["textHasOther"], "a duplicate offers the other copy")
+    _assert_eq(result["openedTitle"], "UI Capstone Milestone", "the title opens that thread")
+    _assert(result["modalHidden"], "opening the thread closes the health panel")
+
+
 def test_ai_provider_dropdown(page):
     """Settings selects one provider, then shows that provider's key. The day box stays quiet."""
     print("\ntest_ai_provider_dropdown")
@@ -443,6 +529,7 @@ def run_tests():
         # 1. Run raptor gate tests while overlay is visible
         test_raptor_gate(page)
         test_day_brief_box(page)
+        test_health_panel_opens_the_thread(page)
         test_ai_provider_dropdown(page)
         test_daily_work_surface(page)
 
