@@ -52,12 +52,160 @@ OAD._stageOptions = function (selected) {
   }).join('');
 };
 
+// Threads this one may sit under. Excludes itself, its descendants, and closed
+// threads, so a bollard cannot be parented under its own child.
+OAD.parentChoices = function (thread) {
+  var banned = {};
+  if (thread && thread.uuid) {
+    banned[thread.uuid] = true;
+    if (OAD.Bulk && OAD.Bulk.descendants) {
+      OAD.Bulk.descendants(thread.uuid).forEach(function (d) { banned[d.uuid] = true; });
+    }
+  }
+  return (OAD.DB.threads || []).filter(function (x) {
+    if (!x || !x.uuid || banned[x.uuid]) return false;
+    if (x.status === 'closed') return false;
+    if (thread && x.id != null && thread.id != null && x.id === thread.id) return false;
+    return true;
+  }).sort(function (a, b) {
+    return (a.title || '').localeCompare(b.title || '');
+  });
+};
+
+OAD._parentFieldsHtml = function (thread) {
+  OAD._parentPickerThread = thread || null;
+  var current = thread && thread.parent_uuid ? OAD.getThreadByUUID(thread.parent_uuid) : null;
+  var currentLabel = current ? current.title : (thread && thread.parent_uuid ? 'a missing thread' : 'no parent');
+  return `
+    <div class="field parent-picker">
+      <label>Parent</label>
+      <div class="text-muted text-sm">Where this thread lives. Open children make the parent a bollard, and that parent's own date stays empty.</div>
+      <div id="f-parent-current" class="parent-current">Current: ${OAD.esc(currentLabel)}</div>
+      <div class="autocomplete-container">
+        <input type="text" id="f-parent-search" placeholder="Search threads..." autocomplete="off" />
+        <input type="hidden" id="f-parent-uuid" value="${OAD.esc((thread && thread.parent_uuid) || '')}" />
+        <div id="f-parent-count" class="connection-count"></div>
+        <div id="f-parent-results" class="autocomplete-results"></div>
+      </div>
+    </div>`;
+};
+
+OAD._initParentPicker = function () {
+  var thread = OAD._parentPickerThread;
+  var searchInput = document.getElementById('f-parent-search');
+  var uuidInput = document.getElementById('f-parent-uuid');
+  var resultsDiv = document.getElementById('f-parent-results');
+  var countEl = document.getElementById('f-parent-count');
+  var currentEl = document.getElementById('f-parent-current');
+  if (!searchInput || !uuidInput || !resultsDiv) return;
+
+  var choices = OAD.parentChoices(thread);
+  var activeIndex = -1;
+
+  function matches(t, q) {
+    return (t.title || '').toLowerCase().includes(q) ||
+           (t.life_area || '').toLowerCase().includes(q) ||
+           (t.status || '').toLowerCase().includes(q);
+  }
+
+  function renderList(query) {
+    var q = (query || '').toLowerCase().trim();
+    var filtered = choices.filter(function (t) { return matches(t, q); });
+    if (countEl) {
+      countEl.textContent = q
+        ? (filtered.length + ' of ' + choices.length)
+        : (choices.length + ' thread' + (choices.length === 1 ? '' : 's'));
+    }
+    var selected = uuidInput.value || '';
+    var noneClass = selected ? '' : ' selected';
+    var rows = '<div class="autocomplete-item' + noneClass + '" data-uuid="">' +
+      '<span class="item-title"><strong>No parent</strong></span></div>';
+    if (!filtered.length) {
+      rows += '<div class="autocomplete-item text-muted">No threads found</div>';
+    } else {
+      rows += filtered.map(function (t, idx) {
+        var activeClass = idx === activeIndex ? ' active' : '';
+        var selectedClass = t.uuid === selected ? ' selected' : '';
+        return '<div class="autocomplete-item' + activeClass + selectedClass + '" data-uuid="' + OAD.esc(t.uuid) + '">' +
+          '<span class="item-title"><strong>' + OAD.esc(t.title) + '</strong></span>' +
+          '<span class="item-meta"><span class="item-area">' + OAD.esc(t.life_area) + '</span>' +
+          '<span class="item-area">' + OAD.esc(t.status) + '</span></span></div>';
+      }).join('');
+    }
+    resultsDiv.innerHTML = rows;
+    var none = resultsDiv.querySelector('[data-uuid=""]');
+    if (none) none.addEventListener('click', function () { selectParent(null); });
+    Array.from(resultsDiv.querySelectorAll('.autocomplete-item[data-uuid]')).forEach(function (item) {
+      if (!item.getAttribute('data-uuid')) return;
+      item.addEventListener('click', function () {
+        var uuid = item.getAttribute('data-uuid');
+        var picked = filtered.filter(function (t) { return t.uuid === uuid; })[0];
+        if (picked) selectParent(picked);
+      });
+    });
+    return filtered;
+  }
+
+  function selectParent(picked) {
+    uuidInput.value = picked ? picked.uuid : '';
+    if (currentEl) currentEl.textContent = 'Current: ' + (picked ? picked.title : 'no parent');
+    renderList(searchInput.value);
+  }
+
+  function showList() {
+    resultsDiv.style.display = 'block';
+    renderList(searchInput.value);
+  }
+
+  function scrollItemIntoView(activeEl) {
+    if (!activeEl) return;
+    var elRect = activeEl.getBoundingClientRect();
+    var boxRect = resultsDiv.getBoundingClientRect();
+    if (elRect.top < boxRect.top) resultsDiv.scrollTop -= (boxRect.top - elRect.top);
+    else if (elRect.bottom > boxRect.bottom) resultsDiv.scrollTop += (elRect.bottom - boxRect.bottom);
+  }
+
+  searchInput.addEventListener('input', function () {
+    activeIndex = -1;
+    showList();
+  });
+
+  searchInput.addEventListener('keydown', function (e) {
+    var q = searchInput.value.toLowerCase().trim();
+    var filtered = choices.filter(function (t) { return matches(t, q); });
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!filtered.length) return;
+      if (e.key === 'ArrowDown') activeIndex = (activeIndex + 1) % filtered.length;
+      else activeIndex = (activeIndex - 1 + filtered.length) % filtered.length;
+      showList();
+      scrollItemIntoView(resultsDiv.querySelector('.autocomplete-item.active'));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIndex >= 0 && activeIndex < filtered.length) selectParent(filtered[activeIndex]);
+    } else if (e.key === 'Escape') {
+      searchInput.value = '';
+      activeIndex = -1;
+      showList();
+    }
+  });
+
+  showList();
+};
+
 OAD._threadForm = function (t) {
+  var repeatBlock = '';
+  if (t && (t.thread_kind === 'habit' || t.thread_kind === 'cadence')) {
+    if (OAD.Repeat && OAD.Repeat.ensure) OAD.Repeat.ensure(t);
+    repeatBlock = OAD._repeatFieldsHtml('f', t.repeat, t.next_due);
+  }
   return `
     <div class="field">
       <label>Title</label>
       <input id="f-title" type="text" value="${OAD.esc(t.title)}" placeholder="What is this thread about?">
     </div>
+    ${repeatBlock}
+    ${OAD._parentFieldsHtml(t)}
     <div class="field-row">
       <div class="field">
         <label>Life Area</label>
@@ -189,7 +337,7 @@ OAD._threadForm = function (t) {
 OAD._readThreadForm = function (base) {
   const title = document.getElementById('f-title')?.value.trim() || '';
   if (!title) { alert('Title is required.'); return null; }
-  return Object.assign({}, base, {
+  var data = Object.assign({}, base, {
     title,
     life_area:               document.getElementById('f-area')?.value || base.life_area,
     status:                  document.getElementById('f-status')?.value || base.status,
@@ -222,6 +370,32 @@ OAD._readThreadForm = function (base) {
                          : false,
     stage: document.getElementById('f-stage')?.value || null
   });
+  if (document.getElementById('f-every') && OAD.Repeat && OAD.Repeat.commit) {
+    var typed = document.getElementById('f-repeat-next');
+    var typedValue = typed ? typed.value : '';
+    var opened = OAD.Repeat._opened && OAD.Repeat._opened.f;
+    var committed = OAD.Repeat.commit(
+      base,
+      OAD.Repeat.readFields('f'),
+      typedValue,
+      typedValue !== (base.next_due || ''),
+      opened
+    );
+    data.repeat = committed.repeat;
+    data.next_due = committed.next_due;
+    data.days_of_week = committed.days_of_week;
+    data._repeatNote = committed.note;
+  }
+  var parentInput = document.getElementById('f-parent-uuid');
+  if (parentInput) {
+    var parentUuid = parentInput.value || null;
+    if (parentUuid && parentUuid !== (base.parent_uuid || null)) {
+      var allowed = OAD.parentChoices(base).some(function (c) { return c.uuid === parentUuid; });
+      if (!allowed) { alert('Pick a parent from the list.'); return null; }
+    }
+    data.parent_uuid = parentUuid;
+  }
+  return data;
 };
 
 OAD.openPromoteIdeaModal = function (id) {
@@ -239,14 +413,24 @@ OAD.openPromoteIdeaModal = function (id) {
       <button class="secondary" onclick="OAD.closeModal()">Cancel — keep incubating</button>
       <button onclick="OAD._savePromotedThread()">Create Thread</button>
     </div>`);
+  OAD._initParentPicker();
 };
 
 OAD._savePromotedThread = function () {
   const data = OAD._readThreadForm(OAD.makeThread());
   if (!data) return;
   const thread = OAD.addThread(data);
+  if (thread.parent_uuid && OAD.syncParentEdge) {
+    OAD.syncParentEdge(thread, null);
+    OAD.saveDB();
+  }
   if (OAD.Capacity && OAD.Capacity.syncEdges) OAD.Capacity.syncEdges();
-  OAD.addEvolution(thread.id, 'Thread promoted from idea incubation.');
+  var promoteNote = 'Thread promoted from idea incubation.';
+  if (thread.parent_uuid) {
+    var promoteParent = OAD.getThreadByUUID(thread.parent_uuid);
+    promoteNote += ' Parent → ' + (promoteParent ? promoteParent.title : 'another thread') + '.';
+  }
+  OAD.addEvolution(thread.id, promoteNote);
   OAD.closeModal();
   OAD.refreshActiveView();
   OAD.selectThread(thread.id);
@@ -261,14 +445,24 @@ OAD.openNewThreadModal = function () {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveNewThread()">Create Thread</button>
     </div>`);
+  OAD._initParentPicker();
 };
 
 OAD._saveNewThread = function () {
   const data = OAD._readThreadForm(OAD.makeThread());
   if (!data) return;
   const thread = OAD.addThread(data);
+  if (thread.parent_uuid && OAD.syncParentEdge) {
+    OAD.syncParentEdge(thread, null);
+    OAD.saveDB();
+  }
   if (OAD.Capacity && OAD.Capacity.syncEdges) OAD.Capacity.syncEdges();
-  OAD.addEvolution(thread.id, 'Thread created.');
+  var createdNote = 'Thread created.';
+  if (thread.parent_uuid) {
+    var createdParent = OAD.getThreadByUUID(thread.parent_uuid);
+    createdNote += ' Parent → ' + (createdParent ? createdParent.title : 'another thread') + '.';
+  }
+  OAD.addEvolution(thread.id, createdNote);
   OAD.closeModal();
   OAD.refreshActiveView();
   OAD.selectThread(thread.id);
@@ -285,6 +479,11 @@ OAD.openEditModal = function (id) {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveEditThread(${id})">Save</button>
     </div>`);
+  if ((t.thread_kind === 'habit' || t.thread_kind === 'cadence') && OAD.Repeat && OAD.Repeat.remember) {
+    OAD.Repeat.syncFields('f', false);
+    OAD.Repeat.remember('f');
+  }
+  OAD._initParentPicker();
 };
 
 OAD._saveEditThread = function (id) {
@@ -292,7 +491,10 @@ OAD._saveEditThread = function (id) {
   if (!t) return;
   const data = OAD._readThreadForm(t);
   if (!data) return;
+  const repeatNote = data._repeatNote || '';
+  delete data._repeatNote;
 
+  const prevParent = t.parent_uuid || null;
   const prev = { status: t.status, priority: t.priority, assumption_verified: t.assumption_verified, next_action_date: t.next_action_date };
   // Guarded by prev.status !== 'closed': the "closing_condition_met" checkbox isn't wired to
   // the status dropdown, so it stays checked from a prior closure unless the user separately
@@ -309,6 +511,15 @@ OAD._saveEditThread = function (id) {
   }
   if (prev.priority !== data.priority) notes.push(`Priority → ${data.priority}`);
   if (!prev.assumption_verified && data.assumption_verified) notes.push('Assumption verified');
+  if (repeatNote) notes.push(repeatNote);
+  var nextParent = data.parent_uuid || null;
+  if (prevParent !== nextParent) {
+    if (!nextParent) notes.push('Parent cleared');
+    else {
+      var parentThread = OAD.getThreadByUUID(nextParent);
+      notes.push('Parent → ' + (parentThread ? parentThread.title : 'another thread'));
+    }
+  }
 
   if (prev.next_action_date !== data.next_action_date && prev.next_action_date && data.next_action_date) {
     if (data.next_action_date > prev.next_action_date) {
@@ -585,11 +796,15 @@ OAD._acceptPersonaUpdate = function () {
   OAD.closeModal();
 };
 
-OAD.openHealthThread = function (uuid) {
+OAD.openThreadFromNotice = function (uuid) {
   var t = OAD.getThreadByUUID(uuid);
   if (!t) return;
   OAD.closeModal();
   OAD.selectThread(t.id);
+};
+
+OAD.openHealthThread = function (uuid) {
+  OAD.openThreadFromNotice(uuid);
 };
 
 OAD.openHealthPanel = function () {
@@ -777,11 +992,12 @@ OAD.openConnectionModal = function (id) {
       <label>Edge Type</label>
       <select id="f-edge-type">${edgeOpts}</select>
     </div>
-    <div class="field">
+    <div class="field connection-picker">
       <label>Connected Thread</label>
       <div class="autocomplete-container">
         <input type="text" id="f-edge-search" placeholder="Type to search threads..." autocomplete="off" />
         <input type="hidden" id="f-edge-uuid" value="" />
+        <div id="f-edge-count" class="connection-count"></div>
         <div id="f-edge-results" class="autocomplete-results"></div>
       </div>
     </div>
@@ -789,6 +1005,8 @@ OAD.openConnectionModal = function (id) {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveConnection(${id})">Add</button>
     </div>`);
+  var box = document.querySelector('#modal-overlay .modal');
+  if (box) box.classList.add('modal-connection');
   setTimeout(() => {
     document.getElementById('f-edge-search')?.focus();
     OAD._initConnectionAutocomplete(id);
@@ -799,6 +1017,7 @@ OAD._initConnectionAutocomplete = function (currentId) {
   const searchInput = document.getElementById('f-edge-search');
   const uuidInput = document.getElementById('f-edge-uuid');
   const resultsDiv = document.getElementById('f-edge-results');
+  const countEl = document.getElementById('f-edge-count');
   if (!searchInput || !uuidInput || !resultsDiv) return;
 
   const threads = (OAD.DB.threads || [])
@@ -807,24 +1026,34 @@ OAD._initConnectionAutocomplete = function (currentId) {
 
   let activeIndex = -1;
 
+  function matches(t, q) {
+    return (t.title || '').toLowerCase().includes(q) ||
+           (t.life_area || '').toLowerCase().includes(q) ||
+           (t.status || '').toLowerCase().includes(q) ||
+           (t.description || '').toLowerCase().includes(q);
+  }
+
   function renderList(query) {
     const q = (query || '').toLowerCase().trim();
-    const filtered = threads.filter(t => {
-      return (t.title || '').toLowerCase().includes(q) ||
-             (t.life_area || '').toLowerCase().includes(q) ||
-             (t.description || '').toLowerCase().includes(q);
-    });
+    const filtered = threads.filter(t => matches(t, q));
+    if (countEl) {
+      countEl.textContent = q
+        ? (filtered.length + ' of ' + threads.length)
+        : (threads.length + ' thread' + (threads.length === 1 ? '' : 's'));
+    }
 
     if (filtered.length === 0) {
       resultsDiv.innerHTML = '<div class="autocomplete-item text-muted">No threads found</div>';
       return filtered;
     }
 
+    const selectedUuid = uuidInput.value;
     resultsDiv.innerHTML = filtered.map((t, idx) => {
       const activeClass = idx === activeIndex ? ' active' : '';
-      return `<div class="autocomplete-item${activeClass}" data-uuid="${t.uuid}" data-title="${OAD.esc(t.title)}" title="${OAD.esc(t.title)}">
+      const selectedClass = t.uuid === selectedUuid ? ' selected' : '';
+      return `<div class="autocomplete-item${activeClass}${selectedClass}" data-uuid="${t.uuid}" data-title="${OAD.esc(t.title)}">
         <span class="item-title"><strong>${OAD.esc(t.title)}</strong></span>
-        <span class="item-area">${OAD.esc(t.life_area)}</span>
+        <span class="item-meta"><span class="item-area">${OAD.esc(t.life_area)}</span><span class="item-area">${OAD.esc(t.status)}</span></span>
       </div>`;
     }).join('');
 
@@ -841,57 +1070,43 @@ OAD._initConnectionAutocomplete = function (currentId) {
     if (!thread) return;
     searchInput.value = thread.title;
     uuidInput.value = thread.uuid;
-    resultsDiv.style.display = 'none';
+    resultsDiv.style.display = 'flex';
+    renderList(searchInput.value);
+    const picked = resultsDiv.querySelector('.autocomplete-item.selected');
+    if (picked) scrollItemIntoView(picked);
+  }
+
+  function showList() {
+    resultsDiv.style.display = 'flex';
+    renderList(searchInput.value);
   }
 
   searchInput.addEventListener('focus', () => {
-    resultsDiv.style.display = 'block';
     activeIndex = -1;
-    renderList(searchInput.value);
+    showList();
   });
-
-  const clickOutsideHandler = (e) => {
-    if (!searchInput.contains(e.target) && !resultsDiv.contains(e.target)) {
-      resultsDiv.style.display = 'none';
-    }
-  };
-  document.addEventListener('click', clickOutsideHandler);
-
-  // Clean up click handler when modal is removed
-  const observer = new MutationObserver(() => {
-    if (!document.getElementById('f-edge-search')) {
-      document.removeEventListener('click', clickOutsideHandler);
-      observer.disconnect();
-    }
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
 
   searchInput.addEventListener('input', () => {
-    resultsDiv.style.display = 'block';
     activeIndex = -1;
-    renderList(searchInput.value);
+    showList();
   });
 
   searchInput.addEventListener('keydown', (e) => {
     const q = searchInput.value.toLowerCase().trim();
-    const filtered = threads.filter(t => {
-      return (t.title || '').toLowerCase().includes(q) ||
-             (t.life_area || '').toLowerCase().includes(q) ||
-             (t.description || '').toLowerCase().includes(q);
-    });
+    const filtered = threads.filter(t => matches(t, q));
 
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length > 0) {
         activeIndex = (activeIndex + 1) % filtered.length;
-        renderList(searchInput.value);
+        showList();
         scrollIntoView();
       }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       if (filtered.length > 0) {
         activeIndex = (activeIndex - 1 + filtered.length) % filtered.length;
-        renderList(searchInput.value);
+        showList();
         scrollIntoView();
       }
     } else if (e.key === 'Enter') {
@@ -902,15 +1117,25 @@ OAD._initConnectionAutocomplete = function (currentId) {
         selectItem(filtered[0]);
       }
     } else if (e.key === 'Escape') {
-      resultsDiv.style.display = 'none';
+      searchInput.value = '';
+      uuidInput.value = '';
+      activeIndex = -1;
+      showList();
     }
   });
 
+  showList();
+
+  function scrollItemIntoView(activeEl) {
+    if (!activeEl) return;
+    const elRect = activeEl.getBoundingClientRect();
+    const boxRect = resultsDiv.getBoundingClientRect();
+    if (elRect.top < boxRect.top) resultsDiv.scrollTop -= (boxRect.top - elRect.top);
+    else if (elRect.bottom > boxRect.bottom) resultsDiv.scrollTop += (elRect.bottom - boxRect.bottom);
+  }
+
   function scrollIntoView() {
-    const activeEl = resultsDiv.querySelector('.autocomplete-item.active');
-    if (activeEl) {
-      activeEl.scrollIntoView({ block: 'nearest' });
-    }
+    scrollItemIntoView(resultsDiv.querySelector('.autocomplete-item.active'));
   }
 };
 
@@ -1018,38 +1243,187 @@ OAD._savePersona = function () {
   OAD.renderPersonaBar();
 };
 
+// ── Repeat editor ────────────────────────────────────────────────────
+// One panel, inlined into the habit modal, the cadence modal, and the
+// thread form. Math stays on OAD.Repeat in engine.js.
+
+OAD.Repeat.remember = function (prefix) {
+  OAD.Repeat._opened = OAD.Repeat._opened || {};
+  OAD.Repeat._opened[prefix] = OAD.Repeat.readFields(prefix);
+};
+
+OAD.Repeat.syncFields = function (prefix, refresh) {
+  var unitEl = document.getElementById(prefix + '-unit');
+  var unit = unitEl ? unitEl.value : 'day';
+  var week = document.getElementById(prefix + '-week-block');
+  var month = document.getElementById(prefix + '-month-block');
+  if (week) week.classList.toggle('hidden', unit !== 'week');
+  if (month) month.classList.toggle('hidden', unit !== 'month');
+  if (refresh !== false) OAD.Repeat.refreshChip(prefix);
+};
+
+OAD.Repeat.refreshChip = function (prefix) {
+  var el = document.getElementById(prefix + '-repeat-chip');
+  if (!el) return;
+  el.textContent = OAD.Repeat.label(OAD.Repeat.parse(OAD.Repeat.readFields(prefix)));
+};
+
+OAD.Repeat.readFields = function (prefix) {
+  var every = document.getElementById(prefix + '-every');
+  var unit = document.getElementById(prefix + '-unit');
+  var anchor = document.querySelector('input[name="' + prefix + '-anchor"]:checked');
+  var days = [];
+  document.querySelectorAll('.' + prefix + '-dow:checked').forEach(function (el) {
+    days.push(parseInt(el.value, 10));
+  });
+  var month = document.getElementById(prefix + '-month-day');
+  var endsOn = document.querySelector('input[name="' + prefix + '-ends"]:checked');
+  var endsDate = document.getElementById(prefix + '-ends-date');
+  return {
+    every: every ? every.value : 1,
+    unit: unit ? unit.value : 'day',
+    anchor: anchor ? anchor.value : 'schedule',
+    days_of_week: days,
+    month_day: month ? month.value : 1,
+    ends: (endsOn && endsOn.value === 'on' && endsDate && endsDate.value) ? endsDate.value : null
+  };
+};
+
+OAD.Repeat._setDays = function (prefix, days) {
+  document.querySelectorAll('.' + prefix + '-dow').forEach(function (box) {
+    box.checked = days.indexOf(parseInt(box.value, 10)) !== -1;
+  });
+};
+
+OAD.Repeat.applyPreset = function (prefix, name) {
+  var every = document.getElementById(prefix + '-every');
+  var unit = document.getElementById(prefix + '-unit');
+  if (every) every.value = '1';
+  if (name === 'day') {
+    if (unit) unit.value = 'day';
+  } else if (name === 'weekday') {
+    if (unit) unit.value = 'week';
+    OAD.Repeat._setDays(prefix, [1, 2, 3, 4, 5]);
+  } else if (name === 'week') {
+    if (unit) unit.value = 'week';
+    var any = false;
+    document.querySelectorAll('.' + prefix + '-dow').forEach(function (box) { if (box.checked) any = true; });
+    if (!any) OAD.Repeat._setDays(prefix, [new Date().getDay()]);
+  } else if (name === 'month') {
+    if (unit) unit.value = 'month';
+    var month = document.getElementById(prefix + '-month-day');
+    var dateId = prefix === 'cd' ? 'cd-next-due' : (prefix + '-repeat-next');
+    var dateEl = document.getElementById(dateId);
+    var dayNum = (dateEl && dateEl.value && dateEl.value.length >= 10)
+      ? parseInt(dateEl.value.slice(8, 10), 10)
+      : (new Date().getDate());
+    if (month && dayNum >= 1 && dayNum <= 31) month.value = String(dayNum);
+  }
+  OAD.Repeat.syncFields(prefix);
+};
+
+OAD._repeatDateId = function (prefix) {
+  return prefix === 'cd' ? 'cd-next-due' : (prefix + '-repeat-next');
+};
+
+OAD._repeatFieldsHtml = function (prefix, repeat, nextDue, opts) {
+  opts = opts || {};
+  var rule = (OAD.Repeat && OAD.Repeat.parse(repeat)) || {
+    every: 1, unit: 'day', days_of_week: [], month_day: 1, anchor: 'schedule', ends: null
+  };
+  var names = OAD._DAY_NAMES || ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var dow = names.map(function (name, i) {
+    var checked = rule.days_of_week.indexOf(i) !== -1 ? ' checked' : '';
+    return '<label class="dow-checkbox"><input type="checkbox" class="' + prefix + '-dow" value="' + i + '"' + checked +
+      ' onchange="OAD.Repeat.syncFields(\'' + prefix + '\')"> ' + name + '</label>';
+  }).join('');
+  var monthOpts = '';
+  for (var d = 1; d <= 31; d++) {
+    monthOpts += '<option value="' + d + '"' + (rule.month_day === d ? ' selected' : '') + '>' + d + '</option>';
+  }
+  monthOpts += '<option value="last"' + (rule.month_day === 'last' ? ' selected' : '') + '>Last day</option>';
+  var chip = OAD.Repeat.label(OAD.Repeat.parse(repeat));
+  var nextField = opts.omitDate ? '' : (
+    '<div class="field">' +
+      '<label>Next occurrence</label>' +
+      '<input id="' + prefix + '-repeat-next" type="date" value="' + OAD.esc(nextDue || '') + '">' +
+    '</div>'
+  );
+  return '<div class="repeat-panel">' +
+    '<div class="repeat-presets">' +
+      '<button type="button" class="secondary" onclick="OAD.Repeat.applyPreset(\'' + prefix + '\',\'day\')">Every day</button>' +
+      '<button type="button" class="secondary" onclick="OAD.Repeat.applyPreset(\'' + prefix + '\',\'weekday\')">Every weekday</button>' +
+      '<button type="button" class="secondary" onclick="OAD.Repeat.applyPreset(\'' + prefix + '\',\'week\')">Weekly</button>' +
+      '<button type="button" class="secondary" onclick="OAD.Repeat.applyPreset(\'' + prefix + '\',\'month\')">Monthly</button>' +
+    '</div>' +
+    '<div class="field" style="margin-top:12px"><span id="' + prefix + '-repeat-chip" class="repeat-chip">' + OAD.esc(chip) + '</span></div>' +
+    '<div class="field">' +
+      '<label>Based on</label>' +
+      '<div class="repeat-anchor">' +
+        '<label class="dow-checkbox"><input type="radio" name="' + prefix + '-anchor" value="schedule"' + (rule.anchor !== 'completed' ? ' checked' : '') + ' onchange="OAD.Repeat.syncFields(\'' + prefix + '\')"> Scheduled date</label>' +
+        '<label class="dow-checkbox"><input type="radio" name="' + prefix + '-anchor" value="completed"' + (rule.anchor === 'completed' ? ' checked' : '') + ' onchange="OAD.Repeat.syncFields(\'' + prefix + '\')"> Completed date</label>' +
+      '</div>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label>Every</label>' +
+      '<div class="repeat-every">' +
+        '<input id="' + prefix + '-every" type="number" min="1" max="365" value="' + rule.every + '" oninput="OAD.Repeat.syncFields(\'' + prefix + '\')">' +
+        '<select id="' + prefix + '-unit" onchange="OAD.Repeat.syncFields(\'' + prefix + '\')">' +
+          '<option value="day"' + (rule.unit === 'day' ? ' selected' : '') + '>Days</option>' +
+          '<option value="week"' + (rule.unit === 'week' ? ' selected' : '') + '>Weeks</option>' +
+          '<option value="month"' + (rule.unit === 'month' ? ' selected' : '') + '>Months</option>' +
+        '</select>' +
+      '</div>' +
+    '</div>' +
+    '<div class="field' + (rule.unit === 'week' ? '' : ' hidden') + '" id="' + prefix + '-week-block">' +
+      '<label>On</label>' +
+      '<div class="dow-picker">' + dow + '</div>' +
+    '</div>' +
+    '<div class="field' + (rule.unit === 'month' ? '' : ' hidden') + '" id="' + prefix + '-month-block">' +
+      '<label>On day</label>' +
+      '<select id="' + prefix + '-month-day" onchange="OAD.Repeat.syncFields(\'' + prefix + '\')">' + monthOpts + '</select>' +
+    '</div>' +
+    '<div class="field">' +
+      '<label>Ends</label>' +
+      '<div class="repeat-ends">' +
+        '<label class="dow-checkbox"><input type="radio" name="' + prefix + '-ends" value="never"' + (!rule.ends ? ' checked' : '') + ' onchange="OAD.Repeat.syncFields(\'' + prefix + '\')"> Never</label>' +
+        '<label class="dow-checkbox"><input type="radio" name="' + prefix + '-ends" value="on"' + (rule.ends ? ' checked' : '') + ' onchange="OAD.Repeat.syncFields(\'' + prefix + '\')"> On date</label>' +
+        '<input id="' + prefix + '-ends-date" type="date" value="' + OAD.esc(rule.ends || '') + '" onchange="OAD.Repeat.syncFields(\'' + prefix + '\')">' +
+      '</div>' +
+    '</div>' +
+    nextField +
+  '</div>';
+};
+
+OAD._repeatCommitFromForm = function (base, prefix) {
+  var dateEl = document.getElementById(OAD._repeatDateId(prefix));
+  var typedValue = dateEl ? dateEl.value : '';
+  var opened = OAD.Repeat._opened && OAD.Repeat._opened[prefix];
+  return OAD.Repeat.commit(
+    base,
+    OAD.Repeat.readFields(prefix),
+    typedValue,
+    typedValue !== ((base && base.next_due) || ''),
+    opened
+  );
+};
+
 // ── Cadence modals ───────────────────────────────────────────────────
 
 OAD._cadenceForm = function (c) {
-  const recurrenceOpts = OAD.RECURRENCES.map(function (r) {
-    return '<option value="' + r + '" ' + (c.recurrence === r ? 'selected' : '') + '>' + r + '</option>';
-  }).join('');
   const areaOpts = OAD.LIFE_AREAS.map(function (a) {
     return '<option value="' + OAD.esc(a) + '" ' + (c.life_area === a ? 'selected' : '') + '>' + OAD.esc(a) + '</option>';
-  }).join('');
-  const dowOpts = OAD._DAY_NAMES.map(function (name, i) {
-    const checked = (c.days_of_week || []).indexOf(i) !== -1 ? 'checked' : '';
-    return '<label class="dow-checkbox"><input type="checkbox" class="cd-dow" value="' + i + '" ' + checked + '> ' + name + '</label>';
   }).join('');
   return `
     <div class="field">
       <label>Title <span style="color:var(--critical)">*</span></label>
       <input id="cd-title" type="text" value="${OAD.esc(c.title)}" placeholder="What must be done on this date?">
     </div>
-    <div class="field-row">
-      <div class="field">
-        <label>Recurrence</label>
-        <select id="cd-recurrence">${recurrenceOpts}</select>
-      </div>
-      <div class="field">
-        <label>Life Area</label>
-        <select id="cd-area">${areaOpts}</select>
-      </div>
-    </div>
     <div class="field">
-      <label>Days of Week <span class="text-muted text-sm">(used when Recurrence = weekly-days)</span></label>
-      <div class="dow-picker">${dowOpts}</div>
+      <label>Life Area</label>
+      <select id="cd-area">${areaOpts}</select>
     </div>
+    ${OAD._repeatFieldsHtml('cd', c.repeat, c.next_due, { omitDate: true })}
     <div class="field-row">
       <div class="field">
         <label>Next Due Date</label>
@@ -1073,18 +1447,17 @@ OAD._cadenceForm = function (c) {
 OAD._readCadenceForm = function (base) {
   const title = document.getElementById('cd-title')?.value.trim();
   if (!title) { alert('Title is required.'); return null; }
-  const days_of_week = Array.from(document.querySelectorAll('.cd-dow:checked')).map(function (el) {
-    return parseInt(el.value, 10);
-  });
+  var committed = OAD._repeatCommitFromForm(base, 'cd');
   return Object.assign({}, base, {
     title,
-    recurrence:     document.getElementById('cd-recurrence')?.value     || 'monthly-1st',
-    days_of_week,
     life_area:      document.getElementById('cd-area')?.value           || OAD.Config.defaultLifeArea,
-    next_due:       document.getElementById('cd-next-due')?.value       || null,
+    next_due:       committed.next_due,
+    repeat:         committed.repeat,
+    days_of_week:   committed.days_of_week,
     last_completed: document.getElementById('cd-last-completed')?.value || null,
     notes:          document.getElementById('cd-notes')?.value.trim()        || '',
-    consequences:   document.getElementById('cd-consequences')?.value.trim() || ''
+    consequences:   document.getElementById('cd-consequences')?.value.trim() || '',
+    _repeatNote:    committed.note
   });
 };
 
@@ -1097,13 +1470,18 @@ OAD.openNewCadenceModal = function () {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveNewCadence()">Create</button>
     </div>`);
+  OAD.Repeat.syncFields('cd', false);
+  OAD.Repeat.remember('cd');
   setTimeout(() => document.getElementById('cd-title')?.focus(), 50);
 };
 
 OAD._saveNewCadence = function () {
   const data = OAD._readCadenceForm(OAD.makeCadence());
   if (!data) return;
-  OAD.addCadence(data);
+  var note = data._repeatNote || '';
+  delete data._repeatNote;
+  var added = OAD.addCadence(data);
+  if (note) OAD.addEvolution(added.id, note);
   OAD.closeModal();
   OAD.renderCadencePanel();
 };
@@ -1119,6 +1497,8 @@ OAD.openEditCadenceModal = function (id) {
       <button class="secondary" onclick="OAD.closeModal()">Cancel</button>
       <button onclick="OAD._saveEditCadence(${id})">Save</button>
     </div>`);
+  OAD.Repeat.syncFields('cd', false);
+  OAD.Repeat.remember('cd');
 };
 
 OAD._saveEditCadence = function (id) {
@@ -1126,7 +1506,10 @@ OAD._saveEditCadence = function (id) {
   if (!c) return;
   const data = OAD._readCadenceForm(c);
   if (!data) return;
+  var note = data._repeatNote || '';
+  delete data._repeatNote;
   OAD.updateCadence(id, data);
+  if (note) OAD.addEvolution(id, note);
   OAD.closeModal();
   OAD.renderCadencePanel();
 };
@@ -1138,6 +1521,113 @@ OAD._deleteCadence = function (id) {
   OAD.deleteCadence(id);
   OAD.closeModal();
   OAD.renderCadencePanel();
+};
+
+// ── Habit modals ─────────────────────────────────────────────────────
+
+OAD._habitForm = function (h, editing) {
+  var time = h.time_of_day || 'morning';
+  var phase = h.phase || 'active';
+  var phaseField = editing
+    ? '<div class="field"><label>Phase</label><select id="hb-phase">' +
+        ['active', 'check-in', 'dormant'].map(function (p) {
+          return '<option value="' + p + '"' + (phase === p ? ' selected' : '') + '>' + p + '</option>';
+        }).join('') +
+      '</select></div>'
+    : '';
+  return '<div class="field">' +
+      '<label>Title <span style="color:var(--critical)">*</span></label>' +
+      '<input id="hb-title" type="text" value="' + OAD.esc(h.title || '') + '" placeholder="What are you checking in on?">' +
+    '</div>' +
+    '<div class="field-row">' +
+      '<div class="field"><label>Life Area</label><select id="hb-area">' + OAD._areaOptions(h.life_area) + '</select></div>' +
+      '<div class="field"><label>Time of day</label><select id="hb-time">' +
+        '<option value="morning"' + (time === 'morning' ? ' selected' : '') + '>Morning</option>' +
+        '<option value="evening"' + (time === 'evening' ? ' selected' : '') + '>Evening</option>' +
+        '<option value="flexible"' + (time === 'flexible' ? ' selected' : '') + '>Flexible</option>' +
+      '</select></div>' +
+    '</div>' +
+    '<div class="field"><label>Why</label>' +
+      '<textarea id="hb-why" placeholder="Why this matters">' + OAD.esc(h.why || '') + '</textarea>' +
+    '</div>' +
+    phaseField +
+    OAD._repeatFieldsHtml('hb', h.repeat, h.next_due);
+};
+
+OAD.openNewHabitModal = function () {
+  var blank = OAD.makeHabit({ title: '' });
+  OAD.openModal(
+    '<h2>New Habit</h2>' +
+    OAD._habitForm(blank, false) +
+    '<div class="modal-footer">' +
+      '<button type="button" class="secondary" onclick="OAD.closeModal()">Cancel</button>' +
+      '<button type="button" onclick="OAD._saveNewHabit()">Create</button>' +
+    '</div>'
+  );
+  OAD.Repeat.syncFields('hb', false);
+  OAD.Repeat.remember('hb');
+  setTimeout(function () { var el = document.getElementById('hb-title'); if (el) el.focus(); }, 50);
+};
+
+OAD._saveNewHabit = function () {
+  var titleEl = document.getElementById('hb-title');
+  var title = titleEl ? titleEl.value.trim() : '';
+  if (!title) { alert('Title is required.'); return; }
+  var blank = OAD.makeHabit({ title: title });
+  var committed = OAD._repeatCommitFromForm(blank, 'hb');
+  var habit = OAD.makeHabit({
+    title: title,
+    life_area: document.getElementById('hb-area')?.value || blank.life_area,
+    time_of_day: document.getElementById('hb-time')?.value || 'morning',
+    why: document.getElementById('hb-why')?.value.trim() || '',
+    phase: 'active',
+    repeat: committed.repeat,
+    next_due: committed.next_due,
+    days_of_week: committed.days_of_week
+  });
+  var added = OAD.addHabit(habit);
+  if (committed.note) OAD.addEvolution(added.id, committed.note);
+  OAD.closeModal();
+  OAD.renderHabitPanel();
+};
+
+OAD.openEditHabitModal = function (id) {
+  var h = OAD.getHabit(id);
+  if (!h) return;
+  if (OAD.Repeat && OAD.Repeat.ensure) OAD.Repeat.ensure(h);
+  OAD.openModal(
+    '<h2>Edit Habit</h2>' +
+    OAD._habitForm(h, true) +
+    '<div class="modal-footer">' +
+      '<button type="button" class="secondary" onclick="OAD.closeModal()">Cancel</button>' +
+      '<button type="button" onclick="OAD._saveEditHabit(' + id + ')">Save</button>' +
+    '</div>'
+  );
+  OAD.Repeat.syncFields('hb', false);
+  OAD.Repeat.remember('hb');
+};
+
+OAD._saveEditHabit = function (id) {
+  var h = OAD.getHabit(id);
+  if (!h) return;
+  var titleEl = document.getElementById('hb-title');
+  var title = titleEl ? titleEl.value.trim() : '';
+  if (!title) { alert('Title is required.'); return; }
+  var committed = OAD._repeatCommitFromForm(h, 'hb');
+  var patch = {
+    title: title,
+    life_area: OAD.normalizeLifeArea(document.getElementById('hb-area')?.value || h.life_area),
+    time_of_day: document.getElementById('hb-time')?.value || h.time_of_day,
+    why: document.getElementById('hb-why')?.value.trim() || '',
+    phase: document.getElementById('hb-phase')?.value || h.phase,
+    repeat: committed.repeat,
+    days_of_week: committed.days_of_week,
+    next_due: committed.next_due
+  };
+  OAD.updateHabit(id, patch);
+  if (committed.note) OAD.addEvolution(id, committed.note);
+  OAD.closeModal();
+  OAD.renderHabitPanel();
 };
 
 // ── Saved Views (Graph Views) ────────────────────────────────────────

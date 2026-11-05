@@ -225,6 +225,131 @@ def test_health_panel_opens_the_thread(page):
     _assert(result["modalHidden"], "opening the thread closes the health panel")
 
 
+def test_day_note_can_close_without_a_thread(page):
+    """After the log is saved, thanks-for-listening keeps the sentence and makes no thread."""
+    print("\ntest_day_note_can_close_without_a_thread")
+    result = page.evaluate("""() => {
+        const origThreads = OAD.DB.threads;
+        const origNotes = OAD.DB.day_notes;
+        const origDays = OAD.DB.matrix_days;
+        const origSuppress = OAD._suppressSaveDB;
+        const origPersist = OAD._DB_PERSIST;
+        const origToday = OAD.todayStr;
+        const panel = document.getElementById('detail-content');
+        const origHtml = panel ? panel.innerHTML : '';
+        OAD._suppressSaveDB = true;
+        OAD._DB_PERSIST = false;
+        OAD.todayStr = function () { return '2026-11-05'; };
+        try {
+            OAD.DB.threads = [{ uuid: 'ui-uncovered', title: 'UI Uncovered', status: 'open', evolution_log: [] }];
+            OAD.DB.matrix_days = { '2026-11-04': { asked: ['ui-uncovered'], recorded_at: '2026-11-04T12:00:00.000Z' } };
+            OAD.DB.day_notes = [];
+            OAD.DayNote.save('2026-11-04', 'Worked the short sale instead.');
+            const before = OAD.DB.threads.length;
+            const host = document.createElement('div');
+            host.id = 'day-note-test-host';
+            host.innerHTML = OAD.DayNote.barHtml();
+            document.body.appendChild(host);
+            const thanks = Array.from(host.querySelectorAll('button')).find(b => b.textContent.indexOf('No, but thanks for listening') !== -1);
+            const make = Array.from(host.querySelectorAll('button')).find(b => b.textContent.indexOf('Make this a thread') !== -1);
+            if (thanks) thanks.click();
+            const note = OAD.DayNote.noteFor('2026-11-04');
+            const barGone = OAD.DayNote.barHtml() === '';
+            host.remove();
+            return {
+                hadMake: !!make,
+                hadThanks: !!thanks,
+                threadCount: OAD.DB.threads.length,
+                before: before,
+                note: note ? note.note : '',
+                declined: !!(note && note.declined),
+                barGone: barGone
+            };
+        } finally {
+            OAD.DB.threads = origThreads;
+            OAD.DB.day_notes = origNotes;
+            OAD.DB.matrix_days = origDays;
+            OAD._suppressSaveDB = origSuppress;
+            OAD._DB_PERSIST = origPersist;
+            OAD.todayStr = origToday;
+            if (panel) panel.innerHTML = origHtml;
+            var host = document.getElementById('day-note-test-host');
+            if (host) host.remove();
+        }
+    }""")
+    _assert(result["hadMake"], "a saved log still offers a thread")
+    _assert(result["hadThanks"], "a saved log offers thanks for listening")
+    _assert_eq(result["threadCount"], result["before"], "thanks for listening creates no thread")
+    _assert_eq(result["note"], "Worked the short sale instead.", "the sentence stays")
+    _assert(result["declined"], "the offer is closed")
+    _assert(result["barGone"], "the log prompt goes away")
+
+
+def test_capacity_banner_opens_the_thread(page):
+    """A thread named in the conflicts notice opens, instead of sending him to List."""
+    print("\ntest_capacity_banner_opens_the_thread")
+    result = page.evaluate("""() => {
+        const origThreads = OAD.DB.threads;
+        const origSuppress = OAD._suppressSaveDB;
+        const origPersist = OAD._DB_PERSIST;
+        const origActive = OAD._activeId;
+        const panel = document.getElementById('detail-content');
+        const list = document.getElementById('thread-list');
+        const origHtml = panel ? panel.innerHTML : '';
+        const origList = list ? list.innerHTML : '';
+        OAD._suppressSaveDB = true;
+        OAD._DB_PERSIST = false;
+        try {
+            const lost = OAD.makeThread({
+                id: 9101,
+                uuid: 'ui-lost-day',
+                title: 'UI Lost Day',
+                status: 'open',
+                day_impact: 'full',
+                next_action_date: '2026-11-06'
+            });
+            const late = OAD.makeThread({
+                id: 9102,
+                uuid: 'ui-late-work',
+                title: 'UI Late Work',
+                status: 'open',
+                deadline: '2026-11-08',
+                next_action_date: '2026-11-08'
+            });
+            OAD.DB.threads = [lost, late];
+            const html = OAD.Capacity.bannerHtml(OAD.DB.threads, '2026-11-05');
+            const host = document.createElement('div');
+            host.id = 'capacity-test-host';
+            host.innerHTML = html;
+            document.body.appendChild(host);
+            const lateBtn = host.querySelector('button.capacity-thread[onclick*="ui-late-work"]');
+            const lostBtn = host.querySelector('button.capacity-thread[onclick*="ui-lost-day"]');
+            if (lateBtn) lateBtn.click();
+            const opened = OAD.getThread(OAD._activeId);
+            host.remove();
+            return {
+                hasBanner: html.indexOf('capacity-banner') !== -1,
+                hasLate: !!lateBtn,
+                hasLost: !!lostBtn,
+                openedTitle: opened ? opened.title : null
+            };
+        } finally {
+            OAD.DB.threads = origThreads;
+            OAD._suppressSaveDB = origSuppress;
+            OAD._DB_PERSIST = origPersist;
+            OAD._activeId = origActive;
+            if (panel) panel.innerHTML = origHtml;
+            if (list) list.innerHTML = origList;
+            var host = document.getElementById('capacity-test-host');
+            if (host) host.remove();
+        }
+    }""")
+    _assert(result["hasBanner"], "the notice renders")
+    _assert(result["hasLate"], "the late thread is a control")
+    _assert(result["hasLost"], "the lost day is a control")
+    _assert_eq(result["openedTitle"], "UI Late Work", "the notice opens that thread")
+
+
 def test_ai_provider_dropdown(page):
     """Settings selects one provider, then shows that provider's key. The day box stays quiet."""
     print("\ntest_ai_provider_dropdown")
@@ -349,38 +474,31 @@ def test_daily_work_surface(page):
 
 def test_cadence_recurrence_edit_round_trip(page):
     """
-    Edit an existing cadence via the UI:
-      - change recurrence to weekly-days
+    Edit an existing cadence via the shared repeat panel:
+      - set the unit to weeks
       - select Mon, Wed, Fri
       - save
-    Assert the cadence's recurrence, days_of_week, and formatRecurrence label
-    are all correct in OAD.DB.
+    Assert the repeat rule, days, and label.
     """
     print("\ntest_cadence_recurrence_edit_round_trip")
     result = page.evaluate("""() => {
-        // Self-sufficient (creates its own cadence), matching the sibling
-        // test_mark_cadence_done_advances_next_due — cadences are Threads now
-        // (ARCHITECTURE_RULES.md Rule 1), and OAD.DB.threads is intentionally reset after the
-        // unit-test suite runs (so unit-test debris can't leak into the real rendered page), so
-        // this can no longer rely on a leftover cadence fixture surviving that reset the way the
-        // old, separate OAD.DB.cadences array incidentally let it.
         const c = OAD.addCadence(OAD.makeCadence({
             title: '__ui_test_recurrence_edit__',
             recurrence: 'monthly-1st',
             days_of_week: []
         }));
-        const before = { recurrence: c.recurrence, days_of_week: (c.days_of_week || []).slice() };
 
         OAD.openEditCadenceModal(c.id);
 
-        const select = document.getElementById('cd-recurrence');
+        const unit = document.getElementById('cd-unit');
         const boxes = document.querySelectorAll('.cd-dow');
-        if (!select) return { error: 'no cd-recurrence select in modal' };
-        if (boxes.length !== 7) return { error: `expected 7 dow checkboxes, got ${boxes.length}` };
+        if (!unit) return { error: 'no cd-unit select in modal' };
+        if (document.getElementById('cd-recurrence')) return { error: 'the old recurrence token select is still in the modal' };
+        if (boxes.length !== 7) return { error: 'expected 7 dow checkboxes, got ' + boxes.length };
 
-        // Uncheck all, then select Mon (1), Wed (3), Fri (5)
+        unit.value = 'week';
+        OAD.Repeat.syncFields('cd');
         boxes.forEach(b => { b.checked = false; });
-        select.value = 'weekly-days';
         boxes[1].checked = true;
         boxes[3].checked = true;
         boxes[5].checked = true;
@@ -389,27 +507,25 @@ def test_cadence_recurrence_edit_round_trip(page):
         OAD.closeModal();
 
         const after = OAD.getCadence(c.id);
-        // Snapshot primitives before cleanup — getCadence returns a live reference.
-        const afterRecurrence = after.recurrence;
-        const afterDays = after.days_of_week.slice();
+        const unitAfter = after.repeat && after.repeat.unit;
+        const afterDays = (after.days_of_week || []).slice();
         const displayLabel = OAD.formatRecurrence(after);
 
-        // Delete the temporary cadence so the test is non-destructive (own fixture, own cleanup).
         OAD.deleteCadence(c.id);
 
-        return { afterRecurrence, afterDays, displayLabel };
+        return { unitAfter, afterDays, displayLabel };
     }""")
 
     if "error" in (result or {}):
         _assert(False, f"setup: {result['error']}")
         return
 
-    _assert_eq(result["afterRecurrence"], "weekly-days",
-               "recurrence updated to weekly-days")
+    _assert_eq(result["unitAfter"], "week",
+               "repeat unit updated to week")
     _assert_eq(result["afterDays"], [1, 3, 5],
                "days_of_week saved as [Mon, Wed, Fri]")
-    _assert_eq(result["displayLabel"], "weekly-days (Mon, Wed, Fri)",
-               "formatRecurrence label correct")
+    _assert_eq(result["displayLabel"], "Every Mon, Wed, Fri",
+               "repeat label correct")
 
 
 def test_mark_cadence_done_advances_next_due(page):
@@ -450,6 +566,182 @@ def test_mark_cadence_done_advances_next_due(page):
             f"next_due ({result['nextDue']}) is after last_completed ({result['lastCompleted']})")
     _assert_eq(result["nextDueDay"], 3,
                "next_due lands on a Wednesday (days_of_week: [3])")
+
+
+def test_connection_picker_scrolls(page):
+    """Add Connection lists threads in a tall, scrollable box with the full title visible."""
+    print("\ntest_connection_picker_scrolls")
+    seeded = page.evaluate("""() => {
+        var host = OAD.addThread(OAD.makeThread({ title: 'Connection host', status: 'open', life_area: 'Housing' }));
+        var ids = [host.id];
+        for (var i = 0; i < 40; i++) {
+            var t = OAD.addThread(OAD.makeThread({
+                title: 'Picker option ' + i + ' with a long title that must stay readable while cleaning data',
+                status: i % 2 === 0 ? 'open' : 'dormant',
+                life_area: 'Housing'
+            }));
+            ids.push(t.id);
+        }
+        OAD.openConnectionModal(host.id);
+        return { hostId: host.id, ids: ids };
+    }""")
+    page.wait_for_selector("#f-edge-results .autocomplete-item")
+    measured = page.evaluate("""() => {
+        var box = document.querySelector('#modal-overlay .modal');
+        var results = document.getElementById('f-edge-results');
+        var title = results.querySelector('.item-title');
+        var addBtn = document.querySelector('#modal-overlay .modal-footer button:last-child');
+        var addRect = addBtn.getBoundingClientRect();
+        var style = getComputedStyle(results);
+        var titleStyle = getComputedStyle(title);
+        return {
+            hasClass: box.classList.contains('modal-connection'),
+            position: style.position,
+            clientHeight: results.clientHeight,
+            scrollHeight: results.scrollHeight,
+            whiteSpace: titleStyle.whiteSpace,
+            addVisible: addRect.top >= 0 && addRect.bottom <= window.innerHeight,
+            count: document.getElementById('f-edge-count').textContent
+        };
+    }""")
+    _assert(measured["hasClass"], "connection modal keeps the list in the dialog")
+    _assert_eq(measured["position"], "static", "results list is in normal flow, not a floating dropdown")
+    _assert(measured["clientHeight"] >= 240, f"results box is at least 240px tall (got {measured['clientHeight']})")
+    _assert(measured["scrollHeight"] > measured["clientHeight"], f"results list scrolls (scroll {measured['scrollHeight']} > box {measured['clientHeight']})")
+    _assert_eq(measured["whiteSpace"], "normal", "option titles wrap")
+    _assert(measured["addVisible"], "Add stays on screen while the list scrolls")
+    _assert("of" not in measured["count"] and measured["count"].endswith("threads"), f"unfiltered count names the whole list (got {measured['count']!r})")
+
+    picked = page.evaluate("""() => {
+        var results = document.getElementById('f-edge-results');
+        results.scrollTop = results.scrollHeight;
+        var moved = results.scrollTop > 0;
+        var items = results.querySelectorAll('.autocomplete-item');
+        var last = items[items.length - 1];
+        var title = last.getAttribute('data-title');
+        last.click();
+        return {
+            moved: moved,
+            uuid: document.getElementById('f-edge-uuid').value,
+            display: getComputedStyle(results).display,
+            selected: !!results.querySelector('.autocomplete-item.selected'),
+            title: title
+        };
+    }""")
+    _assert(picked["moved"], "the list can be scrolled to the last option")
+    _assert(bool(picked["uuid"]), "clicking a row selects that thread")
+    _assert_eq(picked["display"], "flex", "the list stays open after a selection")
+    _assert(picked["selected"], "the selected row stays marked")
+
+    page.evaluate("""(ids) => {
+        OAD.closeModal();
+        ids.forEach(function (id) { OAD.deleteThread(id); });
+    }""", seeded["ids"])
+
+
+def test_parent_field_makes_a_bollard(page):
+    """The thread form can place a task under a parent, and the parent lists it."""
+    print("\ntest_parent_field_makes_a_bollard")
+    seeded = page.evaluate("""() => {
+        var move = OAD.addThread(OAD.makeThread({
+            title: 'May 2027 move',
+            status: 'dormant',
+            life_area: 'Housing',
+            dormant_trigger: 'Move in May 2027'
+        }));
+        var task = OAD.addThread(OAD.makeThread({
+            title: 'Book the truck',
+            status: 'open',
+            life_area: 'Housing'
+        }));
+        var ids = [move.id, task.id];
+        for (var i = 0; i < 24; i++) {
+            var extra = OAD.addThread(OAD.makeThread({
+                title: 'Parent option ' + i + ' with a long title that must stay readable',
+                status: 'open',
+                life_area: 'Housing'
+            }));
+            ids.push(extra.id);
+        }
+        OAD.openEditModal(task.id);
+        return { moveId: move.id, taskId: task.id, moveUuid: move.uuid, taskUuid: task.uuid, ids: ids };
+    }""")
+    page.wait_for_selector("#f-parent-results .autocomplete-item")
+    measured = page.evaluate("""() => {
+        var results = document.getElementById('f-parent-results');
+        var title = results.querySelector('.item-title');
+        var style = getComputedStyle(results);
+        return {
+            position: style.position,
+            clientHeight: results.clientHeight,
+            scrollHeight: results.scrollHeight,
+            whiteSpace: getComputedStyle(title).whiteSpace,
+            hasNone: !!results.querySelector('.autocomplete-item[data-uuid=""]')
+        };
+    }""")
+    _assert_eq(measured["position"], "static", "parent list is in the form, not a floating menu")
+    _assert(measured["clientHeight"] >= 160, f"parent list is tall enough to scroll (got {measured['clientHeight']})")
+    _assert(measured["scrollHeight"] > measured["clientHeight"], f"parent list scrolls (scroll {measured['scrollHeight']} > box {measured['clientHeight']})")
+    _assert_eq(measured["whiteSpace"], "normal", "parent option titles wrap")
+    _assert(measured["hasNone"], "the list offers No parent")
+
+    saved = page.evaluate("""(moveUuid) => {
+        var results = document.getElementById('f-parent-results');
+        results.scrollTop = results.scrollHeight;
+        var moved = results.scrollTop > 0;
+        var row = results.querySelector('.autocomplete-item[data-uuid="' + moveUuid + '"]');
+        if (row) row.click();
+        return { moved: moved, picked: document.getElementById('f-parent-uuid').value };
+    }""", seeded["moveUuid"])
+    _assert(saved["moved"], "the parent list can be scrolled")
+    _assert_eq(saved["picked"], seeded["moveUuid"], "clicking a row selects that parent")
+
+    applied = page.evaluate("""(ids) => {
+        OAD._saveEditThread(ids.taskId);
+        var task = OAD.getThread(ids.taskId);
+        var move = OAD.getThread(ids.moveId);
+        var edge = (move.connections || []).some(function (c) {
+            return c.to_uuid === task.uuid && c.rule === 'ADE-002' && c.edge_type === 'enables';
+        });
+        var note = (task.evolution_log || []).some(function (e) { return e.note.indexOf('Parent → May 2027 move') !== -1; });
+        OAD.renderDetail(task.id);
+        var under = document.getElementById('thread-parent-link');
+        OAD.renderDetail(move.id);
+        var kids = document.getElementById('thread-children');
+        OAD.openEditModal(move.id);
+        var childOffered = !!document.querySelector('#f-parent-results .autocomplete-item[data-uuid="' + task.uuid + '"]');
+        OAD.closeModal();
+        return {
+            parent: task.parent_uuid,
+            edge: edge,
+            note: note,
+            under: under ? under.textContent : '',
+            kids: kids ? kids.textContent : '',
+            childOffered: childOffered
+        };
+    }""", {"taskId": seeded["taskId"], "moveId": seeded["moveId"]})
+    _assert_eq(applied["parent"], seeded["moveUuid"], "saving the form stores the parent")
+    _assert(applied["edge"], "the parent gains the structural enables edge")
+    _assert(applied["note"], "the log records the parent")
+    _assert("May 2027 move" in applied["under"], f"the task says which thread it is under (got {applied['under']!r})")
+    _assert("Book the truck" in applied["kids"], "the parent lists the thread under it")
+    _assert(not applied["childOffered"], "the parent cannot be placed under its own child")
+
+    cleared = page.evaluate("""(taskId) => {
+        OAD.openEditModal(taskId);
+        var none = document.querySelector('#f-parent-results .autocomplete-item[data-uuid=""]');
+        if (none) none.click();
+        OAD._saveEditThread(taskId);
+        var task = OAD.getThread(taskId);
+        return { parent: task.parent_uuid, cleared: (task.evolution_log || []).some(function (e) { return e.note.indexOf('Parent cleared') !== -1; }) };
+    }""", seeded["taskId"])
+    _assert(cleared["parent"] in (None, ""), f"clearing the parent stores none (got {cleared['parent']!r})")
+    _assert(cleared["cleared"], "the log records that the parent was cleared")
+
+    page.evaluate("""(ids) => {
+        OAD.closeModal();
+        ids.forEach(function (id) { OAD.deleteThread(id); });
+    }""", seeded["ids"])
 
 
 def test_command_center_nav_present_when_demo_module_loaded(page):
@@ -530,6 +822,8 @@ def run_tests():
         test_raptor_gate(page)
         test_day_brief_box(page)
         test_health_panel_opens_the_thread(page)
+        test_day_note_can_close_without_a_thread(page)
+        test_capacity_banner_opens_the_thread(page)
         test_ai_provider_dropdown(page)
         test_daily_work_surface(page)
 
@@ -539,6 +833,8 @@ def run_tests():
         # 3. Run UI tests
         test_cadence_recurrence_edit_round_trip(page)
         test_mark_cadence_done_advances_next_due(page)
+        test_connection_picker_scrolls(page)
+        test_parent_field_makes_a_bollard(page)
         test_command_center_nav_present_when_demo_module_loaded(page)
 
         browser.close()

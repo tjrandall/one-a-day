@@ -1418,6 +1418,57 @@ OAD.test('updateThread: does not touch status when parent_uuid changes on a non-
   OAD._assertEqual(OAD.getThread(t.id).status, 'waiting', 'a non-inbox status must be left alone');
 });
 
+OAD.test('parentChoices: hides self, descendants, and closed threads', function () {
+  var saved = OAD.DB.threads;
+  var parent = OAD.makeThread({ title: 'Move', status: 'dormant', uuid: 'pc-move' });
+  var child = OAD.makeThread({ title: 'Pack', status: 'open', uuid: 'pc-pack', parent_uuid: 'pc-move' });
+  var grand = OAD.makeThread({ title: 'Boxes', status: 'open', uuid: 'pc-boxes', parent_uuid: 'pc-pack' });
+  var other = OAD.makeThread({ title: 'Dentist', status: 'open', uuid: 'pc-other' });
+  var closed = OAD.makeThread({ title: 'Old', status: 'closed', uuid: 'pc-closed' });
+  OAD.DB.threads = [parent, child, grand, other, closed];
+  try {
+    var forChild = OAD.parentChoices(child).map(function (t) { return t.uuid; });
+    OAD._assert(forChild.indexOf('pc-pack') === -1, 'a thread is not its own parent');
+    OAD._assert(forChild.indexOf('pc-boxes') === -1, 'a descendant is not a parent');
+    OAD._assert(forChild.indexOf('pc-closed') === -1, 'a closed thread is not a parent');
+    OAD._assert(forChild.indexOf('pc-move') !== -1, 'a dormant thread can be the parent');
+    OAD._assert(forChild.indexOf('pc-other') !== -1, 'another open thread can be the parent');
+    var forParent = OAD.parentChoices(parent).map(function (t) { return t.uuid; });
+    OAD._assert(forParent.indexOf('pc-pack') === -1, 'a bollard cannot sit under its child');
+    OAD._assert(forParent.indexOf('pc-boxes') === -1, 'a bollard cannot sit under a grandchild');
+    OAD._assert(forParent.indexOf('pc-other') !== -1, 'a bollard can sit under some other thread');
+  } finally {
+    OAD.DB.threads = saved;
+  }
+});
+
+OAD.test('syncParentEdge: the structural enables edge follows the parent', function () {
+  var oldP = OAD.addThread(OAD.makeThread({ title: 'Old parent', status: 'open' }));
+  var newP = OAD.addThread(OAD.makeThread({ title: 'New parent', status: 'open' }));
+  var child = OAD.addThread(OAD.makeThread({ title: 'Task under a parent', status: 'open', parent_uuid: oldP.uuid }));
+  OAD._adeAddEdge(oldP, child, 'enables', 'ADE-002', 1.0);
+  oldP.connections.push({
+    uuid: 'keep-me', to_uuid: child.uuid, to_label: child.title, edge_type: 'blocks',
+    auto_generated: false, rule: null, confirmed_by_user: true, confidence: 1
+  });
+  OAD.updateThread(child.id, { parent_uuid: newP.uuid });
+  var stillBlocks = oldP.connections.some(function (c) { return c.uuid === 'keep-me'; });
+  var oldStructural = oldP.connections.some(function (c) { return c.to_uuid === child.uuid && c.rule === 'ADE-002'; });
+  var newStructural = (newP.connections || []).some(function (c) {
+    return c.to_uuid === child.uuid && c.rule === 'ADE-002' && c.edge_type === 'enables';
+  });
+  OAD._assert(stillBlocks, 'a confirmed connection on the old parent stays');
+  OAD._assert(!oldStructural, 'the old parent loses the structural enables edge');
+  OAD._assert(newStructural, 'the new parent gains the structural enables edge');
+  OAD.updateThread(child.id, { parent_uuid: null });
+  var afterClear = (newP.connections || []).some(function (c) { return c.to_uuid === child.uuid && c.rule === 'ADE-002'; });
+  OAD._assert(!afterClear, 'clearing the parent removes the structural edge');
+  OAD._assertEqual(OAD.getThread(child.id).parent_uuid, null, 'the thread is top level again');
+  OAD.deleteThread(child.id);
+  OAD.deleteThread(oldP.id);
+  OAD.deleteThread(newP.id);
+});
+
 OAD.test('_normalizeDB: self-heals a legacy thread that has a parent_uuid but is still status:inbox (real case: Abigail-Nelnet / Abby-Mainstay docs)', function () {
   const origThreads = OAD.DB.threads;
   try {
@@ -2330,17 +2381,18 @@ OAD.test('makeCadence: defaults days_of_week to an empty array', function () {
   OAD._assert(Array.isArray(c.days_of_week) && c.days_of_week.length === 0, 'days_of_week should default to []');
 });
 
-OAD.test('markCadenceDone: passes cadence.days_of_week through to nextCadenceDue', function () {
+OAD.test('markCadenceDone: advances a weekday rule to the next Tuesday or Thursday', function () {
   const c = OAD.addCadence(OAD.makeCadence({ title: 'Wiring test cadence', recurrence: 'weekly-days', days_of_week: [2, 4] }));
-  const origNextDue = OAD.nextCadenceDue;
-  let capturedDays = null;
-  OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
-    capturedDays = daysOfWeek;
-    return origNextDue(recurrence, fromDate, daysOfWeek);
-  };
+  const beforeAction = c.next_action_date;
+  const beforeDeadline = c.deadline;
   OAD.markCadenceDone(c.id);
-  OAD.nextCadenceDue = origNextDue;
-  OAD._assertEqual(JSON.stringify(capturedDays), JSON.stringify([2, 4]), 'days_of_week should be passed through to nextCadenceDue');
+  const after = OAD.getCadence(c.id);
+  const day = new Date(after.next_due + 'T00:00:00').getDay();
+  OAD._assert(!!after.next_due, 'next_due is set');
+  OAD._assert(after.next_due > after.last_completed, 'next_due is strictly after last_completed');
+  OAD._assert(day === 2 || day === 4, 'next_due lands on Tuesday or Thursday');
+  OAD._assertEqual(after.next_action_date, beforeAction, 'mark done does not copy next_due onto next_action_date');
+  OAD._assertEqual(after.deadline, beforeDeadline, 'mark done does not copy next_due onto deadline');
   OAD.deleteCadence(c.id);
 });
 
@@ -2358,6 +2410,7 @@ OAD.test('_normalizeDB: converts legacy OAD.DB.cadences array entries into real 
     OAD._assert(!!migrated, 'the legacy cadence must now exist as a real thread');
     OAD._assertEqual(migrated.thread_kind, 'cadence', 'migrated cadence must carry the cadence discriminator');
     OAD._assertEqual(migrated.next_due, '2026-08-01', 'cadence-specific field values must survive the migration');
+    OAD._assert(migrated.repeat && migrated.repeat.unit === 'week' && migrated.repeat.anchor === 'completed', 'legacy weekly cadence maps onto a completed-anchor week rule without moving next_due');
     OAD._assert(!!migrated.uuid && typeof migrated.uuid === 'string', 'migrated cadence must have a real uuid — cadences never had one before this migration (Rule 3)');
     OAD._assertEqual(typeof migrated.owner_id, 'string', 'migrated cadence must have an owner_id too (Rule 3)');
   } finally {
@@ -2454,6 +2507,208 @@ OAD.test('OAD.Due.isCadenceDueOn: excludes an already-completed-today cadence (r
   const dueLater = OAD.makeCadence({ title: 'Due later this week', recurrence: 'weekly', next_due: futureStr, last_completed: '1970-01-01' });
   OAD._assert(OAD.Due.isCadenceDueOn(dueLater, futureStr), 'a cadence genuinely due on a future day must count for that day');
   OAD._assert(!OAD.Due.isCadenceDueOn(dueLater, todayStr), 'that same cadence must not count for today, only its actual due date');
+});
+
+// ── Tests: one repeat rule for habits and cadences ────────────────────
+
+OAD.test('Repeat.fromLegacy: maps habit frequency and cadence recurrence once', function () {
+  var daily = { thread_kind: 'habit', frequency: 'daily' };
+  OAD.Repeat.ensure(daily);
+  OAD._assertEqual(daily.repeat.every, 1, 'daily is every 1');
+  OAD._assertEqual(daily.repeat.unit, 'day', 'daily is a day rule');
+  OAD._assertEqual(daily.repeat.anchor, 'schedule', 'daily is anchored to the schedule');
+
+  var other = { thread_kind: 'habit', frequency: 'every-other-day', next_due: '2026-12-01' };
+  OAD.Repeat.ensure(other);
+  OAD._assertEqual(other.repeat.every, 2, 'every-other-day is every 2 days');
+  OAD._assertEqual(other.repeat.unit, 'day', 'every-other-day stays a day rule');
+  OAD._assertEqual(other.next_due, '2026-12-01', 'an existing next_due is kept');
+
+  var weekly = { thread_kind: 'habit', frequency: 'weekly' };
+  OAD.Repeat.ensure(weekly);
+  OAD._assertEqual(weekly.repeat.unit, 'week', 'habit weekly is a week rule');
+  OAD._assertEqual(weekly.repeat.days_of_week.length, 0, 'habit weekly has no weekdays until they are picked');
+  OAD._assertEqual(weekly.repeat.anchor, 'schedule', 'habit weekly is anchored to the schedule');
+
+  var custom = { thread_kind: 'habit', frequency: 'custom', next_due: '2026-08-01' };
+  OAD.Repeat.ensure(custom);
+  OAD._assertEqual(custom.repeat, null, 'custom stays unset');
+  OAD._assertEqual(custom.next_due, '2026-08-01', 'custom keeps a next_due that was already stored');
+
+  var cadenceWeek = { thread_kind: 'cadence', recurrence: 'weekly', next_due: '2026-08-01' };
+  OAD.Repeat.ensure(cadenceWeek);
+  OAD._assertEqual(cadenceWeek.repeat.anchor, 'completed', 'cadence weekly is anchored to the completion date');
+  OAD._assertEqual(cadenceWeek.next_due, '2026-08-01', 'ensure does not move a stored next_due');
+
+  var cadenceDays = { thread_kind: 'cadence', recurrence: 'weekly-days', days_of_week: [1, 3, 5] };
+  OAD.Repeat.ensure(cadenceDays);
+  OAD._assertEqual(JSON.stringify(cadenceDays.repeat.days_of_week), JSON.stringify([1, 3, 5]), 'weekly-days keeps its weekdays');
+  OAD._assertEqual(cadenceDays.repeat.anchor, 'schedule', 'weekly-days is anchored to the schedule');
+
+  var cadenceLast = { thread_kind: 'cadence', recurrence: 'monthly-last' };
+  OAD.Repeat.ensure(cadenceLast);
+  OAD._assertEqual(cadenceLast.repeat.unit, 'month', 'monthly-last is a month rule');
+  OAD._assertEqual(cadenceLast.repeat.month_day, 'last', 'monthly-last keeps the last day');
+});
+
+OAD.test('Repeat: next occurrence, catch-up, and an end date', function () {
+  var wed = { every: 1, unit: 'week', days_of_week: [3], anchor: 'schedule' };
+  OAD._assertEqual(OAD.Repeat.nextAfter(wed, '2024-01-01'), '2024-01-03', 'Monday plus Wednesday is that Wednesday');
+  OAD._assertEqual(OAD.Repeat.nextAfter(wed, '2024-01-03'), '2024-01-10', 'the Wednesday after that is the 10th');
+  OAD._assertEqual(OAD.Repeat.nextAfter({ every: 2, unit: 'day', anchor: 'schedule' }, '2024-01-01'), '2024-01-03', 'every 2 days from Monday is Wednesday');
+  OAD._assertEqual(
+    OAD.Repeat.advanceOnDone({ every: 2, unit: 'day', anchor: 'schedule' }, '2026-11-02', '2026-11-05'),
+    '2026-11-06',
+    'one completion clears the missed slots through today'
+  );
+  OAD._assertEqual(
+    OAD.Repeat.nextAfter({ every: 1, unit: 'month', month_day: 'last', anchor: 'schedule' }, '2026-01-31'),
+    '2026-02-28',
+    'the last day of the next month clamps February'
+  );
+  OAD._assertEqual(
+    OAD.Repeat.advanceOnDone({ every: 1, unit: 'day', anchor: 'schedule', ends: '2026-11-05' }, '2026-11-05', '2026-11-05'),
+    null,
+    'a series that ended does not schedule another day'
+  );
+  var biweek = { every: 2, unit: 'week', days_of_week: [1, 4], anchor: 'schedule' };
+  OAD._assertEqual(OAD.Repeat.nextAfter(biweek, '2024-01-01'), '2024-01-04', 'every 2 weeks on Mon and Thu stays in the same week');
+  OAD._assertEqual(OAD.Repeat.nextAfter(biweek, '2024-01-04'), '2024-01-15', 'the next on-week is two weeks later');
+});
+
+OAD.test('Repeat.label: chip text for the common rules', function () {
+  OAD._assertEqual(OAD.Repeat.label(null), 'Set a repeat', 'an empty rule asks to be set');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'day', anchor: 'schedule' }), 'Every day', 'every 1 day');
+  OAD._assertEqual(OAD.Repeat.label({ every: 2, unit: 'day', anchor: 'schedule' }), 'Every 2 days', 'every 2 days');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'week', days_of_week: [1, 2, 3, 4, 5], anchor: 'schedule' }), 'Every weekday', 'weekdays');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'week', days_of_week: [1, 3, 5], anchor: 'schedule' }), 'Every Mon, Wed, Fri', 'named weekdays');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'week', anchor: 'schedule' }), 'Every week', 'a week with no days');
+  OAD._assertEqual(OAD.Repeat.label({ every: 2, unit: 'week', days_of_week: [4], anchor: 'schedule' }), 'Every 2 weeks on Thu', 'every 2 weeks on one day');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'month', month_day: 1, anchor: 'schedule' }), 'Monthly on the 1st', 'the 1st');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'month', month_day: 15, anchor: 'schedule' }), 'Monthly on the 15th', 'the 15th');
+  OAD._assertEqual(OAD.Repeat.label({ every: 1, unit: 'month', month_day: 'last', anchor: 'schedule' }), 'Monthly on the last day', 'the last day');
+});
+
+OAD.test('checkInHabit: a Mon/Wed/Fri streak follows the schedule, not yesterday', function () {
+  var orig = OAD.todayStr;
+  OAD.todayStr = function () { return '2026-11-04'; };
+  var h;
+  try {
+    h = OAD.addHabit(OAD.makeHabit({
+      title: 'MWF streak',
+      repeat: { every: 1, unit: 'week', days_of_week: [1, 3, 5], anchor: 'schedule' },
+      current_streak: 2,
+      last_checked_in: '2026-11-02',
+      last_check_in_done: true,
+      next_due: '2026-11-04'
+    }));
+    OAD.checkInHabit(h.id, true, '');
+    OAD._assertEqual(OAD.getHabit(h.id).current_streak, 3, 'Wednesday continues the Monday check-in');
+    OAD._assertEqual(OAD.getHabit(h.id).next_due, '2026-11-06', 'the next slot is Friday');
+  } finally {
+    OAD.todayStr = orig;
+    if (h) OAD.deleteThread(h.id);
+  }
+});
+
+OAD.test('checkInHabit: schedule No moves next_due, completed No does not', function () {
+  var orig = OAD.todayStr;
+  OAD.todayStr = function () { return '2026-11-05'; };
+  var sched, comp;
+  try {
+    sched = OAD.addHabit(OAD.makeHabit({
+      title: 'Schedule no',
+      repeat: { every: 1, unit: 'day', anchor: 'schedule' },
+      next_due: '2026-11-05'
+    }));
+    OAD.checkInHabit(sched.id, false, '');
+    OAD._assertEqual(OAD.getHabit(sched.id).next_due, '2026-11-06', 'a schedule No consumes the slot');
+
+    comp = OAD.addHabit(OAD.makeHabit({
+      title: 'Completed no',
+      repeat: { every: 1, unit: 'day', anchor: 'completed' },
+      next_due: '2026-11-05'
+    }));
+    OAD.checkInHabit(comp.id, false, '');
+    OAD._assertEqual(OAD.getHabit(comp.id).next_due, '2026-11-05', 'a completed No leaves the slot');
+  } finally {
+    OAD.todayStr = orig;
+    if (sched) OAD.deleteThread(sched.id);
+    if (comp) OAD.deleteThread(comp.id);
+  }
+});
+
+OAD.test('checkInHabit: Yes does not write next_action_date or deadline', function () {
+  var h = OAD.addHabit(OAD.makeHabit({
+    title: 'Dates stay put',
+    next_action_date: '2026-12-01',
+    deadline: '2026-12-15'
+  }));
+  OAD.checkInHabit(h.id, true, '');
+  var after = OAD.getHabit(h.id);
+  OAD._assertEqual(after.next_action_date, '2026-12-01', 'next_action_date stays');
+  OAD._assertEqual(after.deadline, '2026-12-15', 'deadline stays');
+  OAD.deleteThread(h.id);
+});
+
+OAD.test('Repeat.commit: a rule edit keeps the streak and the work dates', function () {
+  var h = OAD.addHabit(OAD.makeHabit({
+    title: 'Keep the streak',
+    current_streak: 4,
+    next_action_date: '2026-12-01',
+    deadline: '2026-12-15',
+    repeat: { every: 1, unit: 'day', anchor: 'schedule' },
+    next_due: '2026-11-05'
+  }));
+  var opened = { every: 1, unit: 'day', anchor: 'schedule' };
+  var raw = { every: 1, unit: 'week', days_of_week: [1, 3, 5], anchor: 'schedule' };
+  var committed = OAD.Repeat.commit(h, raw, h.next_due, false, opened);
+  OAD.updateThread(h.id, {
+    repeat: committed.repeat,
+    days_of_week: committed.days_of_week,
+    next_due: committed.next_due
+  });
+  if (committed.note) OAD.addEvolution(h.id, committed.note);
+  var after = OAD.getHabit(h.id);
+  OAD._assertEqual(after.current_streak, 4, 'the streak is not reset');
+  OAD._assertEqual(after.next_action_date, '2026-12-01', 'next_action_date is not written');
+  OAD._assertEqual(after.deadline, '2026-12-15', 'deadline is not written');
+  OAD._assert(after.evolution_log.some(function (e) { return e.note === 'Repeat set to Every Mon, Wed, Fri.'; }), 'the evolution line names the new rule');
+  var same = OAD.Repeat.commit(after, raw, after.next_due, false, raw);
+  OAD._assertEqual(same.next_due, after.next_due, 'saving the same rule does not recompute next_due');
+  OAD._assertEqual(same.note, '', 'an unchanged rule does not log again');
+  OAD.deleteThread(h.id);
+});
+
+OAD.test('Due.habitBuckets: a future habit is hidden and a missed habit is shown', function () {
+  var future = OAD.makeHabit({
+    title: 'Later',
+    id: 900001,
+    repeat: { every: 1, unit: 'week', days_of_week: [1, 3, 5], anchor: 'schedule' },
+    next_due: '2099-01-01',
+    phase: 'active'
+  });
+  var missed = OAD.makeHabit({
+    title: 'Missed one',
+    id: 900002,
+    repeat: { every: 1, unit: 'day', anchor: 'schedule' },
+    next_due: '2020-01-01',
+    phase: 'active'
+  });
+  var buckets = OAD.Due.habitBuckets([future, missed], '2026-11-05', '2026-11-12');
+  OAD._assert(buckets.today.indexOf(future) === -1 && buckets.overdue.indexOf(future) === -1, 'a future habit is not due today or overdue');
+  OAD._assert(buckets.overdue.indexOf(missed) !== -1, 'a missed habit is overdue');
+  OAD._assert(OAD.Due.habitOnPanel(missed, '2026-11-05'), 'a missed habit stays on the habits screen');
+  var answered = OAD.makeHabit({
+    title: 'Monday only',
+    repeat: { every: 1, unit: 'week', days_of_week: [1], anchor: 'schedule' },
+    next_due: '2026-11-09',
+    last_checked_in: '2026-11-02',
+    phase: 'active'
+  });
+  OAD._assert(!OAD.Due.habitOnPanel(answered, '2026-11-03'), 'a Monday habit answered Monday is absent on Tuesday');
+  answered.last_checked_in = '2026-11-03';
+  OAD._assert(OAD.Due.habitOnPanel(answered, '2026-11-03'), 'a habit checked in today stays visible');
 });
 
 // ── Tests: Cycle and Critical Path ─────────────────────────────────────
@@ -6799,6 +7054,25 @@ OAD.test('DayNote: a day prompts only when the Matrix ask has no user log, and p
   OAD._assertEqual(OAD.DB.threads.length, 2, 'skip does not create a thread');
 
   OAD.DB.day_notes = [];
+  OAD.DayNote.save('2026-11-04', 'Called the recruiter instead.');
+  var savedToday = OAD.todayStr;
+  try {
+    OAD.todayStr = function () { return '2026-11-05'; };
+    var bar = OAD.DayNote.barHtml();
+    OAD._assert(bar.indexOf('Make this a thread') !== -1, 'a saved log can still become a thread');
+    OAD._assert(bar.indexOf('No, but thanks for listening') !== -1, 'a saved log can also just be heard');
+    var beforeDecline = OAD.DB.threads.length;
+    OAD.DayNote.decline('2026-11-04');
+    OAD._assertEqual(OAD.DB.threads.length, beforeDecline, 'closing the log does not create a thread');
+    OAD._assertEqual(OAD.DayNote.noteFor('2026-11-04').note, 'Called the recruiter instead.', 'the sentence stays');
+    OAD._assertEqual(OAD.DayNote.noteFor('2026-11-04').declined, true, 'the offer is closed');
+    OAD._assertEqual(OAD.DayNote.barHtml(), '', 'the log prompt goes away');
+    OAD._assertEqual(OAD.DayNote.promote('2026-11-04'), null, 'a closed log does not become a thread later');
+  } finally {
+    OAD.todayStr = savedToday;
+  }
+
+  OAD.DB.day_notes = [];
   var row = OAD.DayNote.save('2026-11-04', 'Called the recruiter instead.');
   OAD._assert(row && row.note === 'Called the recruiter instead.', 'the sentence is stored on the day');
   OAD._assertEqual(OAD.DayNote.pending('2026-11-05'), null, 'a saved sentence clears the prompt');
@@ -7368,9 +7642,10 @@ OAD.test('Capacity: a lost Friday and Saturday pull Sunday work back to Wednesda
   var html = OAD.Capacity.bannerHtml([dentist, maine, cloud, cornell, early], '2026-11-04');
   OAD._assert(html.indexOf('Hey T.J.') !== -1, 'addresses T.J.');
   OAD._assert(html.indexOf('Maine trip to move Cydney') !== -1, 'names the Saturday loss');
-  OAD._assert(html.indexOf('Dentist appointment') !== -1, 'names the Friday cut');
+  OAD._assert(html.indexOf('>Dentist appointment</button>') !== -1, 'the Friday cut opens from the notice');
   OAD._assert(html.indexOf('Wednesday 11/4') !== -1, 'tells him to load Wednesday');
-  OAD._assert(html.indexOf('<li>CCFAM Wk09 Milestone 4</li>') !== -1, 'late work is a list, not a sentence');
+  OAD._assert(html.indexOf('>CCFAM Wk09 Milestone 4</button>') !== -1, 'late work is a list, not a sentence');
+  OAD._assert(html.indexOf("openThreadFromNotice('") !== -1, 'the late row opens the thread');
   OAD._assert(html.indexOf('AISYS Wk09') === -1, 'a Wednesday start is not called late');
   var quiet = OAD.Capacity.analyze([dentist, maine, early], '2026-11-04');
   OAD._assertEqual(quiet.clusters.length, 0, 'already starting Wednesday produces no cluster');
@@ -7389,12 +7664,12 @@ OAD.test('Capacity banner: lost days are named once, then each deadline is its o
   OAD._assert(html.indexOf('<h3>Due Sunday 11/8</h3>') !== -1, 'Sunday deadline is a heading');
   OAD._assert(html.indexOf('<h3>Due Tuesday 11/10</h3>') !== -1, 'Tuesday deadline is a heading');
   OAD._assert(html.indexOf('(due 2026-11-08)') === -1, 'the due date is not repeated on the row');
-  OAD._assert(html.indexOf('<li>CCFAM Wk09 Milestone 4</li>') !== -1, 'the row keeps the short title');
+  OAD._assert(html.indexOf('>CCFAM Wk09 Milestone 4</button>') !== -1, 'the row keeps the short title');
   OAD._assert(html.indexOf('Still on a lost day') !== -1, 'a task parked on Saturday is its own section');
   OAD._assert(html.indexOf('Schedule endoscopy') !== -1, 'endoscopy is listed');
   OAD._assert(html.indexOf('<p>Hey') === -1, 'the recommendation is not one paragraph');
   OAD._assert(html.indexOf('T.J..') === -1, 'the greeting does not add a second period');
-  OAD._assert(html.indexOf('Saturday 11/7:</span> Schedule endoscopy') !== -1, 'a parked task names its day');
+  OAD._assert(html.indexOf('Saturday 11/7:</span>') !== -1 && html.indexOf('>Schedule endoscopy</button>') !== -1, 'a parked task names its day and opens it');
 });
 
 OAD.test('Capacity: a normal Saturday task is not a lost day, and a habit on a lost day is not tweaked', function () {

@@ -253,6 +253,302 @@ OAD.todayStr = function () {
   return d.toISOString().slice(0, 10);
 };
 
+// One repeat rule for habits and cadences. A habit is a check-in against the
+// rule. A cadence is an obligation against the same rule. next_due is the only
+// next-occurrence field. Dates are local calendar days: arithmetic never goes
+// through toISOString, which would shift the day east of UTC.
+OAD.Repeat = (function () {
+  var YMD = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+  function parseDate(s) {
+    if (typeof s !== 'string') return null;
+    var m = YMD.exec(s);
+    if (!m) return null;
+    var y = +m[1], mo = +m[2], d = +m[3];
+    var dt = new Date(y, mo - 1, d);
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return dt;
+  }
+
+  function formatDate(dt) {
+    var y = dt.getFullYear();
+    var mo = dt.getMonth() + 1;
+    var d = dt.getDate();
+    return y + '-' + (mo < 10 ? '0' : '') + mo + '-' + (d < 10 ? '0' : '') + d;
+  }
+
+  function addDays(dt, n) {
+    var x = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+    x.setDate(x.getDate() + n);
+    return x;
+  }
+
+  function shiftMonth(dt, n) {
+    var m = dt.getMonth() + n;
+    var y = dt.getFullYear() + Math.floor(m / 12);
+    m = ((m % 12) + 12) % 12;
+    return { y: y, m: m };
+  }
+
+  function monthSlot(y, m, monthDay) {
+    if (monthDay === 'last') return new Date(y, m + 1, 0);
+    var last = new Date(y, m + 1, 0).getDate();
+    var d = monthDay > last ? last : monthDay;
+    return new Date(y, m, d);
+  }
+
+  function dayNumber(dt) {
+    return Math.round(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()) / 86400000);
+  }
+
+  function weeksBetween(a, b) {
+    var aWeek = dayNumber(a) - a.getDay();
+    var bWeek = dayNumber(b) - b.getDay();
+    return Math.round((bWeek - aWeek) / 7);
+  }
+
+  function ordinal(n) {
+    var v = n % 100;
+    if (v >= 11 && v <= 13) return n + 'th';
+    switch (n % 10) {
+      case 1: return n + 'st';
+      case 2: return n + 'nd';
+      case 3: return n + 'rd';
+      default: return n + 'th';
+    }
+  }
+
+  function dayNames() {
+    return OAD._DAY_NAMES || ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  }
+
+  function parse(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var every = parseInt(raw.every, 10);
+    if (!isFinite(every) || every < 1 || every > 365) return null;
+    if (raw.unit !== 'day' && raw.unit !== 'week' && raw.unit !== 'month') return null;
+    var days = [];
+    if (raw.unit === 'week' && Array.isArray(raw.days_of_week)) {
+      var seen = {};
+      raw.days_of_week.forEach(function (d) {
+        var n = parseInt(d, 10);
+        if (n >= 0 && n <= 6 && !seen[n]) { seen[n] = true; days.push(n); }
+      });
+      days.sort(function (a, b) { return a - b; });
+    }
+    var monthDay = 1;
+    if (raw.unit === 'month') {
+      if (raw.month_day === 'last') monthDay = 'last';
+      else {
+        var md = parseInt(raw.month_day, 10);
+        monthDay = (md >= 1 && md <= 31) ? md : 1;
+      }
+    }
+    var ends = null;
+    if (typeof raw.ends === 'string' && YMD.test(raw.ends)) ends = raw.ends;
+    return {
+      every: every,
+      unit: raw.unit,
+      days_of_week: days,
+      month_day: monthDay,
+      anchor: raw.anchor === 'completed' ? 'completed' : 'schedule',
+      ends: ends
+    };
+  }
+
+  function fromLegacy(thread) {
+    if (!thread) return null;
+    if (thread.thread_kind === 'habit') {
+      var f = thread.frequency;
+      if (f === 'custom') return null;
+      if (f === 'every-other-day') return parse({ every: 2, unit: 'day', anchor: 'schedule' });
+      if (f === 'weekly') return parse({ every: 1, unit: 'week', anchor: 'schedule' });
+      if (f === 'every workday') return parse({ every: 1, unit: 'week', days_of_week: [1, 2, 3, 4, 5], anchor: 'schedule' });
+      return parse({ every: 1, unit: 'day', anchor: 'schedule' });
+    }
+    if (thread.thread_kind === 'cadence') {
+      var r = thread.recurrence;
+      if (r === 'custom' || !r) return null;
+      if (r === 'monthly-1st') return parse({ every: 1, unit: 'month', month_day: 1, anchor: 'schedule' });
+      if (r === 'monthly-15th') return parse({ every: 1, unit: 'month', month_day: 15, anchor: 'schedule' });
+      if (r === 'monthly-last') return parse({ every: 1, unit: 'month', month_day: 'last', anchor: 'schedule' });
+      if (r === 'weekly') return parse({ every: 1, unit: 'week', anchor: 'completed' });
+      if (r === 'weekly-days') return parse({ every: 1, unit: 'week', days_of_week: thread.days_of_week || [], anchor: 'schedule' });
+      return null;
+    }
+    return null;
+  }
+
+  function honorEnd(rule, dt) {
+    if (!dt) return null;
+    var text = formatDate(dt);
+    if (rule.ends && text > rule.ends) return null;
+    return text;
+  }
+
+  function nextAfter(rule, fromStr) {
+    rule = parse(rule);
+    var from = parseDate(fromStr);
+    if (!rule || !from) return null;
+    var next = null;
+    if (rule.unit === 'day') {
+      next = addDays(from, rule.every);
+    } else if (rule.unit === 'week' && !rule.days_of_week.length) {
+      next = addDays(from, 7 * rule.every);
+    } else if (rule.unit === 'week') {
+      var limit = rule.every * 7 + 7;
+      for (var i = 1; i <= limit; i++) {
+        var candidate = addDays(from, i);
+        if (rule.days_of_week.indexOf(candidate.getDay()) === -1) continue;
+        if (weeksBetween(from, candidate) % rule.every === 0) { next = candidate; break; }
+      }
+    } else if (rule.unit === 'month') {
+      var shifted = shiftMonth(from, rule.every);
+      next = monthSlot(shifted.y, shifted.m, rule.month_day);
+    }
+    return honorEnd(rule, next);
+  }
+
+  function firstOnOrAfter(rule, dateStr) {
+    rule = parse(rule);
+    var date = parseDate(dateStr);
+    if (!rule || !date) return null;
+    var slot = null;
+    if (rule.unit === 'day' || (rule.unit === 'week' && !rule.days_of_week.length)) {
+      slot = date;
+    } else if (rule.unit === 'week') {
+      var limit = rule.every * 7 + 7;
+      for (var i = 0; i <= limit; i++) {
+        var candidate = addDays(date, i);
+        if (rule.days_of_week.indexOf(candidate.getDay()) === -1) continue;
+        if (weeksBetween(date, candidate) % rule.every === 0) { slot = candidate; break; }
+      }
+    } else if (rule.unit === 'month') {
+      var here = monthSlot(date.getFullYear(), date.getMonth(), rule.month_day);
+      if (here >= date) slot = here;
+      else {
+        var shifted = shiftMonth(date, rule.every);
+        slot = monthSlot(shifted.y, shifted.m, rule.month_day);
+      }
+    }
+    return honorEnd(rule, slot);
+  }
+
+  function previousSlot(rule, nextDueStr) {
+    rule = parse(rule);
+    var due = parseDate(nextDueStr);
+    if (!rule || !due) return null;
+    if (rule.unit === 'day') return formatDate(addDays(due, -rule.every));
+    if (rule.unit === 'week' && !rule.days_of_week.length) return formatDate(addDays(due, -7 * rule.every));
+    if (rule.unit === 'week') {
+      var limit = rule.every * 7 + 7;
+      for (var i = 1; i <= limit; i++) {
+        var candidate = addDays(due, -i);
+        if (rule.days_of_week.indexOf(candidate.getDay()) === -1) continue;
+        if (weeksBetween(candidate, due) % rule.every === 0) return formatDate(candidate);
+      }
+      return null;
+    }
+    var shifted = shiftMonth(due, -rule.every);
+    return formatDate(monthSlot(shifted.y, shifted.m, rule.month_day));
+  }
+
+  function advanceOnDone(rule, slotStr, todayStr) {
+    rule = parse(rule);
+    if (!rule || !slotStr) return null;
+    var next = nextAfter(rule, slotStr);
+    var guard = 0;
+    while (next && todayStr && next <= todayStr && guard < 400) {
+      next = nextAfter(rule, next);
+      guard++;
+    }
+    return next;
+  }
+
+  function label(rule) {
+    rule = parse(rule);
+    if (!rule) return 'Set a repeat';
+    var text;
+    if (rule.unit === 'day') {
+      text = rule.every === 1 ? 'Every day' : ('Every ' + rule.every + ' days');
+    } else if (rule.unit === 'week') {
+      var names = dayNames();
+      var days = rule.days_of_week;
+      var dayLabel = days.map(function (d) { return names[d]; }).join(', ');
+      var weekday = days.length === 5 && days.join(',') === '1,2,3,4,5';
+      if (rule.every === 1 && weekday) text = 'Every weekday';
+      else if (rule.every === 1 && days.length) text = 'Every ' + dayLabel;
+      else if (rule.every === 1) text = 'Every week';
+      else if (days.length) text = 'Every ' + rule.every + ' weeks on ' + dayLabel;
+      else text = 'Every ' + rule.every + ' weeks';
+    } else {
+      var when = rule.month_day === 'last' ? 'the last day' : ('the ' + ordinal(rule.month_day));
+      text = rule.every === 1 ? ('Monthly on ' + when) : ('Every ' + rule.every + ' months on ' + when);
+    }
+    if (rule.ends) text += ' until ' + rule.ends;
+    return text;
+  }
+
+  function changeNote(before, after) {
+    var b = parse(before);
+    var a = parse(after);
+    if (!a && !b) return '';
+    if (!!a === !!b && label(b) === label(a)) return '';
+    if (!a) return 'Repeat cleared.';
+    return 'Repeat set to ' + label(a) + '.';
+  }
+
+  // openedRaw is the rule the form showed when it opened. A title save that
+  // leaves those controls alone keeps the stored rule and the stored next_due.
+  // A typed next_due wins even when the rule also changed.
+  function commit(thread, raw, typedNextDue, dateTouched, openedRaw) {
+    var formRule = parse(raw);
+    var openedRule = parse(openedRaw);
+    var storedRule = parse(thread && thread.repeat);
+    var formChanged = JSON.stringify(formRule) !== JSON.stringify(openedRule);
+    var parsed = formChanged ? formRule : storedRule;
+    var next = thread ? (thread.next_due || null) : null;
+    if (dateTouched) next = typedNextDue || null;
+    else if (formChanged) next = parsed ? firstOnOrAfter(parsed, OAD.todayStr()) : next;
+    var days = thread && Array.isArray(thread.days_of_week) ? thread.days_of_week.slice() : [];
+    if (parsed && parsed.unit === 'week') days = parsed.days_of_week.slice();
+    return {
+      repeat: parsed,
+      next_due: next,
+      days_of_week: days,
+      note: changeNote(storedRule, parsed)
+    };
+  }
+
+  function ensure(thread) {
+    if (!thread) return null;
+    if (thread.thread_kind !== 'habit' && thread.thread_kind !== 'cadence') return null;
+    var parsed = parse(thread.repeat);
+    if (!parsed) parsed = fromLegacy(thread);
+    if (parsed) {
+      thread.repeat = parsed;
+      if (parsed.unit === 'week') thread.days_of_week = parsed.days_of_week.slice();
+      if (!thread.next_due) thread.next_due = firstOnOrAfter(parsed, OAD.todayStr());
+    } else {
+      thread.repeat = null;
+    }
+    return thread.repeat;
+  }
+
+  return {
+    parse: parse,
+    fromLegacy: fromLegacy,
+    ensure: ensure,
+    nextAfter: nextAfter,
+    previousSlot: previousSlot,
+    firstOnOrAfter: firstOnOrAfter,
+    advanceOnDone: advanceOnDone,
+    label: label,
+    changeNote: changeNote,
+    commit: commit
+  };
+})();
+
 OAD.nextCadenceDue = function (recurrence, fromDate, daysOfWeek) {
   var suffix = (OAD.Config && OAD.Config.timeSuffix) || 'T00:00:00';
 
@@ -323,13 +619,18 @@ OAD.prevCadenceDue = function (recurrence, daysOfWeek) {
   return null;
 };
 
-// Human-readable recurrence label — expands weekly-days into the actual day names.
+// Human-readable recurrence label. A parsed repeat rule wins. Objects that
+// still only have the old token keep the weekly-days expansion.
 OAD.formatRecurrence = function (c) {
-  if (c.recurrence === 'weekly-days' && (c.days_of_week || []).length) {
+  if (c && OAD.Repeat) {
+    var rule = OAD.Repeat.parse(c.repeat);
+    if (rule) return OAD.Repeat.label(rule);
+  }
+  if (c && c.recurrence === 'weekly-days' && (c.days_of_week || []).length) {
     const sorted = c.days_of_week.slice().sort(function (a, b) { return a - b; });
     return 'weekly-days (' + sorted.map(function (d) { return OAD._DAY_NAMES[d]; }).join(', ') + ')';
   }
-  return c.recurrence;
+  return c ? c.recurrence : '';
 };
 
 // Returns bidirectional graph context for a thread.
@@ -882,6 +1183,7 @@ OAD.Capacity._dayFacts = function (capacity) {
       windshield: !full && group.some(function (thread) { return thread.day_impact === 'windshield'; }),
       miles: miles,
       minutes: minutes,
+      threads: group,
       titles: group.map(OAD.Capacity._displayTitle)
     };
   });
@@ -952,6 +1254,39 @@ OAD.Capacity._name = function () {
   return 'T.J.';
 };
 
+// A title in the banner is the thread. Plain text is how the notice used to
+// force a trip to List to find the same row.
+OAD.Capacity._threadControl = function (thread) {
+  var title = OAD.esc(OAD.Capacity._displayTitle(thread));
+  var uuid = thread && thread.uuid;
+  if (!uuid || /[^A-Za-z0-9-]/.test(uuid)) return title;
+  return '<button type="button" class="capacity-thread" onclick="OAD.openThreadFromNotice(\'' +
+    uuid + '\')">' + title + '</button>';
+};
+
+OAD.Capacity._leadHtml = function (capacity, name) {
+  var greeting = 'Hey ' + OAD.esc(name || 'T.J.');
+  if (!/[.!?]$/.test(greeting)) greeting += '.';
+  var facts = OAD.Capacity._dayFacts(capacity);
+  if (!facts.length) return greeting;
+  var lines = facts.map(function (fact) {
+    var titles = (fact.threads || []).map(OAD.Capacity._threadControl).join(' and ');
+    var label = OAD.esc(fact.label);
+    if (fact.full) return label + ' is gone to ' + titles + '.';
+    if (fact.windshield) {
+      var travel = '';
+      if (fact.miles != null) {
+        travel = ', ' + OAD.esc(String(fact.miles)) + ' miles';
+        var phrase = OAD.Capacity._drivePhrase(fact.minutes);
+        if (phrase) travel += ', about ' + OAD.esc(phrase) + ' of driving';
+      }
+      return label + ' is a windshield day' + travel + '. ' + titles + '.';
+    }
+    return label + ' is partly ' + titles + '.';
+  });
+  return greeting + ' ' + lines.join(' ');
+};
+
 OAD.Capacity.bannerHtml = function (threads, todayStr) {
   var list = threads || (OAD.DB && OAD.DB.threads) || [];
   var today = todayStr || (typeof OAD.todayStr === 'function' ? OAD.todayStr() : '');
@@ -960,7 +1295,7 @@ OAD.Capacity.bannerHtml = function (threads, todayStr) {
   if (!analysis.clusters.length && !(analysis.onLostDays || []).length) return '';
   var html = '<div class="capacity-banner" role="status">';
   html += '<p class="capacity-banner-lead">' +
-    OAD.esc(OAD.Capacity._leadText(OAD.Capacity._relevantCapacity(analysis), OAD.Capacity._name())) +
+    OAD.Capacity._leadHtml(OAD.Capacity._relevantCapacity(analysis), OAD.Capacity._name()) +
     '</p>';
   analysis.clusters.forEach(function (cluster) {
     html += '<section class="capacity-banner-block">';
@@ -968,7 +1303,7 @@ OAD.Capacity.bannerHtml = function (threads, todayStr) {
     html += '<p>' + OAD.esc(OAD.Capacity._planText(cluster.loadDays)) + '</p>';
     html += '<ul>';
     cluster.late.forEach(function (thread) {
-      html += '<li>' + OAD.esc(OAD.Capacity._displayTitle(thread)) + '</li>';
+      html += '<li>' + OAD.Capacity._threadControl(thread) + '</li>';
     });
     html += '</ul></section>';
   });
@@ -984,7 +1319,7 @@ OAD.Capacity.bannerHtml = function (threads, todayStr) {
     Object.keys(grouped).sort().forEach(function (date) {
       grouped[date].forEach(function (thread) {
         html += '<li><span class="capacity-banner-when">' + OAD.esc(OAD.Capacity._label(date)) +
-          ':</span> ' + OAD.esc(OAD.Capacity._displayTitle(thread)) + '</li>';
+          ':</span> ' + OAD.Capacity._threadControl(thread) + '</li>';
       });
     });
     html += '</ul></section>';
@@ -1085,6 +1420,30 @@ OAD._ade001_sequential = function () {
     });
   });
   return created;
+};
+
+// Keep the one structural enables edge lined up with parent_uuid. Removes an
+// unconfirmed ADE-002 edge from the previous parent, then adds one on the new
+// parent. A connection the user confirmed stays where it is. Does not save.
+OAD.syncParentEdge = function (child, previousParentUuid) {
+  if (!child) return;
+  var prev = previousParentUuid || null;
+  var next = child.parent_uuid || null;
+  if (prev && prev !== next) {
+    var oldParent = OAD.getThreadByUUID(prev);
+    if (oldParent && oldParent.connections) {
+      oldParent.connections = oldParent.connections.filter(function (c) {
+        if (!c || c.to_uuid !== child.uuid) return true;
+        if (c.confirmed_by_user) return true;
+        if (c.rule === 'ADE-002') return false;
+        return true;
+      });
+    }
+  }
+  if (!next || child.status === 'closed' || typeof OAD._adeAddEdge !== 'function') return;
+  var parent = OAD.getThreadByUUID(next);
+  if (!parent || parent.status === 'closed') return;
+  OAD._adeAddEdge(parent, child, 'enables', 'ADE-002', 1.0);
 };
 
 // ADE-002: parent_uuid → parent enables child (structural certainty).

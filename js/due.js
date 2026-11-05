@@ -92,23 +92,52 @@ OAD.Due.buckets = function (visibleThreads, todayStr, in7Str) {
 // today was still being tallied into that day's item count by a hand-rolled check that skipped
 // this exclusion).
 OAD.Due.isCadenceDueOn = function (cadence, dateStr) {
-  var overdue = typeof cadence.isOverdue === 'function' ? cadence.isOverdue() : OAD.cadenceOverdue(cadence);
-  var done = typeof cadence.isDoneThisPeriod === 'function' ? cadence.isDoneThisPeriod() : OAD.cadenceDoneThisPeriod(cadence);
-  return !overdue && cadence.next_due === dateStr && !done;
+  if (!cadence || cadence.next_due !== dateStr) return false;
+  if (OAD.cadenceOverdue(cadence)) return false;
+  if (dateStr !== OAD.todayStr()) return true;
+  return !OAD.cadenceDoneThisPeriod(cadence);
 };
 
-// Cadence overdue/today/week split — mirrors the cadence filter that used to be duplicated
-// 3x in render.js.
+// Cadence overdue/today/week split. next_due is the only signal. Thread.isOverdue
+// looks at next_action_date and must not be used here.
 OAD.Due.cadenceBuckets = function (cadences, todayStr, in7Str) {
   return {
-    overdue: cadences.filter(function (c) { return typeof c.isOverdue === 'function' ? c.isOverdue() : OAD.cadenceOverdue(c); }),
+    overdue: cadences.filter(function (c) { return OAD.cadenceOverdue(c); }),
     today:   cadences.filter(function (c) { return OAD.Due.isCadenceDueOn(c, todayStr); }),
     week:    cadences.filter(function (c) {
-               var overdue = typeof c.isOverdue === 'function' ? c.isOverdue() : OAD.cadenceOverdue(c);
-               var done = typeof c.isDoneThisPeriod === 'function' ? c.isDoneThisPeriod() : OAD.cadenceDoneThisPeriod(c);
-               return !overdue && c.next_due > todayStr && c.next_due <= in7Str && !done;
+               return !OAD.cadenceOverdue(c) && c.next_due > todayStr && c.next_due <= in7Str && !OAD.cadenceDoneThisPeriod(c);
              }).sort(function (a, b) { return a.next_due.localeCompare(b.next_due); })
   };
+};
+
+// Habits due on the dashboard. Checked in today stays off these lists (Change
+// lives on the Habits screen). No rule yet still belongs in today so it can
+// be answered. A future next_due is not overdue.
+OAD.Due.habitBuckets = function (habits, todayStr, in7Str) {
+  var overdue = [], today = [], week = [];
+  (habits || []).forEach(function (h) {
+    if (!h || h.phase === 'dormant') return;
+    if (h.last_checked_in === todayStr) return;
+    var rule = OAD.Repeat && OAD.Repeat.parse(h.repeat);
+    if (!rule || !h.next_due) { today.push(h); return; }
+    if (h.next_due < todayStr) overdue.push(h);
+    else if (h.next_due === todayStr) today.push(h);
+    else if (h.next_due <= in7Str) week.push(h);
+  });
+  week.sort(function (a, b) { return (a.next_due || '').localeCompare(b.next_due || ''); });
+  return { overdue: overdue, today: today, week: week };
+};
+
+// Habits screen: due today, missed, unset, or already answered today.
+// A series that ended (ends before today, and no remaining slot) stays off.
+OAD.Due.habitOnPanel = function (h, todayStr) {
+  if (!h || h.phase === 'dormant') return false;
+  var today = todayStr || (typeof OAD.todayStr === 'function' ? OAD.todayStr() : '');
+  var rule = OAD.Repeat && OAD.Repeat.parse(h.repeat);
+  if (rule && rule.ends && rule.ends < today && (!h.next_due || h.next_due > rule.ends)) return false;
+  if (h.last_checked_in === today) return true;
+  if (!rule || !h.next_due) return true;
+  return h.next_due <= today;
 };
 
 // Live-computed "Stalled" view — per ticket-stalled-metric-fix.md. Replaces the dead
@@ -370,12 +399,13 @@ OAD.DayNote = {
     return { date: date, missing: missing };
   },
 
-  // Newest saved sentence that has not been promoted. Skips are not shown.
+  // Newest saved sentence still offering a thread. A skip, a decline, or a
+  // promote has already answered, so none of those stay on the bar.
   unpromoted: function () {
     OAD.DayNote._ensure();
     for (var i = OAD.DB.day_notes.length - 1; i >= 0; i--) {
       var row = OAD.DB.day_notes[i];
-      if (row && row.note && !row.skipped && !row.promoted_thread_uuid) return row;
+      if (row && row.note && !row.skipped && !row.declined && !row.promoted_thread_uuid) return row;
     }
     return null;
   },
@@ -414,7 +444,7 @@ OAD.DayNote = {
 
   promote: function (date) {
     var row = OAD.DayNote.noteFor(date);
-    if (!row || !row.note || row.skipped || row.promoted_thread_uuid) return null;
+    if (!row || !row.note || row.skipped || row.declined || row.promoted_thread_uuid) return null;
     OAD._suppressSaveDB = true;
     var thread;
     try {
@@ -436,6 +466,15 @@ OAD.DayNote = {
     return thread;
   },
 
+  // Heard, and not a thread. The sentence stays on the day.
+  decline: function (date) {
+    var row = OAD.DayNote.noteFor(date);
+    if (!row || row.skipped || !row.note || row.promoted_thread_uuid || row.declined) return null;
+    row.declined = true;
+    if (typeof OAD.saveDB === 'function') OAD.saveDB();
+    return row;
+  },
+
   barHtml: function () {
     var pending = OAD.DayNote.pending();
     var saved = OAD.DayNote.unpromoted();
@@ -454,8 +493,11 @@ OAD.DayNote = {
     }
     if (saved) {
       var savedLabel = typeof OAD.formatDate === 'function' ? OAD.formatDate(saved.date) : saved.date;
-      html += '<p class="day-note-saved">' + OAD.esc(savedLabel) + ': ' + OAD.esc(saved.note) +
-        ' <button type="button" data-date="' + OAD.esc(saved.date) + '" onclick="OAD.DayNote._promoteClick(this)">Make this a thread</button></p>';
+      html += '<p class="day-note-saved">' + OAD.esc(savedLabel) + ': ' + OAD.esc(saved.note) + '</p>';
+      html += '<div class="day-note-actions">' +
+        '<button type="button" data-date="' + OAD.esc(saved.date) + '" onclick="OAD.DayNote._promoteClick(this)">Make this a thread</button>' +
+        '<button type="button" class="ghost" data-date="' + OAD.esc(saved.date) + '" onclick="OAD.DayNote._declineClick(this)">No, but thanks for listening</button>' +
+      '</div>';
     }
     html += '</div>';
     return html;
@@ -482,6 +524,12 @@ OAD.DayNote = {
   _promoteClick: function (btn) {
     if (!btn) return;
     OAD.DayNote.promote(btn.getAttribute('data-date'));
+    if (typeof OAD.renderMatrixView === 'function') OAD.renderMatrixView();
+  },
+
+  _declineClick: function (btn) {
+    if (!btn) return;
+    OAD.DayNote.decline(btn.getAttribute('data-date'));
     if (typeof OAD.renderMatrixView === 'function') OAD.renderMatrixView();
   }
 };

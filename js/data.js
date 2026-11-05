@@ -251,7 +251,13 @@ OAD.updateThread = function (id, patch) {
   if (patch.day_fit !== undefined) patch.day_fit = OAD._dayFit(patch.day_fit);
   if (patch.travel_miles !== undefined) patch.travel_miles = OAD._travelNumber(patch.travel_miles);
   if (patch.travel_minutes !== undefined) patch.travel_minutes = OAD._travelNumber(patch.travel_minutes);
+  var prevParent = t.parent_uuid || null;
   Object.assign(t, patch);
+  if (patch && Object.prototype.hasOwnProperty.call(patch, 'parent_uuid') &&
+      (prevParent || null) !== (t.parent_uuid || null) &&
+      typeof OAD.syncParentEdge === 'function') {
+    OAD.syncParentEdge(t, prevParent);
+  }
   OAD.saveDB();
   OAD._runAfterSave(t);
   return t;
@@ -620,13 +626,22 @@ OAD.makeThread = function (overrides) {
     days_of_week: [],
     last_completed: null,
     next_due: null,
-    consequences: ''
+    consequences: '',
+    // Shared schedule for habits and cadences. frequency and recurrence stay
+    // on the row so older exports still load. The editor writes repeat.
+    repeat: null
   }, overrides);
   data.day_impact = OAD._dayImpact(data.day_impact);
   data.travel_miles = OAD._travelNumber(data.travel_miles);
   data.travel_minutes = OAD._travelNumber(data.travel_minutes);
   data.day_fit = OAD._dayFit(data.day_fit);
-  return (window.OAD.Models && window.OAD.Models.Thread) ? new window.OAD.Models.Thread(data) : data;
+  var thread = (window.OAD.Models && window.OAD.Models.Thread) ? new window.OAD.Models.Thread(data) : data;
+  // Runtime only. data.js loads before engine.js, so Repeat is absent while
+  // this file is parsed and present by the time a habit or cadence is made.
+  if ((thread.thread_kind === 'habit' || thread.thread_kind === 'cadence') && OAD.Repeat && OAD.Repeat.ensure) {
+    OAD.Repeat.ensure(thread);
+  }
+  return thread;
 };
 
 // Day impact is a closed set. Anything else is a normal day.
@@ -799,43 +814,58 @@ OAD.updateHabit = function (id, patch) {
 OAD.checkInHabit = function (id, done, note) {
   const h = OAD.getHabit(id);
   if (!h) return null;
-  const today     = OAD.todayStr();
-  const yesterdayDt = new Date(); yesterdayDt.setHours(0, 0, 0, 0); yesterdayDt.setDate(yesterdayDt.getDate() - 1);
-  const yesterday = yesterdayDt.toISOString().slice(0, 10);
+  if (OAD.Repeat && OAD.Repeat.ensure) OAD.Repeat.ensure(h);
+  const today = OAD.todayStr();
   const alreadyToday = h.last_checked_in === today;
-
   var currentStreak = h.current_streak || 0;
   var longestStreak = h.longest_streak || 0;
+  var nextDue = h.next_due || null;
+  var rule = OAD.Repeat ? OAD.Repeat.parse(h.repeat) : null;
 
-  if (done) {
-    if (!alreadyToday) {
-      if (h.last_checked_in === yesterday && h.last_check_in_done) {
-        currentStreak = currentStreak + 1;
-      } else {
+  function advanceFrom(slot) {
+    if (!rule || !OAD.Repeat) return;
+    nextDue = OAD.Repeat.advanceOnDone(rule, slot, today);
+  }
+
+  if (alreadyToday) {
+    if (done) {
+      if (!h.last_check_in_done) {
         currentStreak = 1;
+        // A completed-anchor No did not consume the slot. Yes does.
+        // A schedule-anchor No already advanced, so this flip must not.
+        if (rule && rule.anchor === 'completed') advanceFrom(today);
       }
-    } else if (!h.last_check_in_done) {
-      // Was no today, flipping to yes — restart from 1
-      currentStreak = 1;
-    }
-    // Already yes today → streak unchanged
-    longestStreak = Math.max(longestStreak, currentStreak);
-  } else {
-    if (alreadyToday && h.last_check_in_done) {
-      // Flipping yes→no today — undo the increment
+    } else if (h.last_check_in_done) {
       currentStreak = Math.max(0, currentStreak - 1);
-    } else if (!alreadyToday) {
+    }
+    if (done) longestStreak = Math.max(longestStreak, currentStreak);
+  } else {
+    var occurrence = (h.next_due && h.next_due <= today) ? h.next_due : (h.next_due || today);
+    var prev = (rule && occurrence) ? OAD.Repeat.previousSlot(rule, occurrence) : null;
+    if (done) {
+      if (h.last_check_in_done && prev && h.last_checked_in === prev) currentStreak = currentStreak + 1;
+      else currentStreak = 1;
+      longestStreak = Math.max(longestStreak, currentStreak);
+    } else {
       currentStreak = 0;
     }
-    // Already no today → no change
+    if (rule && (done || rule.anchor !== 'completed')) {
+      var slot = (done && rule.anchor === 'completed')
+        ? today
+        : ((h.next_due && h.next_due <= today) ? h.next_due : (h.next_due || today));
+      advanceFrom(slot);
+    }
   }
 
   return OAD.updateThread(id, {
     current_streak: currentStreak,
     longest_streak: longestStreak,
     last_checked_in: today,
-    last_check_in_done: done,
-    last_check_in_note: note != null ? note : ''
+    last_check_in_done: !!done,
+    last_check_in_note: note != null ? note : '',
+    next_due: nextDue,
+    repeat: rule || null,
+    days_of_week: (rule && rule.unit === 'week') ? rule.days_of_week.slice() : (h.days_of_week || [])
   });
 };
 
@@ -926,7 +956,8 @@ OAD._IMPORT_FIELDS = [
   // Cadence fields — ARCHITECTURE_RULES.md Rule 4. Per ticket-flowqueue-data-model-migration.md
   // Step 4, a cadence-shaped row is now just a thread row matched by uuid like any other — no
   // more separate OAD._CADENCE_IMPORT_FIELDS/id-matched diffing path.
-  'recurrence', 'days_of_week', 'last_completed', 'next_due', 'consequences'
+  'recurrence', 'days_of_week', 'last_completed', 'next_due', 'consequences',
+  'repeat'
 ];
 
 // Returns { created, updated, closed, deleted, edges_merged, saveOk, saveConflict, saveError }.
@@ -1025,7 +1056,8 @@ OAD.applyImport = async function (results, confirmedUpdates, confirmedDeleteIds)
       days_of_week:             row.days_of_week             || [],
       last_completed:           row.last_completed           || null,
       next_due:                 row.next_due                 || null,
-      consequences:             row.consequences              || ''
+      consequences:             row.consequences              || '',
+      repeat:                   row.repeat                   || null
     });
     const added = OAD.addThread(t);
     (row.evolution_log || []).forEach(function (e) {
@@ -1258,6 +1290,7 @@ OAD.exportThreads = function () {
       last_completed:           t.last_completed           || null,
       next_due:                 t.next_due                 || null,
       consequences:             t.consequences             || '',
+      repeat:                   t.repeat                   || null,
       connections:              (t.connections || []).map(function (c) {
         return {
           uuid:              c.uuid,
@@ -1695,6 +1728,11 @@ OAD._normalizeDB = function () {
     // just threads (used to be a second, easy-to-miss normalizeLifeArea call here specifically
     // for OAD.DB.cadences, which let 'Finance'/'finances' diverge into apparent duplicates).
     if (!Array.isArray(t.days_of_week)) t.days_of_week = [];
+    // Map frequency / recurrence onto repeat once. An existing next_due is
+    // left where the user put it. ensure is absent while data.js is parsing.
+    if ((t.thread_kind === 'habit' || t.thread_kind === 'cadence') && OAD.Repeat && OAD.Repeat.ensure) {
+      OAD.Repeat.ensure(t);
+    }
     (t.connections || []).forEach(function (c) {
       if (!c.uuid) c.uuid = OAD._generateUUID();
     });

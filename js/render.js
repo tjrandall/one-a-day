@@ -352,6 +352,38 @@ OAD._bollardButtonHtml = function (t) {
   return `<button class="ghost" id="park-bollard-btn" onclick="OAD.openParkBollardModal('${OAD.esc(t.uuid)}')">Park Bollard (${preview.candidates.length})</button>`;
 };
 
+// Parent link and the open threads under this one. A parent with open children
+// is a bollard. Closed children stay off the list.
+OAD._threadFamilyHtml = function (t) {
+  if (!t) return '';
+  var parent = t.parent_uuid ? OAD.getThreadByUUID(t.parent_uuid) : null;
+  var parentHtml = '';
+  if (parent) {
+    parentHtml = '<div class="text-sm" style="margin:-8px 0 16px"><button type="button" class="parent-link" id="thread-parent-link" onclick="OAD.selectThread(' + parent.id + ')">Under ' + OAD.esc(parent.title) + '</button></div>';
+  } else if (t.parent_uuid) {
+    parentHtml = '<div class="text-muted text-sm" id="thread-parent-link" style="margin:-8px 0 16px">Under a missing thread</div>';
+  }
+  var kids = (OAD.DB.threads || []).filter(function (x) {
+    return x.parent_uuid === t.uuid && x.status !== 'closed';
+  }).sort(function (a, b) {
+    return (a.title || '').localeCompare(b.title || '');
+  });
+  if (!kids.length) return parentHtml;
+  return parentHtml +
+    '<div class="card" id="thread-children">' +
+      '<div class="card-title">Threads under this (' + kids.length + ')</div>' +
+      '<div class="text-muted text-sm">This thread is a bollard. Its own date stays empty. These threads carry the work.</div>' +
+      '<div class="child-list">' +
+        kids.map(function (k) {
+          return '<button type="button" class="child-link" onclick="OAD.selectThread(' + k.id + ')">' +
+            '<span>' + OAD.esc(k.title) + '</span>' +
+            '<span class="pill ' + OAD.esc(k.status) + '">' + OAD.esc(k.status) + '</span>' +
+          '</button>';
+        }).join('') +
+      '</div>' +
+    '</div>';
+};
+
 OAD.renderDetail = function (id) {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
@@ -521,6 +553,8 @@ OAD.renderDetail = function (id) {
         ${OAD._bollardButtonHtml(t)}
       </div>
     </div>
+
+    ${OAD._threadFamilyHtml(t)}
 
     ${t.status === 'dormant' ? `
     <div class="card" style="border-left:3px solid #8855dd;background:rgba(136,85,221,0.04)">
@@ -740,8 +774,18 @@ OAD.renderInboxAlertBanner = function () {
 OAD.markCadenceDone = function (id) {
   const c = OAD.getCadence(id);
   if (!c) return;
-  c.last_completed = OAD.todayStr();
-  c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
+  if (OAD.Repeat && OAD.Repeat.ensure) OAD.Repeat.ensure(c);
+  const today = OAD.todayStr();
+  c.last_completed = today;
+  var rule = OAD.Repeat ? OAD.Repeat.parse(c.repeat) : null;
+  if (rule) {
+    var slot = rule.anchor === 'completed'
+      ? today
+      : ((c.next_due && c.next_due <= today) ? c.next_due : (c.next_due || today));
+    c.next_due = OAD.Repeat.advanceOnDone(rule, slot, today);
+  } else {
+    c.next_due = OAD.nextCadenceDue(c.recurrence, c.last_completed, c.days_of_week);
+  }
   OAD.saveDB();
   OAD.renderOverdueBanner();
   // refreshActiveView() re-renders whatever full view is currently showing (Daily, List,
@@ -767,9 +811,8 @@ OAD.renderCadencePanel = function () {
   const items = cadences.length ? cadences.map(function (c) {
     const overdue        = OAD.cadenceOverdue(c);
     const dueToday       = !overdue && c.next_due === today;
-    const prevDue        = OAD.prevCadenceDue(c.recurrence, c.days_of_week);
-    const doneThisPeriod = !overdue && !dueToday && c.last_completed && prevDue && c.last_completed >= prevDue;
-    const itemClass      = overdue ? 'is-overdue' : dueToday ? 'is-due-today' : doneThisPeriod ? 'is-done' : '';
+    const doneThisPeriod = OAD.cadenceDoneThisPeriod(c);
+    const itemClass      = overdue ? 'is-overdue' : doneThisPeriod ? 'is-done' : dueToday ? 'is-due-today' : '';
 
     const dueDateHtml = '<div class="cadence-due-row">' +
       '<span class="cadence-due-label">Next due:</span>' +
@@ -1028,6 +1071,14 @@ OAD._rejectProposal = function(uuid) {
 
 OAD._habitShowButtons = new Set(); // habits whose "Change" was clicked
 
+OAD._habitListSub = function (h, todayStr) {
+  if (h.next_due && h.next_due < todayStr) {
+    var when = (typeof OAD.formatDate === 'function' && OAD.formatDate(h.next_due)) || h.next_due;
+    return 'Missed ' + when;
+  }
+  return OAD.Repeat ? OAD.Repeat.label(h.repeat) : (h.frequency || 'Set a repeat');
+};
+
 OAD.renderHabitPanel = function () {
   OAD._lastView = 'Habits';
   OAD.highlightNav('renderHabitPanel');
@@ -1037,31 +1088,21 @@ OAD.renderHabitPanel = function () {
   const panel = document.getElementById('detail-content');
   if (!panel) return;
 
-  const habits = OAD.getHabitThreads();
-  if (!habits.length) {
-    panel.innerHTML = '<div class="detail-empty">No habits configured.</div>';
-    return;
-  }
-
   const today = OAD.todayStr();
   const todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const habits = (OAD.getHabitThreads() || []).filter(function (h) {
+    return OAD.Due.habitOnPanel(h, today);
+  });
 
-  const items = habits.map(function (h) {
+  const items = habits.length ? habits.map(function (h) {
     const checkedToday = h.last_checked_in === today;
     const showButtons  = !checkedToday || OAD._habitShowButtons.has(h.id);
+    const missed = !checkedToday && h.next_due && h.next_due < today;
+    const chip = OAD.Repeat ? OAD.Repeat.label(h.repeat) : (h.frequency || 'Set a repeat');
 
-    // Days since last check-in (for "not yet started" / missing 3+ days note)
-    const daysSince = h.last_checked_in
-      ? Math.round((new Date(today) - new Date(h.last_checked_in + 'T00:00:00')) / 86400000)
-      : null;
     let missingHtml = '';
-    if (!checkedToday) {
-      if (daysSince === null) {
-        missingHtml = '<div class="habit-missing">Not yet started</div>';
-      } else if (daysSince >= 3) {
-        missingHtml = '<div class="habit-missing">Last checked in ' + daysSince + ' day' + (daysSince !== 1 ? 's' : '') + ' ago</div>';
-      }
-    }
+    if (missed) missingHtml = '<div class="habit-missing">Missed ' + OAD.esc(OAD.formatDate(h.next_due) || h.next_due) + '</div>';
+    else if (!checkedToday && !h.last_checked_in) missingHtml = '<div class="habit-missing">Not yet started</div>';
 
     const streakHtml = h.current_streak > 0
       ? '<span class="habit-streak">🔥 ' + h.current_streak + '</span>'
@@ -1082,33 +1123,42 @@ OAD.renderHabitPanel = function () {
         '<div class="checkin-done">' +
           '<span class="checkin-yes-label">✓ Done</span>' +
           (h.last_check_in_note ? '<span class="checkin-note">“' + OAD.esc(h.last_check_in_note) + '”</span>' : '') +
-          '<button class="ghost" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
+          '<button class="ghost" type="button" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
         '</div>';
     } else {
       checkInHtml =
         '<div class="checkin-missed">' +
-          '<span class="checkin-no-label">— Missed</span>' +
+          '<span class="checkin-no-label">Missed</span>' +
           (h.last_check_in_note ? '<span class="checkin-note">“' + OAD.esc(h.last_check_in_note) + '”</span>' : '') +
-          '<button class="ghost" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
+          '<button class="ghost" type="button" style="font-size:12px;padding:3px 8px;margin-left:auto" onclick="OAD._showHabitButtons(' + h.id + ')">Change</button>' +
         '</div>';
     }
 
     return '<div class="habit-card" id="habit-card-' + h.id + '">' +
       '<div class="habit-header">' +
         '<div class="habit-title">' + OAD.esc(h.title) + '</div>' +
-        streakHtml +
+        '<div class="habit-card-actions">' +
+          streakHtml +
+          '<button class="ghost" type="button" style="font-size:12px;padding:3px 8px" onclick="OAD.openEditHabitModal(' + h.id + ')">Edit</button>' +
+        '</div>' +
       '</div>' +
-      '<div class="habit-meta">' + OAD.esc(h.frequency) + ' · ' + OAD.esc(h.time_of_day) + '</div>' +
+      '<div class="habit-meta">' +
+        '<button type="button" class="repeat-chip" onclick="OAD.openEditHabitModal(' + h.id + ')">' + OAD.esc(chip) + '</button>' +
+        '<span> · ' + OAD.esc(h.time_of_day || '') + '</span>' +
+      '</div>' +
       missingHtml +
       checkInHtml +
     '</div>';
-  }).join('');
+  }).join('') : '<p class="text-muted text-sm">Nothing to check in today.</p>';
 
   panel.innerHTML =
     '<div class="habit-panel">' +
       '<div class="habit-panel-header">' +
-        '<h2>Habits</h2>' +
-        '<span class="habit-date">' + OAD.esc(todayLabel) + '</span>' +
+        '<div>' +
+          '<h2>Habits</h2>' +
+          '<span class="habit-date">' + OAD.esc(todayLabel) + '</span>' +
+        '</div>' +
+        '<button type="button" onclick="OAD.openNewHabitModal()">+ Add Habit</button>' +
       '</div>' +
       '<p class="text-muted text-sm habit-subtitle">How is this going in your life right now?</p>' +
       items +
@@ -1188,23 +1238,10 @@ OAD.renderTodayView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
-  function daysSince(h) {
-    if (!h.last_checked_in) return 999;
-    return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
-  }
-  const overdueHabits = activeHabits.filter(function (h) { return daysSince(h) >= 3; });
-  const dailyFreqs    = ['daily', 'every workday', 'every-other-day'];
-  const todayHabits   = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.last_checked_in === todayStr) return false;
-    return dailyFreqs.indexOf(h.frequency) !== -1;
-  });
-  const weekHabits = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.frequency !== 'weekly') return false;
-    return daysSince(h) >= 6;
-  });
+  const habitBuckets = OAD.Due.habitBuckets(OAD.getHabitThreads(), todayStr, in7Str);
+  const overdueHabits = habitBuckets.overdue;
+  const todayHabits   = habitBuckets.today;
+  const weekHabits    = habitBuckets.week;
 
   const cycles = OAD.detectCycles();
   const cycleThreadIds = new Set(cycles.flat());
@@ -1281,13 +1318,11 @@ OAD.renderTodayView = function () {
   }
 
   function habitRow(h) {
-    const ds = daysSince(h);
-    const subText = ds >= 3
-      ? (ds >= 999 ? 'Never checked in' : 'Last checked in ' + ds + ' days ago')
-      : h.frequency;
-    const badge = ds >= 3 ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
+    const missed = !!(h.next_due && h.next_due < todayStr);
+    const subText = OAD._habitListSub(h, todayStr);
+    const badge = missed ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">OVERDUE</span>' : '';
     const streakHtml = h.current_streak > 0 ? '<span class="ds-streak" aria-label="Streak ' + h.current_streak + ' days"> 🔥 ' + h.current_streak + '</span>' : '';
-    const rowClass = 'ds-row ds-habit ds-row-' + (ds >= 3 ? 'overdue' : 'today');
+    const rowClass = 'ds-row ds-habit ds-row-' + (missed ? 'overdue' : 'today');
     return '<div class="' + rowClass + '" id="ds-habit-' + h.id + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-habit" aria-label="Habit">✦ habit</span>' +
@@ -1559,23 +1594,10 @@ OAD.renderDailyView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
-  function daysSince(h) {
-    if (!h.last_checked_in) return 999;
-    return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
-  }
-  const overdueHabits = activeHabits.filter(function (h) { return daysSince(h) >= 3; });
-  const dailyFreqs    = ['daily', 'every workday', 'every-other-day'];
-  const todayHabits   = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.last_checked_in === todayStr) return false;
-    return dailyFreqs.indexOf(h.frequency) !== -1;
-  });
-  const weekHabits = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.frequency !== 'weekly') return false;
-    return daysSince(h) >= 6;
-  });
+  const habitBuckets = OAD.Due.habitBuckets(OAD.getHabitThreads(), todayStr, in7Str);
+  const overdueHabits = habitBuckets.overdue;
+  const todayHabits   = habitBuckets.today;
+  const weekHabits    = habitBuckets.week;
 
   // ── Row renderers ──
 
@@ -1668,13 +1690,11 @@ OAD.renderDailyView = function () {
   }
 
   function habitRow(h) {
-    const ds = daysSince(h);
-    const subText = ds >= 3
-      ? (ds >= 999 ? 'Never checked in' : 'Last checked in ' + ds + ' days ago')
-      : h.frequency;
-    const badge = ds >= 3 ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
+    const missed = !!(h.next_due && h.next_due < todayStr);
+    const subText = OAD._habitListSub(h, todayStr);
+    const badge = missed ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
     const streakHtml = h.current_streak > 0 ? '<span class="ds-streak" aria-label="Streak ' + h.current_streak + ' days"> 🔥 ' + h.current_streak + '</span>' : '';
-    const rowClass = 'ds-row ds-habit ds-row-' + (ds >= 3 ? 'q1' : 'q2');
+    const rowClass = 'ds-row ds-habit ds-row-' + (missed ? 'q1' : 'q2');
     return '<div class="' + rowClass + '" id="ds-habit-' + h.id + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-habit" aria-label="Habit">✦ habit</span>' +
@@ -1902,23 +1922,10 @@ OAD.renderMatrixView = function () {
   const weekCadences    = cadenceBuckets.week;
 
   // ── Habits ─────────────────────────────────────────────────────────
-  const activeHabits = OAD.getHabitThreads().filter(function (h) { return h.phase !== 'dormant'; });
-  function daysSince(h) {
-    if (!h.last_checked_in) return 999;
-    return Math.round((todayDt - new Date(h.last_checked_in + 'T00:00:00')) / 86400000);
-  }
-  const overdueHabits = activeHabits.filter(function (h) { return daysSince(h) >= 3; });
-  const dailyFreqs    = ['daily', 'every workday', 'every-other-day'];
-  const todayHabits   = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.last_checked_in === todayStr) return false;
-    return dailyFreqs.indexOf(h.frequency) !== -1;
-  });
-  const weekHabits = activeHabits.filter(function (h) {
-    if (overdueHabits.indexOf(h) !== -1) return false;
-    if (h.frequency !== 'weekly') return false;
-    return daysSince(h) >= 6;
-  });
+  const habitBuckets = OAD.Due.habitBuckets(OAD.getHabitThreads(), todayStr, in7Str);
+  const overdueHabits = habitBuckets.overdue;
+  const todayHabits   = habitBuckets.today;
+  const weekHabits    = habitBuckets.week;
 
   // ── Row renderers ──
 
@@ -2000,13 +2007,11 @@ OAD.renderMatrixView = function () {
   }
 
   function habitRow(h) {
-    const ds = daysSince(h);
-    const subText = ds >= 3
-      ? (ds >= 999 ? 'Never checked in' : 'Last checked in ' + ds + ' days ago')
-      : h.frequency;
-    const badge = ds >= 3 ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
+    const missed = !!(h.next_due && h.next_due < todayStr);
+    const subText = OAD._habitListSub(h, todayStr);
+    const badge = missed ? '<span class="ds-status-badge ds-badge-overdue" aria-label="Overdue">⚠ OVERDUE</span>' : '';
     const streakHtml = h.current_streak > 0 ? '<span class="ds-streak" aria-label="Streak ' + h.current_streak + ' days"> 🔥 ' + h.current_streak + '</span>' : '';
-    const rowClass = 'ds-row ds-habit ds-row-' + (ds >= 3 ? 'q1' : 'q2');
+    const rowClass = 'ds-row ds-habit ds-row-' + (missed ? 'q1' : 'q2');
     return '<div class="' + rowClass + '" id="ds-habit-' + h.id + '">' +
       '<div class="ds-row-main">' +
         '<span class="ds-type-tag ds-type-habit" aria-label="Habit">✦ habit</span>' +

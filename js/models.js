@@ -415,15 +415,18 @@ class RecurringThread extends Thread {
   }
 
   isDoneThisPeriod() {
+    if (this.isOverdue()) return false;
+    if (!this.last_completed) return false;
     const today = OAD.todayStr();
-    const overdue = this.isOverdue();
-    if (overdue) return false;
-
-    const dueToday = this.next_due === today;
-    if (dueToday && this.last_completed === today) return true;
-
-    const prevDue = OAD.prevCadenceDue(this.recurrence, this.days_of_week);
-    return !!(this.last_completed && prevDue && this.last_completed >= prevDue);
+    if (this.last_completed === today) return true;
+    if (!(this.next_due && this.next_due > today)) return false;
+    var prev = null;
+    if (OAD.Repeat) {
+      var rule = OAD.Repeat.parse(this.repeat) || OAD.Repeat.fromLegacy(this);
+      if (rule) prev = OAD.Repeat.previousSlot(rule, this.next_due);
+    }
+    if (!prev && OAD.prevCadenceDue) prev = OAD.prevCadenceDue(this.recurrence, this.days_of_week);
+    return !!(prev && this.last_completed >= prev);
   }
 }
 
