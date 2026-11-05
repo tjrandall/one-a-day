@@ -593,9 +593,22 @@ button.health-title {
 
 /* Parent picker. In the thread form, not a floating menu, so the modal
    scroll does not clip it. The list has its own scrollbar. */
+.parent-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
 .parent-picker .parent-current {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
+}
+button.parent-open {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 13px;
 }
 .parent-picker .autocomplete-results {
   position: static;
@@ -1524,7 +1537,19 @@ button.load-row {
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
-.ds-week-load-form { margin: 4px 0 16px; }
+.ds-week-load.ds-week-load-form {
+  margin: 4px 0 12px;
+  padding: 0;
+  background: none;
+  border: none;
+}
+.ds-week-load-form > summary {
+  cursor: pointer;
+  width: fit-content;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
 
 /* ── Graph Visualization Panel ───────────────────────────────────────── */
 .graph-panel {

@@ -75,17 +75,22 @@ OAD.parentChoices = function (thread) {
 OAD._parentFieldsHtml = function (thread) {
   OAD._parentPickerThread = thread || null;
   var current = thread && thread.parent_uuid ? OAD.getThreadByUUID(thread.parent_uuid) : null;
-  var currentLabel = current ? current.title : (thread && thread.parent_uuid ? 'a missing thread' : 'no parent');
+  var hasParent = !!(thread && thread.parent_uuid);
+  var currentLabel = current ? current.title : 'a missing thread';
   return `
     <div class="field parent-picker">
       <label>Parent</label>
-      <div class="text-muted text-sm">Where this thread lives. Open children make the parent a bollard, and that parent's own date stays empty.</div>
-      <div id="f-parent-current" class="parent-current">Current: ${OAD.esc(currentLabel)}</div>
-      <div class="autocomplete-container">
-        <input type="text" id="f-parent-search" placeholder="Search threads..." autocomplete="off" />
-        <input type="hidden" id="f-parent-uuid" value="${OAD.esc((thread && thread.parent_uuid) || '')}" />
-        <div id="f-parent-count" class="connection-count"></div>
-        <div id="f-parent-results" class="autocomplete-results"></div>
+      <div id="f-parent-summary" class="parent-summary">
+        <div id="f-parent-current" class="parent-current"${hasParent ? '' : ' hidden'}>Current: ${OAD.esc(currentLabel)}</div>
+        <button type="button" id="f-parent-open" class="parent-open">${hasParent ? 'Change' : 'Add parent'}</button>
+      </div>
+      <div id="f-parent-chooser" hidden>
+        <div class="autocomplete-container">
+          <input type="text" id="f-parent-search" placeholder="Search threads..." autocomplete="off" />
+          <input type="hidden" id="f-parent-uuid" value="${OAD.esc((thread && thread.parent_uuid) || '')}" />
+          <div id="f-parent-count" class="connection-count"></div>
+          <div id="f-parent-results" class="autocomplete-results"></div>
+        </div>
       </div>
     </div>`;
 };
@@ -97,10 +102,42 @@ OAD._initParentPicker = function () {
   var resultsDiv = document.getElementById('f-parent-results');
   var countEl = document.getElementById('f-parent-count');
   var currentEl = document.getElementById('f-parent-current');
-  if (!searchInput || !uuidInput || !resultsDiv) return;
+  var chooser = document.getElementById('f-parent-chooser');
+  var openBtn = document.getElementById('f-parent-open');
+  if (!searchInput || !uuidInput || !resultsDiv || !chooser || !openBtn) return;
 
   var choices = OAD.parentChoices(thread);
   var activeIndex = -1;
+
+  function parentLabel(uuid) {
+    var picked = choices.filter(function (t) { return t.uuid === uuid; })[0];
+    if (picked) return picked.title;
+    var stored = OAD.getThreadByUUID(uuid);
+    return stored ? stored.title : 'a missing thread';
+  }
+
+  function paintSummary() {
+    var uuid = uuidInput.value || '';
+    var open = !chooser.hidden;
+    if (currentEl) {
+      currentEl.hidden = !uuid;
+      if (uuid) currentEl.textContent = 'Current: ' + parentLabel(uuid);
+    }
+    openBtn.textContent = open ? 'Close' : (uuid ? 'Change' : 'Add parent');
+  }
+
+  function setChooserOpen(open) {
+    chooser.hidden = !open;
+    if (!open) {
+      searchInput.value = '';
+      activeIndex = -1;
+    }
+    paintSummary();
+    if (open) {
+      showList();
+      searchInput.focus();
+    }
+  }
 
   function matches(t, q) {
     return (t.title || '').toLowerCase().includes(q) ||
@@ -148,8 +185,7 @@ OAD._initParentPicker = function () {
 
   function selectParent(picked) {
     uuidInput.value = picked ? picked.uuid : '';
-    if (currentEl) currentEl.textContent = 'Current: ' + (picked ? picked.title : 'no parent');
-    renderList(searchInput.value);
+    setChooserOpen(false);
   }
 
   function showList() {
@@ -184,13 +220,14 @@ OAD._initParentPicker = function () {
       e.preventDefault();
       if (activeIndex >= 0 && activeIndex < filtered.length) selectParent(filtered[activeIndex]);
     } else if (e.key === 'Escape') {
-      searchInput.value = '';
-      activeIndex = -1;
-      showList();
+      e.preventDefault();
+      setChooserOpen(false);
     }
   });
 
-  showList();
+  openBtn.addEventListener('click', function () {
+    setChooserOpen(chooser.hidden);
+  });
 };
 
 OAD._threadForm = function (t) {

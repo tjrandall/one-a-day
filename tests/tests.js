@@ -3414,7 +3414,10 @@ OAD.test('Daily is the work list: day box opens on demand, and the week load rid
     var dated = OAD.DB.threads.find(function (t) { return t.title === 'Dated work'; });
     OAD.openEditModal(dated.id);
     var modal = document.getElementById('modal-overlay');
+    var load = modal.querySelector('.ds-week-load-form');
     OAD._assert(modal.textContent.indexOf("This Week's Load") !== -1, 'edit shows the week load beside the date');
+    OAD._assert(load && !load.open, 'the week load starts closed');
+    load.open = true;
     var rows = modal.querySelectorAll('.load-row[data-date]');
     OAD._assertEqual(rows.length, 7, 'the load covers seven days');
     var row = rows[1];

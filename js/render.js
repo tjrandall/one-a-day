@@ -1543,10 +1543,10 @@ OAD.weekLoadHtml = function (selectedDate) {
         '</div>' +
       '</button>';
   }
-  return '<section class="ds-week-load ds-week-load-form" aria-label="This week\'s load">' +
-    '<h3 class="ds-bucket-header"><span class="ds-bucket-label">This Week\'s Load</span></h3>' +
+  return '<details class="ds-week-load ds-week-load-form">' +
+    '<summary>This Week\'s Load</summary>' +
     '<div class="ds-week-load-body">' + rows + '</div>' +
-  '</section>';
+  '</details>';
 };
 
 OAD._pickLoadDay = function (iso) {

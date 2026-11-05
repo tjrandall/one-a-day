@@ -434,7 +434,10 @@ def test_daily_work_surface(page):
         const text = document.getElementById('detail-content').innerText;
         OAD.openEditModal(dated.id);
         const modal = document.getElementById('modal-overlay');
+        const loadEl = modal.querySelector('.ds-week-load-form');
         const load = modal.textContent.indexOf("This Week's Load") !== -1;
+        const loadClosed = !!(loadEl && !loadEl.open);
+        if (loadEl) loadEl.open = true;
         const row = modal.querySelectorAll('.load-row[data-date]')[1];
         const iso = row.getAttribute('data-date');
         row.click();
@@ -454,6 +457,7 @@ def test_daily_work_surface(page):
             heat: text.indexOf('Life Areas Heat') !== -1,
             loadOnDaily: text.indexOf("This Week's Load") !== -1,
             load: load,
+            loadClosed: loadClosed,
             dateValue: dateValue,
             iso: iso,
             marked: marked
@@ -468,6 +472,7 @@ def test_daily_work_surface(page):
     _assert(result["heat"] is False, "Life Areas Heat stays off Daily")
     _assert(result["loadOnDaily"] is False, "This Week's Load stays off Daily")
     _assert(result["load"], "edit keeps This Week's Load")
+    _assert(result["loadClosed"], "the week load starts closed")
     _assert_eq(result["dateValue"], result["iso"], "clicking a day sets By Date")
     _assert(result["marked"], "the chosen day is marked")
 
@@ -666,6 +671,20 @@ def test_parent_field_makes_a_bollard(page):
         OAD.openEditModal(task.id);
         return { moveId: move.id, taskId: task.id, moveUuid: move.uuid, taskUuid: task.uuid, ids: ids };
     }""")
+    page.wait_for_selector("#f-parent-open")
+    closed = page.evaluate("""() => {
+        var picker = document.querySelector('.parent-picker');
+        var chooser = document.getElementById('f-parent-chooser');
+        return {
+            hidden: !!(chooser && chooser.hidden),
+            hint: picker.textContent.indexOf('Where this thread lives') !== -1,
+            label: document.getElementById('f-parent-open').textContent
+        };
+    }""")
+    _assert(closed["hidden"], "the parent list stays closed until asked")
+    _assert(closed["hint"] is False, "the parent field does not explain itself")
+    _assert_eq(closed["label"], "Add parent", "an empty parent is one button")
+    page.evaluate("() => document.getElementById('f-parent-open').click()")
     page.wait_for_selector("#f-parent-results .autocomplete-item")
     measured = page.evaluate("""() => {
         var results = document.getElementById('f-parent-results');
@@ -709,6 +728,7 @@ def test_parent_field_makes_a_bollard(page):
         OAD.renderDetail(move.id);
         var kids = document.getElementById('thread-children');
         OAD.openEditModal(move.id);
+        document.getElementById('f-parent-open').click();
         var childOffered = !!document.querySelector('#f-parent-results .autocomplete-item[data-uuid="' + task.uuid + '"]');
         OAD.closeModal();
         return {
@@ -729,12 +749,28 @@ def test_parent_field_makes_a_bollard(page):
 
     cleared = page.evaluate("""(taskId) => {
         OAD.openEditModal(taskId);
+        var startedClosed = document.getElementById('f-parent-chooser').hidden;
+        var current = document.getElementById('f-parent-current').textContent;
+        document.getElementById('f-parent-open').click();
         var none = document.querySelector('#f-parent-results .autocomplete-item[data-uuid=""]');
         if (none) none.click();
+        var closedAfter = document.getElementById('f-parent-chooser').hidden;
+        var backToAdd = document.getElementById('f-parent-open').textContent;
         OAD._saveEditThread(taskId);
         var task = OAD.getThread(taskId);
-        return { parent: task.parent_uuid, cleared: (task.evolution_log || []).some(function (e) { return e.note.indexOf('Parent cleared') !== -1; }) };
+        return {
+            parent: task.parent_uuid,
+            cleared: (task.evolution_log || []).some(function (e) { return e.note.indexOf('Parent cleared') !== -1; }),
+            startedClosed: startedClosed,
+            current: current,
+            closedAfter: closedAfter,
+            backToAdd: backToAdd
+        };
     }""", seeded["taskId"])
+    _assert(cleared["startedClosed"], "a set parent does not open the list")
+    _assert("May 2027 move" in cleared["current"], "a set parent keeps the current line")
+    _assert(cleared["closedAfter"], "picking a row closes the list")
+    _assert_eq(cleared["backToAdd"], "Add parent", "clearing the parent returns to one button")
     _assert(cleared["parent"] in (None, ""), f"clearing the parent stores none (got {cleared['parent']!r})")
     _assert(cleared["cleared"], "the log records that the parent was cleared")
 
